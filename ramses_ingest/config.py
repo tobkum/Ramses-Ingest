@@ -14,21 +14,19 @@ DEFAULT_RULES_PATH = os.path.join(
 )
 
 
-def load_rules(path: str | Path | None = None) -> list[NamingRule]:
-    """Parse a YAML rules file into ``NamingRule`` objects.
-
-    Args:
-        path: Path to a YAML file. Defaults to ``config/default_rules.yaml``.
+def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str]:
+    """Parse a YAML rules file into ``NamingRule`` objects and a studio name.
 
     Returns:
-        List of ``NamingRule`` instances (may be empty on error).
+        tuple: (list of NamingRule instances, studio_name string).
     """
     if path is None:
         path = DEFAULT_RULES_PATH
 
     path = str(path)
+    studio_name = "Ramses Studio"
     if not os.path.isfile(path):
-        return []
+        return [], studio_name
 
     import yaml
 
@@ -36,8 +34,9 @@ def load_rules(path: str | Path | None = None) -> list[NamingRule]:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
-        return []
+        return [], studio_name
 
+    studio_name = data.get("studio_name", studio_name)
     rules: list[NamingRule] = []
     for entry in data.get("rules", []):
         if not isinstance(entry, dict) or "pattern" not in entry:
@@ -49,11 +48,11 @@ def load_rules(path: str | Path | None = None) -> list[NamingRule]:
             use_parent_dir_as_sequence=entry.get("use_parent_dir_as_sequence", False),
         ))
 
-    return rules
+    return rules, studio_name
 
 
-def save_rules(rules: list[NamingRule], path: str | Path) -> None:
-    """Persist ``NamingRule`` objects back to a YAML file."""
+def save_rules(rules: list[NamingRule], path: str | Path, studio_name: str = "Ramses Studio") -> None:
+    """Persist ``NamingRule`` objects and studio name back to a YAML file."""
     import yaml
 
     entries = []
@@ -69,4 +68,7 @@ def save_rules(rules: list[NamingRule], path: str | Path) -> None:
 
     os.makedirs(os.path.dirname(str(path)), exist_ok=True)
     with open(str(path), "w", encoding="utf-8") as f:
-        yaml.dump({"rules": entries}, f, default_flow_style=False, sort_keys=False)
+        yaml.dump({
+            "studio_name": studio_name,
+            "rules": entries
+        }, f, default_flow_style=False, sort_keys=False)

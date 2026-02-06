@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QComboBox, QPushButton, QTreeWidget, QTreeWidgetItem,
     QCheckBox, QTextEdit, QProgressBar, QFrame, QDialog,
-    QSplitter, QHeaderView, QSizePolicy, QMessageBox,
+    QLineEdit, QSplitter, QHeaderView, QSizePolicy, QMessageBox,
 )
 
 from ramses_ingest.app import IngestEngine
@@ -407,6 +407,13 @@ class IngestWindow(QMainWindow):
         self._project_label = QLabel("Project: —")
         proj_row.addWidget(self._project_label)
         proj_row.addStretch()
+        
+        proj_row.addWidget(QLabel("Studio:"))
+        self._studio_edit = QLineEdit(self._engine.studio_name)
+        self._studio_edit.setMinimumWidth(120)
+        self._studio_edit.textChanged.connect(self._on_studio_changed)
+        proj_row.addWidget(self._studio_edit)
+
         proj_row.addWidget(QLabel("Step:"))
         self._step_combo = QComboBox()
         self._step_combo.setMinimumWidth(100)
@@ -548,7 +555,7 @@ class IngestWindow(QMainWindow):
         self._update_summary()
 
     def _populate_rule_combo(self) -> None:
-        rules = load_rules()
+        rules, _ = load_rules()
         for i, rule in enumerate(rules):
             label = rule.pattern[:40] + ("..." if len(rule.pattern) > 40 else "")
             self._rule_combo.addItem(f"Rule {i + 1}: {label}")
@@ -673,6 +680,10 @@ class IngestWindow(QMainWindow):
         if text:
             self._engine.step_id = text
 
+    def _on_studio_changed(self, text: str) -> None:
+        self._engine.studio_name = text
+        save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text)
+
     def _on_drop(self, paths: list[str]) -> None:
         if self._scan_worker and self._scan_worker.isRunning():
             return
@@ -762,8 +773,11 @@ class IngestWindow(QMainWindow):
             self._rule_combo.clear()
             self._rule_combo.addItem("Auto-detect")
             self._populate_rule_combo()
-            self._engine.rules = load_rules()
-            self._log("Rules reloaded.")
+            rules, studio = load_rules()
+            self._engine.rules = rules
+            self._engine.studio_name = studio
+            self._studio_edit.setText(studio)
+            self._log("Rules and Studio name reloaded.")
 
     def _on_load_edl(self) -> None:
         from PySide6.QtWidgets import QFileDialog

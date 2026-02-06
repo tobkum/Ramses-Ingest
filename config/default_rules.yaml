@@ -1,17 +1,5 @@
-# Default naming rules for footage matching.
-#
-# Each rule has a regex 'pattern' with named groups 'sequence' and/or 'shot'.
-# Optional prefixes are prepended to the captured value.
-# Set 'use_parent_dir_as_sequence: true' to derive the sequence from the folder name.
-#
-# Rules are tried in order — the first match wins.
-
+studio_name: Overmind Studios
 rules:
-  # SEQ010_SH020  or  SEQ010-SH020_PLATE_v01
-  - pattern: "(?P<sequence>[A-Za-z]*\\d+)[_-](?P<shot>[A-Za-z]*\\d+)"
-    sequence_prefix: ""
-    shot_prefix: ""
-
-  # Folder = sequence, filename = shot (e.g.  SEQ010/SH020.0001.exr)
-  - pattern: "(?P<shot>[A-Za-z]*\\d+)"
-    use_parent_dir_as_sequence: true
+- pattern: (?P<sequence>[A-Za-z]*\d+)[_-](?P<shot>[A-Za-z]*\d+)
+- pattern: (?P<shot>[A-Za-z]*\d+)
+  use_parent_dir_as_sequence: true

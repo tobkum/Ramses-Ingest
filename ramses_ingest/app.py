@@ -39,7 +39,7 @@ class IngestEngine:
         self._shot_objects: dict[str, object] = {}
         self._steps: list[str] = []
 
-        self._rules: list[NamingRule] = load_rules()
+        self._rules, self.studio_name = load_rules()
 
         # OCIO Defaults
         self.ocio_config: str | None = os.getenv("OCIO")
@@ -331,7 +331,7 @@ class IngestEngine:
         from ramses_ingest.reporting import generate_html_report
         report_name = f"Ingest_Report_{self.project_id}_{int(time.time())}.html"
         report_path = os.path.join(self.project_path, "_ingest_reports", report_name) if self.project_path else report_name
-        if generate_html_report(results, report_path):
+        if generate_html_report(results, report_path, studio_name=self.studio_name):
             _log(f"  Manifest created: {report_path}")
 
         succeeded = sum(1 for r in results if r.success)
