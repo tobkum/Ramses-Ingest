@@ -213,13 +213,20 @@ class IngestEngine:
         _log("Matching clips to naming rules...")
         matches = match_clips(all_clips, effective_rules)
 
-        _log("Probing media info...")
+        _log("Probing media info (Parallel)...")
         media_infos: dict[str, MediaInfo] = {}
-        for clip in all_clips:
+        
+        def _probe_one(clip: Clip) -> tuple[str, MediaInfo]:
             try:
-                media_infos[clip.first_file] = probe_file(clip.first_file)
+                return clip.first_file, probe_file(clip.first_file)
             except Exception:
-                media_infos[clip.first_file] = MediaInfo()
+                return clip.first_file, MediaInfo()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            future_to_clip = {executor.submit(_probe_one, c): c for c in all_clips}
+            for future in concurrent.futures.as_completed(future_to_clip):
+                file_path, info = future.result()
+                media_infos[file_path] = info
 
         _log("Building ingest plans...")
         plans = build_plans(

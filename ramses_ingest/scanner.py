@@ -80,44 +80,53 @@ class Clip:
 def scan_directory(root: str | Path) -> list[Clip]:
     """Scan *root* for media files and return detected clips.
 
-    Walks the directory tree, groups image-sequence frames by their
-    base name + extension, and returns each unique clip as a ``Clip``.
+    Uses os.scandir for high-performance traversal, grouping frames
+    into sequences and identifying movie files.
     """
     root = Path(root)
     if not root.is_dir():
         raise FileNotFoundError(f"Not a directory: {root}")
 
-    # Collect sequence candidates: (dir, base, ext) -> [frame_numbers]
-    seq_buckets: dict[tuple[str, str, str], list[int]] = {}
-    # Standalone movie files
+    # Collect sequence candidates: (dir, base, ext) -> [(frame_number, full_path)]
+    seq_buckets: dict[tuple[str, str, str], list[tuple[int, str]]] = {}
     movies: list[Clip] = []
 
-    for dirpath, _dirnames, filenames in os.walk(root):
-        for fname in filenames:
-            ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-            if ext not in MEDIA_EXTENSIONS:
-                continue
+    def _scan_recursive(path: Path) -> None:
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    if entry.is_dir():
+                        _scan_recursive(Path(entry.path))
+                    elif entry.is_file():
+                        fname = entry.name
+                        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
+                        if ext not in MEDIA_EXTENSIONS:
+                            continue
 
-            full_path = os.path.join(dirpath, fname)
-            m = RE_FRAME_PADDING.match(fname)
+                        full_path = entry.path
+                        m = RE_FRAME_PADDING.match(fname)
 
-            if m:
-                # Image sequence frame
-                base = m.group("base")
-                frame = int(m.group("frame"))
-                key = (dirpath, base, ext)
-                seq_buckets.setdefault(key, []).append((frame, full_path))
-            else:
-                # Single movie or standalone image
-                stem = fname.rsplit(".", 1)[0] if "." in fname else fname
-                movies.append(Clip(
-                    base_name=stem,
-                    extension=ext,
-                    directory=Path(dirpath),
-                    is_sequence=False,
-                    frames=[],
-                    first_file=full_path,
-                ))
+                        if m:
+                            # Image sequence frame
+                            base = m.group("base")
+                            frame = int(m.group("frame"))
+                            key = (str(path), base, ext)
+                            seq_buckets.setdefault(key, []).append((frame, full_path))
+                        else:
+                            # Single movie or standalone image
+                            stem = fname.rsplit(".", 1)[0] if "." in fname else fname
+                            movies.append(Clip(
+                                base_name=stem,
+                                extension=ext,
+                                directory=path,
+                                is_sequence=False,
+                                frames=[],
+                                first_file=full_path,
+                            ))
+        except PermissionError:
+            pass # Skip folders we can't read
+
+    _scan_recursive(root)
 
     # Convert sequence buckets to Clip objects
     clips: list[Clip] = []
@@ -134,7 +143,6 @@ def scan_directory(root: str | Path) -> list[Clip]:
             first_file=first_file,
         ))
 
-    # Movies after sequences (sequences are the primary use case)
     clips.extend(movies)
     clips.sort(key=lambda c: (str(c.directory), c.base_name))
     return clips
