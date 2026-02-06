@@ -27,46 +27,49 @@ from ramses_ingest.config import load_rules, save_rules, DEFAULT_RULES_PATH
 
 STYLESHEET = """
 QMainWindow {
-    background-color: #2b2b2b;
-    color: #ccc;
+    background-color: #1e1e1e;
 }
 
 QWidget {
-    background-color: #2b2b2b;
-    color: #ccc;
+    background-color: #1e1e1e;
+    color: #d4d4d4;
 }
 
+/* --- Labels --- */
 QLabel {
-    color: #ccc;
+    color: #d4d4d4;
 }
 
 QLabel#headerLabel {
-    font-size: 14px;
     font-weight: bold;
-    color: #ddd;
+    color: #ffffff;
 }
 
 QLabel#mutedLabel {
-    color: #888;
-    font-size: 11px;
+    color: #808080;
 }
 
 QLabel#statusConnected {
-    color: #4CB24C;
+    color: #4ec9b0;
     font-weight: bold;
 }
 
 QLabel#statusDisconnected {
-    color: #B24C4C;
+    color: #f44747;
 }
 
+/* --- Inputs --- */
 QComboBox {
-    background-color: #1e2228;
-    border: 1px solid #3a4048;
-    border-radius: 3px;
-    padding: 4px 8px;
-    color: #ccc;
-    min-height: 22px;
+    background-color: #2d2d2d;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    padding: 2px 8px;
+    color: #d4d4d4;
+    min-height: 24px;
+}
+
+QComboBox:hover {
+    border-color: #007acc;
 }
 
 QComboBox::drop-down {
@@ -75,133 +78,116 @@ QComboBox::drop-down {
 }
 
 QComboBox QAbstractItemView {
-    background-color: #1e2228;
-    border: 1px solid #3a4048;
-    color: #ccc;
-    selection-background-color: #2a3442;
+    background-color: #252526;
+    border: 1px solid #3e3e42;
+    color: #d4d4d4;
+    selection-background-color: #094771;
 }
 
 QPushButton {
-    background-color: #1e2228;
-    border: 1px solid #3a4048;
-    border-radius: 3px;
+    background-color: #333333;
+    border: 1px solid #454545;
+    border-radius: 4px;
     padding: 4px 12px;
-    color: #ccc;
-    min-height: 22px;
-    text-align: left;
+    color: #cccccc;
+    min-height: 24px;
+    text-align: center;
 }
 
 QPushButton:hover {
-    background-color: #2a3442;
-    border-color: #4a5868;
+    background-color: #3c3c3c;
+    border-color: #007acc;
 }
 
 QPushButton:pressed {
-    background-color: #1a2432;
+    background-color: #007acc;
+    color: white;
 }
 
 QPushButton:disabled {
-    color: #555;
-    border-color: #333;
+    background-color: #252526;
+    color: #555555;
+    border-color: #333333;
 }
 
 QPushButton#ingestButton {
-    background-color: #2a4a2a;
-    border-color: #4CB24C;
-    color: #ccc;
+    background-color: #0e639c;
+    border: none;
+    color: #ffffff;
     font-weight: bold;
-    text-align: center;
+    padding: 6px 20px;
 }
 
 QPushButton#ingestButton:hover {
-    background-color: #3a5a3a;
+    background-color: #1177bb;
 }
 
 QPushButton#ingestButton:disabled {
-    background-color: #1e2228;
-    border-color: #333;
-    color: #555;
+    background-color: #333333;
+    color: #666666;
 }
 
+/* --- Tree --- */
 QTreeWidget {
     background-color: #1a1a1a;
-    border: 1px solid #333;
-    alternate-background-color: #1e2228;
-    color: #ccc;
-    font-family: Consolas, monospace;
-    font-size: 11px;
+    border: 1px solid #333333;
+    alternate-background-color: #222222;
+    color: #cccccc;
+    outline: none;
 }
 
 QTreeWidget::item {
-    padding: 2px 4px;
-    min-height: 20px;
+    padding: 3px;
+    border-bottom: 1px solid #2d2d2d;
 }
 
 QTreeWidget::item:selected {
-    background-color: #2a3442;
+    background-color: #094771;
+    color: #ffffff;
 }
 
 QHeaderView::section {
-    background-color: #1e2228;
-    border: 1px solid #333;
-    padding: 3px 6px;
-    color: #888;
-    font-size: 11px;
+    background-color: #252526;
+    border: none;
+    border-right: 1px solid #333333;
+    padding: 4px;
+    color: #888888;
+    font-weight: bold;
 }
 
+/* --- Other --- */
 QTextEdit {
     background-color: #1a1a1a;
-    border: 1px solid #333;
-    color: #ccc;
-    font-family: Consolas, monospace;
-    font-size: 11px;
-}
-
-QTextEdit[readOnly="true"] {
-    background-color: #1a1a1a;
+    border: 1px solid #333333;
+    color: #85c46c;
 }
 
 QProgressBar {
-    background-color: #1a1a1a;
-    border: 1px solid #333;
-    border-radius: 3px;
+    background-color: #252526;
+    border: 1px solid #333333;
+    border-radius: 2px;
     text-align: center;
-    color: #ccc;
-    min-height: 16px;
+    color: transparent;
+    height: 4px;
 }
 
 QProgressBar::chunk {
-    background-color: #2a3442;
-    border-radius: 2px;
+    background-color: #007acc;
 }
 
 QCheckBox {
-    color: #ccc;
-    spacing: 6px;
-}
-
-QCheckBox::indicator {
-    width: 14px;
-    height: 14px;
-    border: 1px solid #3a4048;
-    border-radius: 2px;
-    background-color: #1e2228;
-}
-
-QCheckBox::indicator:checked {
-    background-color: #2a3442;
-    border-color: #4a5868;
+    color: #cccccc;
 }
 
 QFrame#dropZone {
-    background-color: #1e2228;
-    border: 2px dashed #3a4048;
-    border-radius: 4px;
+    background-color: #252526;
+    border: 2px dashed #3e3e42;
+    border-radius: 8px;
 }
 
 QFrame#dropZone[dragOver="true"] {
-    border-color: #4CB24C;
-    background-color: #1a2a1a;
+    border-color: #007acc;
+    background-color: #1c2b3a;
 }
 """
 
@@ -297,6 +283,7 @@ class IngestWorker(QThread):
         plans: list[IngestPlan],
         thumbnails: bool,
         proxies: bool,
+        update_status: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -304,6 +291,7 @@ class IngestWorker(QThread):
         self._plans = plans
         self._thumbnails = thumbnails
         self._proxies = proxies
+        self._update_status = update_status
         self._count = 0
 
     def run(self) -> None:
@@ -320,6 +308,7 @@ class IngestWorker(QThread):
                 generate_thumbnails=self._thumbnails,
                 generate_proxies=self._proxies,
                 progress_callback=_cb,
+                update_status=self._update_status,
             )
             self.finished_results.emit(results)
         except Exception as exc:
@@ -341,7 +330,6 @@ class RulesEditorDialog(QDialog):
 
         layout = QVBoxLayout(self)
         self._editor = QTextEdit()
-        self._editor.setFont(QFont("Consolas", 10))
         layout.addWidget(self._editor)
 
         btn_row = QHBoxLayout()
@@ -440,6 +428,11 @@ class IngestWindow(QMainWindow):
         self._rule_combo.addItem("Auto-detect")
         self._populate_rule_combo()
         rule_row.addWidget(self._rule_combo, 1)
+        
+        self._btn_edl = QPushButton("Load EDL...")
+        self._btn_edl.clicked.connect(self._on_load_edl)
+        rule_row.addWidget(self._btn_edl)
+
         btn_edit_rules = QPushButton("Edit Rules...")
         btn_edit_rules.clicked.connect(self._on_edit_rules)
         rule_row.addWidget(btn_edit_rules)
@@ -471,7 +464,7 @@ class IngestWindow(QMainWindow):
         self._chk_thumb.setChecked(True)
         opt_row1.addWidget(self._chk_thumb)
         self._chk_proxy = QCheckBox("Generate video proxies")
-        self._chk_proxy.setChecked(True)
+        self._chk_proxy.setChecked(False)
         opt_row1.addWidget(self._chk_proxy)
         opt_row1.addStretch()
         root.addLayout(opt_row1)
@@ -518,7 +511,6 @@ class IngestWindow(QMainWindow):
 
         self._log_edit = QTextEdit()
         self._log_edit.setReadOnly(True)
-        self._log_edit.setFont(QFont("Consolas", 10))
         self._log_edit.setMaximumHeight(160)
         self._log_edit.setVisible(False)
         root.addWidget(self._log_edit)
@@ -741,6 +733,7 @@ class IngestWindow(QMainWindow):
             enabled,
             thumbnails=self._chk_thumb.isChecked(),
             proxies=self._chk_proxy.isChecked(),
+            update_status=self._chk_status.isChecked(),
             parent=self,
         )
         self._ingest_worker.progress.connect(self._log)
@@ -772,6 +765,35 @@ class IngestWindow(QMainWindow):
             self._engine.rules = load_rules()
             self._log("Rules reloaded.")
 
+    def _on_load_edl(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select EDL File", "", "EDL Files (*.edl);;All Files (*.*)"
+        )
+        if not path:
+            return
+
+        self._log(f"Applying EDL mapping: {os.path.basename(path)}")
+        from ramses_ingest.matcher import EDLMapper
+        mapper = EDLMapper(path)
+        
+        updated = 0
+        for plan in self._plans:
+            # Try to map by clip name
+            clip_name = plan.match.clip.base_name
+            edl_shot = mapper.get_shot_id(clip_name)
+            if edl_shot:
+                plan.shot_id = edl_shot
+                plan.match.matched = True # Force matched if EDL finds it
+                plan.error = ""
+                updated += 1
+        
+        if updated:
+            self._log(f"  Mapped {updated} shot(s) from EDL.")
+            self._populate_tree()
+        else:
+            self._log("  No matches found in EDL.")
+
     def _toggle_log(self) -> None:
         visible = not self._log_edit.isVisible()
         self._log_edit.setVisible(visible)
@@ -787,9 +809,8 @@ def launch_gui() -> None:
     existing = QApplication.instance()
     app = existing or QApplication(sys.argv)
     
-    # Set a default font to avoid setPointSize warnings
-    font = app.font()
-    font.setPointSize(12)
+    # Tier 1 UI: Set consistent global font (9pt is standard for VFX apps)
+    font = QFont("Segoe UI", 9)
     app.setFont(font)
     
     app.setStyleSheet(STYLESHEET)

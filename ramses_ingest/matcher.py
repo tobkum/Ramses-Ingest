@@ -51,6 +51,44 @@ class NamingRule:
         return re.compile(self.pattern, re.IGNORECASE)
 
 
+class EDLMapper:
+    """Maps clip names to shot IDs based on a CMX 3600 EDL file."""
+
+    def __init__(self, edl_path: str) -> None:
+        self.mappings: dict[str, str] = {} # clip_name -> shot_id
+        self._parse(edl_path)
+
+    def _parse(self, path: str) -> None:
+        if not os.path.isfile(path):
+            return
+        
+        # Simple CMX 3600 Parser
+        # Look for lines like: * FROM CLIP NAME:  SH010_PLATE
+        # Followed by shot info
+        current_shot = ""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("* FROM CLIP NAME:"):
+                        current_shot = line.split(":")[-1].strip()
+                    elif line.startswith("* COMMENT:"):
+                        # Sometimes shot IDs are in comments
+                        pass
+                    
+                    # Store mapping if we find a clip name
+                    if current_shot:
+                        # Logic: Use the clip name as the key, but we might 
+                        # need more logic to extract the 'real' shot ID.
+                        # For now, assume CLIP NAME matches the desired Shot ID.
+                        self.mappings[current_shot.upper()] = current_shot
+        except Exception:
+            pass
+
+    def get_shot_id(self, clip_name: str) -> str | None:
+        return self.mappings.get(clip_name.upper())
+
+
 # -- Built-in heuristics -----------------------------------------------------
 
 # SEQ010_SH010  or  SEQ010_SH010_v01

@@ -234,6 +234,7 @@ class IngestEngine:
         generate_thumbnails: bool = True,
         generate_proxies: bool = False,
         progress_callback: Callable[[str], None] | None = None,
+        update_status: bool = False,
     ) -> list[IngestResult]:
         """Execute all approved (can_execute) plans.
 
@@ -289,6 +290,25 @@ class IngestEngine:
                         _log(f"  Error: {res.error}")
                 except Exception as exc:
                     _log(f"[{i}/{total}] CRITICAL ERROR: {exc}")
+
+        # Phase 3: Update Lifecycle Status (Feature 5)
+        if update_status:
+            _log("Phase 3: Finalizing production statuses in Ramses...")
+            from ramses_ingest.publisher import update_ramses_status
+            for res in results:
+                if res.success:
+                    try:
+                        update_ramses_status(res.plan, "OK")
+                    except Exception:
+                        pass
+
+        # Phase 4: Generate Report (Feature 4)
+        _log("Phase 4: Generating ingest manifest...")
+        from ramses_ingest.reporting import generate_html_report
+        report_name = f"Ingest_Report_{self.project_id}_{int(time.time())}.html"
+        report_path = os.path.join(self.project_path, "_ingest_reports", report_name) if self.project_path else report_name
+        if generate_html_report(results, report_path):
+            _log(f"  Manifest created: {report_path}")
 
         succeeded = sum(1 for r in results if r.success)
         _log(f"Done: {succeeded}/{total} succeeded.")

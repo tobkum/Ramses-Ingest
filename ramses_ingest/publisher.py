@@ -449,3 +449,57 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> Non
             RamShot(data=shot_data, create=True)
         except Exception as exc:
             log(f"  Shot creation failed: {exc}")
+
+
+def update_ramses_status(plan: IngestPlan, status_name: str = "OK") -> bool:
+    """Update the status of the target step in Ramses and assign current user."""
+    try:
+        from ramses import Ramses
+        ram = Ramses.instance()
+        if not ram.online():
+            return False
+        
+        project = ram.project()
+        if not project:
+            return False
+
+        # Find the shot object
+        target_shot = None
+        for shot in project.shots():
+            if shot.shortName().upper() == plan.shot_id.upper():
+                target_shot = shot
+                break
+        
+        if not target_shot:
+            return False
+
+        # Find the step object
+        from ramses.ram_step import RamStep, StepType
+        target_step = None
+        for step in project.steps(StepType.SHOT_PRODUCTION):
+            if step.shortName().upper() == plan.step_id.upper():
+                target_step = step
+                break
+        
+        if not target_step:
+            return False
+
+        # Update status
+        status = target_shot.currentStatus(target_step)
+        if status:
+            # Find the state (OK, TODO, etc)
+            target_state = None
+            for state in ram.states():
+                if state.shortName().upper() == status_name.upper():
+                    target_state = state
+                    break
+            
+            if target_state:
+                status.setState(target_state)
+                status.setUser() # Assign to current user
+                status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
+                return True
+                
+        return False
+    except Exception:
+        return False
