@@ -6,6 +6,7 @@ import sys
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "lib"))
@@ -198,15 +199,18 @@ class TestWriteMetadata(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
-    def test_writes_json(self):
-        _write_ramses_metadata(self.tmpdir, "test_file.exr", version=1, comment="test")
+    def test_writes_json_with_timecode(self):
+        _write_ramses_metadata(
+            self.tmpdir, "test_file.exr", version=1, 
+            comment="test", timecode="01:00:00:00"
+        )
         import json
         meta_path = os.path.join(self.tmpdir, "_ramses_data.json")
         self.assertTrue(os.path.isfile(meta_path))
         with open(meta_path) as f:
             data = json.load(f)
         self.assertIn("test_file.exr", data)
-        self.assertEqual(data["test_file.exr"]["version"], 1)
+        self.assertEqual(data["test_file.exr"]["timecode"], "01:00:00:00")
 
 
 class TestExecutePlan(unittest.TestCase):
@@ -218,10 +222,12 @@ class TestExecutePlan(unittest.TestCase):
         shutil.rmtree(self.src_dir, ignore_errors=True)
         shutil.rmtree(self.dst_dir, ignore_errors=True)
 
-    def test_execute_copies_frames(self):
-        clip = _make_clip("plate", self.src_dir, frame_count=3)
+    @patch("ramses_ingest.preview.generate_thumbnail")
+    @patch("ramses_ingest.preview.generate_proxy")
+    def test_execute_with_ocio(self, mock_proxy, mock_thumb):
+        clip = _make_clip("plate", self.src_dir, frame_count=1)
         match = MatchResult(clip=clip, sequence_id="SEQ010", shot_id="SH010", matched=True)
-        info = MediaInfo(width=1920, height=1080, fps=24.0)
+        info = MediaInfo(width=1920, height=1080, fps=24.0, start_timecode="10:00:00:00")
 
         pub_dir = os.path.join(self.dst_dir, "published", "v001")
         prev_dir = os.path.join(self.dst_dir, "preview")
@@ -233,10 +239,46 @@ class TestExecutePlan(unittest.TestCase):
             target_publish_dir=pub_dir, target_preview_dir=prev_dir,
         )
 
+        mock_thumb.return_value = True
+        mock_proxy.return_value = True
+
+        result = execute_plan(
+            plan, 
+            generate_thumbnail=True, 
+            generate_proxy=True,
+            ocio_config="config.ocio",
+            ocio_in="ACEScg",
+            ocio_out="sRGB"
+        )
+        
+        self.assertTrue(result.success)
+        # Verify OCIO args were passed to preview generators
+        mock_thumb.assert_called_with(
+            clip, unittest.mock.ANY, 
+            ocio_config="config.ocio", 
+            ocio_in="ACEScg", 
+            ocio_out="sRGB"
+        )
+
+    def test_execute_copies_frames_parallel(self):
+        # Use more frames to exercise the ThreadPoolExecutor
+        frame_count = 20
+        clip = _make_clip("plate", self.src_dir, frame_count=frame_count)
+        match = MatchResult(clip=clip, sequence_id="SEQ010", shot_id="SH010", matched=True)
+        info = MediaInfo(width=1920, height=1080, fps=24.0)
+
+        pub_dir = os.path.join(self.dst_dir, "published", "v001")
+        plan = IngestPlan(
+            match=match, media_info=info,
+            sequence_id="SEQ010", shot_id="SH010",
+            project_id="PROJ", step_id="PLATE",
+            target_publish_dir=pub_dir,
+        )
+
         result = execute_plan(plan, generate_thumbnail=False, generate_proxy=False)
         self.assertTrue(result.success)
-        self.assertEqual(result.frames_copied, 3)
-        self.assertTrue(os.path.isdir(pub_dir))
+        self.assertEqual(result.frames_copied, frame_count)
+        self.assertEqual(len(os.listdir(pub_dir)), frame_count + 1) # +1 for metadata json
 
     def test_execute_fails_without_publish_dir(self):
         clip = Clip(base_name="x", extension="exr", directory=Path(self.src_dir),

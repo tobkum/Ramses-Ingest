@@ -28,6 +28,9 @@ def generate_thumbnail(
     clip: Clip,
     output_path: str,
     frame_index: int | None = None,
+    ocio_config: str | None = None,
+    ocio_in: str = "Linear",
+    ocio_out: str = "sRGB",
 ) -> bool:
     """Extract a single frame from *clip* and save as JPEG at *output_path*.
 
@@ -35,6 +38,9 @@ def generate_thumbnail(
         clip: The source clip.
         output_path: Absolute path for the output JPG (including filename).
         frame_index: Which frame to extract (0-based). Defaults to middle frame.
+        ocio_config: Path to an OCIO config file.
+        ocio_in: Source colorspace (e.g. ACEScg, Linear).
+        ocio_out: Target colorspace (e.g. sRGB, Rec.709).
 
     Returns:
         True on success.
@@ -42,25 +48,39 @@ def generate_thumbnail(
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     if clip.is_sequence:
-        return _thumbnail_from_sequence(clip, output_path, frame_index)
+        return _thumbnail_from_sequence(clip, output_path, frame_index, ocio_config, ocio_in, ocio_out)
     else:
-        return _thumbnail_from_movie(clip, output_path, frame_index)
+        return _thumbnail_from_movie(clip, output_path, frame_index, ocio_config, ocio_in, ocio_out)
 
 
 def generate_proxy(
     clip: Clip,
     output_path: str,
+    ocio_config: str | None = None,
+    ocio_in: str = "Linear",
+    ocio_out: str = "sRGB",
 ) -> bool:
     """Transcode *clip* to a lightweight H.264 MP4 proxy.
 
     Args:
         clip: The source clip.
         output_path: Absolute path for the output MP4.
+        ocio_config: Path to an OCIO config file.
+        ocio_in: Source colorspace.
+        ocio_out: Target colorspace.
 
     Returns:
         True on success.
     """
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    vf_chain = [f"scale={PROXY_WIDTH}:-2"]
+    if ocio_config and os.path.isfile(ocio_config):
+        # Escape path for FFmpeg filter string
+        clean_path = ocio_config.replace("\\", "/").replace(":", "\\:")
+        vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label={ocio_out}")
+
+    vf_str = ",".join(vf_chain)
 
     if clip.is_sequence:
         padding = clip.padding
@@ -72,7 +92,7 @@ def generate_proxy(
             "ffmpeg", "-y",
             "-start_number", str(clip.first_frame),
             "-i", input_pattern,
-            "-vf", f"scale={PROXY_WIDTH}:-2",
+            "-vf", vf_str,
             "-c:v", "libx264",
             "-crf", str(PROXY_CRF),
             "-pix_fmt", "yuv420p",
@@ -82,7 +102,7 @@ def generate_proxy(
         cmd = [
             "ffmpeg", "-y",
             "-i", clip.first_file,
-            "-vf", f"scale={PROXY_WIDTH}:-2",
+            "-vf", vf_str,
             "-c:v", "libx264",
             "-crf", str(PROXY_CRF),
             "-pix_fmt", "yuv420p",
@@ -100,6 +120,9 @@ def _thumbnail_from_sequence(
     clip: Clip,
     output_path: str,
     frame_index: int | None,
+    ocio_config: str | None = None,
+    ocio_in: str = "Linear",
+    ocio_out: str = "sRGB",
 ) -> bool:
     if frame_index is None:
         frame_index = len(clip.frames) // 2
@@ -112,10 +135,16 @@ def _thumbnail_from_sequence(
         f"{clip.base_name}.{str(target_frame).zfill(padding)}.{clip.extension}",
     )
 
+    vf_chain = [f"scale={THUMB_WIDTH}:-1"]
+    if ocio_config and os.path.isfile(ocio_config):
+        clean_path = ocio_config.replace("\\", "/").replace(":", "\\:")
+        vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label={ocio_out}")
+    vf_str = ",".join(vf_chain)
+
     cmd = [
         "ffmpeg", "-y",
         "-i", src_file,
-        "-vf", f"scale={THUMB_WIDTH}:-1",
+        "-vf", vf_str,
         "-frames:v", "1",
         "-q:v", str(THUMB_QUALITY),
         output_path,
@@ -132,17 +161,26 @@ def _thumbnail_from_movie(
     clip: Clip,
     output_path: str,
     frame_index: int | None,
+    ocio_config: str | None = None,
+    ocio_in: str = "Linear",
+    ocio_out: str = "sRGB",
 ) -> bool:
     # Seek to ~40% of the file to avoid leader/slate
     seek_seconds = "0"
     if frame_index is not None:
         seek_seconds = str(frame_index)
 
+    vf_chain = [f"scale={THUMB_WIDTH}:-1"]
+    if ocio_config and os.path.isfile(ocio_config):
+        clean_path = ocio_config.replace("\\", "/").replace(":", "\\:")
+        vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label={ocio_out}")
+    vf_str = ",".join(vf_chain)
+
     cmd = [
         "ffmpeg", "-y",
         "-ss", seek_seconds,
         "-i", clip.first_file,
-        "-vf", f"scale={THUMB_WIDTH}:-1",
+        "-vf", vf_str,
         "-frames:v", "1",
         "-q:v", str(THUMB_QUALITY),
         output_path,

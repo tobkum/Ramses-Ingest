@@ -126,17 +126,25 @@ def build_plans(
     return plans
 
 
+import concurrent.futures
+
 def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> int:
-    """Copy clip frames into *dest_dir* using Ramses naming.
+    """Copy clip frames into *dest_dir* using Ramses naming and verify file sizes.
 
     Returns the number of files copied.
+    Raises OSError if verification fails.
     """
     os.makedirs(dest_dir, exist_ok=True)
     copied = 0
 
+    def _verify(src: str, dst: str) -> None:
+        if os.path.getsize(src) != os.path.getsize(dst):
+            raise OSError(f"Verification failed for {dst}: size mismatch.")
+
     if clip.is_sequence:
         padding = clip.padding
-        for frame in clip.frames:
+        
+        def _copy_one_frame(frame: int) -> None:
             src = os.path.join(
                 str(clip.directory),
                 f"{clip.base_name}.{str(frame).zfill(padding)}.{clip.extension}",
@@ -144,12 +152,23 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
             dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
             dst = os.path.join(dest_dir, dst_name)
             shutil.copy2(src, dst)
-            copied += 1
+            _verify(src, dst)
+
+        # Use threads for I/O bound copy operations
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            # We map the copy function to all frames.
+            # Convert to list to force execution and catch any exceptions if needed,
+            # though map raises them when iterated.
+            list(executor.map(_copy_one_frame, clip.frames))
+            
+        copied = len(clip.frames)
+
     else:
         src = clip.first_file
         dst_name = f"{project_id}_S_{shot_id}_{step_id}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
         shutil.copy2(src, dst)
+        _verify(src, dst)
         copied = 1
 
     return copied
@@ -164,8 +183,8 @@ def resolve_paths(
 
     Uses the Ramses folder convention::
 
-        {project_root}/{shots_folder}/{SHOT}/{STEP}/_published/v{NNN}/
-        {project_root}/{shots_folder}/{SHOT}/{STEP}/_preview/
+        {project_root}/{shots_folder}/[{SEQUENCE}]/{SHOT}/{STEP}/_published/v{NNN}/
+        {project_root}/{shots_folder}/[{SEQUENCE}]/{SHOT}/{STEP}/_preview/
 
     This is the offline fallback when the daemon is not available.
     """
@@ -173,10 +192,17 @@ def resolve_paths(
         if not plan.can_execute:
             continue
 
-        shot_folder = os.path.join(
-            project_root, shots_folder, plan.shot_id,
-        )
-        step_folder = os.path.join(shot_folder, plan.step_id)
+        # Ramses often groups shots by sequence.
+        if plan.sequence_id:
+            shot_root = os.path.join(
+                project_root, shots_folder, plan.sequence_id, plan.shot_id,
+            )
+        else:
+            shot_root = os.path.join(
+                project_root, shots_folder, plan.shot_id,
+            )
+
+        step_folder = os.path.join(shot_root, plan.step_id)
         version_str = f"v{plan.version:03d}"
 
         plan.target_publish_dir = os.path.join(
@@ -220,6 +246,7 @@ def _write_ramses_metadata(
     filename: str,
     version: int,
     comment: str = "",
+    timecode: str = "",
 ) -> None:
     """Write a ``_ramses_data.json`` sidecar file for the published version."""
     meta_path = os.path.join(folder, "_ramses_data.json")
@@ -232,12 +259,16 @@ def _write_ramses_metadata(
         except (json.JSONDecodeError, OSError):
             data = {}
 
-    data[filename] = {
+    entry = {
         "version": version,
         "comment": comment,
         "state": "wip",
         "date": int(time.time()),
     }
+    if timecode:
+        entry["timecode"] = timecode
+    
+    data[filename] = entry
 
     os.makedirs(folder, exist_ok=True)
     with open(meta_path, "w", encoding="utf-8") as f:
@@ -249,6 +280,10 @@ def execute_plan(
     generate_thumbnail: bool = True,
     generate_proxy: bool = False,
     progress_callback: Callable[[str], None] | None = None,
+    ocio_config: str | None = None,
+    ocio_in: str = "Linear",
+    ocio_out: str = "sRGB",
+    skip_ramses_registration: bool = False,
 ) -> IngestResult:
     """Execute a single ``IngestPlan``: create Ramses objects, copy frames, generate previews.
 
@@ -257,6 +292,10 @@ def execute_plan(
         generate_thumbnail: Whether to generate a JPEG thumbnail.
         generate_proxy: Whether to generate an MP4 video proxy.
         progress_callback: Optional callable for progress messages.
+        ocio_config: Path to an OCIO config file.
+        ocio_in: Source colorspace.
+        ocio_out: Target colorspace.
+        skip_ramses_registration: If True, skips the DB creation step (useful for parallel execution).
 
     Returns:
         An ``IngestResult`` describing the outcome.
@@ -278,10 +317,11 @@ def execute_plan(
     clip = plan.match.clip
 
     # --- Create Ramses objects if daemon is available ---
-    try:
-        _create_ramses_objects(plan, _log)
-    except Exception as exc:
-        _log(f"  Ramses API (non-fatal): {exc}")
+    if not skip_ramses_registration:
+        try:
+            register_ramses_objects(plan, _log)
+        except Exception as exc:
+            _log(f"  Ramses API (non-fatal): {exc}")
 
     # --- Copy frames ---
     try:
@@ -304,6 +344,7 @@ def execute_plan(
             first_name,
             plan.version,
             comment="Ingested via Ramses-Ingest",
+            timecode=plan.media_info.start_timecode,
         )
     except Exception as exc:
         _log(f"  Metadata write (non-fatal): {exc}")
@@ -316,7 +357,12 @@ def execute_plan(
             thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
             thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
             _log("  Generating thumbnail...")
-            ok = gen_thumb(clip, thumb_path)
+            ok = gen_thumb(
+                clip, thumb_path,
+                ocio_config=ocio_config,
+                ocio_in=ocio_in,
+                ocio_out=ocio_out,
+            )
             if ok:
                 result.preview_path = thumb_path
         except Exception as exc:
@@ -329,7 +375,12 @@ def execute_plan(
             proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"
             proxy_path = os.path.join(plan.target_preview_dir, proxy_name)
             _log("  Generating video proxy...")
-            gen_proxy(clip, proxy_path)
+            gen_proxy(
+                clip, proxy_path,
+                ocio_config=ocio_config,
+                ocio_in=ocio_in,
+                ocio_out=ocio_out,
+            )
         except Exception as exc:
             _log(f"  Proxy (non-fatal): {exc}")
 
@@ -337,7 +388,7 @@ def execute_plan(
     return result
 
 
-def _create_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> None:
+def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> None:
     """Attempt to create RamSequence / RamShot via the Daemon API."""
     try:
         from ramses import Ramses
@@ -349,43 +400,40 @@ def _create_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> None
 
     from ramses.ram_sequence import RamSequence
     from ramses.ram_shot import RamShot
+    from ramses.daemon_interface import RamDaemonInterface
 
     info = plan.media_info
+    daemon = RamDaemonInterface.instance()
+
+    # Cache sequences for the duration of this call to avoid redundant lookups
+    # In a production environment, we might want to pass this cache in.
+    sequences = {s.shortName().upper(): s.uuid() for s in daemon.getObjects("RamSequence")}
 
     if plan.is_new_sequence and plan.sequence_id:
-        log(f"  Creating sequence {plan.sequence_id}...")
-        try:
-            RamSequence(data={
-                "shortName": plan.sequence_id,
-                "name": plan.sequence_id,
-                "overrideResolution": True,
-                "width": info.width or 1920,
-                "height": info.height or 1080,
-                "overrideFramerate": True,
-                "framerate": info.fps or 24.0,
-            }, create=True)
-        except Exception as exc:
-            log(f"  Sequence creation (non-fatal): {exc}")
+        seq_upper = plan.sequence_id.upper()
+        if seq_upper not in sequences:
+            log(f"  Creating sequence {plan.sequence_id}...")
+            try:
+                new_seq = RamSequence(data={
+                    "shortName": plan.sequence_id,
+                    "name": plan.sequence_id,
+                    "overrideResolution": True,
+                    "width": info.width or 1920,
+                    "height": info.height or 1080,
+                    "overrideFramerate": True,
+                    "framerate": info.fps or 24.0,
+                }, create=True)
+                sequences[seq_upper] = new_seq.uuid()
+            except Exception as exc:
+                log(f"  Sequence creation failed: {exc}")
 
     if plan.is_new_shot and plan.shot_id:
         log(f"  Creating shot {plan.shot_id}...")
         try:
-            # We need the sequence UUID — fetch it from the daemon
-            seq_uuid = ""
-            try:
-                from ramses.daemon_interface import RamDaemonInterface
-                daemon = RamDaemonInterface.instance()
-                for seq_data in daemon.getObjects("RamSequence"):
-                    if isinstance(seq_data, dict):
-                        data = seq_data.get("data", {})
-                        if data.get("shortName", "").upper() == plan.sequence_id.upper():
-                            seq_uuid = seq_data.get("uuid", "")
-                            break
-            except Exception:
-                pass
+            seq_uuid = sequences.get(plan.sequence_id.upper(), "")
 
             duration = 5.0
-            if info.fps > 0:
+            if info.fps and info.fps > 0:
                 fc = info.frame_count or (plan.match.clip.frame_count if plan.match.clip.is_sequence else 0)
                 if fc > 0:
                     duration = fc / info.fps
@@ -400,4 +448,4 @@ def _create_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> None
 
             RamShot(data=shot_data, create=True)
         except Exception as exc:
-            log(f"  Shot creation (non-fatal): {exc}")
+            log(f"  Shot creation failed: {exc}")

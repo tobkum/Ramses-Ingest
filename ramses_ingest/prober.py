@@ -27,6 +27,7 @@ class MediaInfo:
     color_transfer: str = ""
     duration_seconds: float = 0.0
     frame_count: int = 0
+    start_timecode: str = ""
 
     @property
     def is_valid(self) -> bool:
@@ -46,6 +47,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         "-print_format", "json",
         "-show_streams",
         "-select_streams", "v:0",
+        "-show_format",
         file_path,
     ]
 
@@ -76,6 +78,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         return MediaInfo()
 
     s = streams[0]
+    fmt = data.get("format", {})
 
     # Parse framerate from r_frame_rate (e.g. "24/1", "24000/1001")
     fps = 0.0
@@ -87,6 +90,11 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     except (ValueError, ZeroDivisionError):
         pass
 
+    # Try to find timecode in stream tags, then format tags
+    tc = s.get("tags", {}).get("timecode", "")
+    if not tc:
+        tc = fmt.get("tags", {}).get("timecode", "")
+
     return MediaInfo(
         width=int(s.get("width", 0)),
         height=int(s.get("height", 0)),
@@ -97,4 +105,5 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         color_transfer=s.get("color_transfer", ""),
         duration_seconds=float(s.get("duration", 0.0)),
         frame_count=int(s.get("nb_frames", 0)),
+        start_timecode=tc,
     )

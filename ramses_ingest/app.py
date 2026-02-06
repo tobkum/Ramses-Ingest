@@ -9,6 +9,7 @@ The ``IngestEngine`` class sequences the full pipeline:
 from __future__ import annotations
 
 import os
+import concurrent.futures
 from pathlib import Path
 from typing import Callable
 
@@ -17,7 +18,7 @@ from ramses_ingest.matcher import match_clips, NamingRule, MatchResult
 from ramses_ingest.prober import probe_file, MediaInfo
 from ramses_ingest.publisher import (
     build_plans, execute_plan, resolve_paths, resolve_paths_from_daemon,
-    IngestPlan, IngestResult,
+    register_ramses_objects, IngestPlan, IngestResult,
 )
 from ramses_ingest.config import load_rules
 
@@ -38,6 +39,11 @@ class IngestEngine:
         self._steps: list[str] = []
 
         self._rules: list[NamingRule] = load_rules()
+
+        # OCIO Defaults
+        self.ocio_config: str | None = os.getenv("OCIO")
+        self.ocio_in: str = "Linear"
+        self.ocio_out: str = "sRGB"
 
     # -- Properties ----------------------------------------------------------
 
@@ -142,11 +148,11 @@ class IngestEngine:
 
     def load_delivery(
         self,
-        path: str | Path,
+        paths: str | Path | list[str | Path],
         rules: list[NamingRule] | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> list[IngestPlan]:
-        """Scan a delivery folder and return plans for user review.
+        """Scan one or more delivery paths and return plans for user review.
 
         Steps: scan → match → probe → build_plans → resolve_paths.
         """
@@ -154,17 +160,45 @@ class IngestEngine:
             if progress_callback:
                 progress_callback(msg)
 
-        _log(f"Scanning {path}...")
-        clips = scan_directory(path)
-        _log(f"  Found {len(clips)} clip(s).")
+        if not isinstance(paths, list):
+            paths = [paths]
+
+        all_clips: list[Clip] = []
+        for p in paths:
+            _log(f"Scanning {p}...")
+            if os.path.isfile(p):
+                # Specific file selection
+                from ramses_ingest.scanner import RE_FRAME_PADDING
+                name = os.path.basename(p)
+                m = RE_FRAME_PADDING.match(name)
+                if m:
+                    # It's part of a sequence, find the whole sequence in parent
+                    parent = os.path.dirname(p)
+                    clips = scan_directory(parent)
+                    # Filter to only the sequence this file belongs to
+                    base = m.group("base")
+                    all_clips.extend([c for c in clips if c.base_name == base])
+                else:
+                    # Single movie or image
+                    all_clips.append(Clip(
+                        base_name=os.path.splitext(name)[0],
+                        extension=os.path.splitext(name)[1].lstrip("."),
+                        directory=Path(os.path.dirname(p)),
+                        first_file=str(p)
+                    ))
+            else:
+                # Directory scan
+                all_clips.extend(scan_directory(p))
+
+        _log(f"  Found {len(all_clips)} clip(s).")
 
         effective_rules = rules if rules is not None else (self._rules or None)
         _log("Matching clips to naming rules...")
-        matches = match_clips(clips, effective_rules)
+        matches = match_clips(all_clips, effective_rules)
 
         _log("Probing media info...")
         media_infos: dict[str, MediaInfo] = {}
-        for clip in clips:
+        for clip in all_clips:
             try:
                 media_infos[clip.first_file] = probe_file(clip.first_file)
             except Exception:
@@ -185,12 +219,10 @@ class IngestEngine:
             resolve_paths_from_daemon(plans, self._shot_objects)
         if self._project_path:
             # Fill in any plans that the daemon didn't resolve
-            for plan in plans:
-                if plan.can_execute and not plan.target_publish_dir:
-                    resolve_paths(
-                        [plan],
-                        self._project_path,
-                    )
+            resolve_paths(
+                [p for p in plans if not p.target_publish_dir],
+                self._project_path,
+            )
 
         matched = sum(1 for p in plans if p.match.matched)
         _log(f"Ready: {matched} matched, {len(plans) - matched} unmatched.")
@@ -211,23 +243,52 @@ class IngestEngine:
             if progress_callback:
                 progress_callback(msg)
 
-        results: list[IngestResult] = []
+        if not self._connected:
+            _log("ERROR: Not connected to Ramses. Ingest aborted.")
+            return [IngestResult(plan=p, error="No Ramses connection") for p in plans]
+
         executable = [p for p in plans if p.can_execute]
         total = len(executable)
+        _log(f"Starting ingest for {total} clips...")
 
+        # Phase 1: Register Ramses Objects (Sequential, Thread-Safe)
+        _log("Phase 1: Registering shots in Ramses database...")
         for i, plan in enumerate(executable, 1):
-            _log(f"[{i}/{total}] {plan.sequence_id}/{plan.shot_id}...")
-            result = execute_plan(
+            try:
+                register_ramses_objects(plan, lambda _: None) # Silent log for registration
+            except Exception as exc:
+                _log(f"  Warning: Failed to register {plan.shot_id}: {exc}")
+
+        # Phase 2: Parallel Execution (Copy + FFmpeg)
+        _log("Phase 2: Processing files (Parallel)...")
+        results: list[IngestResult] = []
+        
+        # Helper for thread pool
+        def _run_one(plan: IngestPlan) -> IngestResult:
+            return execute_plan(
                 plan,
                 generate_thumbnail=generate_thumbnails,
                 generate_proxy=generate_proxies,
-                progress_callback=_log,
+                progress_callback=None, # Thread-safe logging is tricky, better to just return result
+                ocio_config=self.ocio_config,
+                ocio_in=self.ocio_in,
+                ocio_out=self.ocio_out,
+                skip_ramses_registration=True,
             )
-            results.append(result)
-            if result.success:
-                _log(f"  OK — {result.frames_copied} file(s) copied.")
-            else:
-                _log(f"  FAILED: {result.error}")
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            future_to_plan = {executor.submit(_run_one, p): p for p in executable}
+            
+            for i, future in enumerate(concurrent.futures.as_completed(future_to_plan), 1):
+                try:
+                    res = future.result()
+                    results.append(res)
+                    prefix = "OK" if res.success else "FAILED"
+                    _log(f"[{i}/{total}] {res.plan.shot_id}: {prefix}")
+                    if not res.success:
+                        _log(f"  Error: {res.error}")
+                except Exception as exc:
+                    _log(f"[{i}/{total}] CRITICAL ERROR: {exc}")
 
         succeeded = sum(1 for r in results if r.success)
         _log(f"Done: {succeeded}/{total} succeeded.")

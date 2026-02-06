@@ -26,10 +26,14 @@ from ramses_ingest.config import load_rules, save_rules, DEFAULT_RULES_PATH
 # ---------------------------------------------------------------------------
 
 STYLESHEET = """
-QMainWindow, QWidget {
+QMainWindow {
     background-color: #2b2b2b;
     color: #ccc;
-    font-size: 12px;
+}
+
+QWidget {
+    background-color: #2b2b2b;
+    color: #ccc;
 }
 
 QLabel {
@@ -257,21 +261,21 @@ class DropZone(QFrame):
 # ---------------------------------------------------------------------------
 
 class ScanWorker(QThread):
-    """Scans a delivery path in a background thread."""
+    """Scans delivery paths in a background thread."""
 
     progress = Signal(str)
     finished_plans = Signal(list)
     error = Signal(str)
 
-    def __init__(self, engine: IngestEngine, path: str, parent=None) -> None:
+    def __init__(self, engine: IngestEngine, paths: list[str], parent=None) -> None:
         super().__init__(parent)
         self._engine = engine
-        self._path = path
+        self._paths = paths
 
     def run(self) -> None:
         try:
             plans = self._engine.load_delivery(
-                self._path,
+                self._paths,
                 progress_callback=self.progress.emit,
             )
             self.finished_plans.emit(plans)
@@ -447,14 +451,15 @@ class IngestWindow(QMainWindow):
         self._tree.setRootIsDecorated(False)
         self._tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self._tree.setHeaderLabels([
-            "", "Status", "Sequence", "Shot", "Frames", "Resolution", "FPS", "Source",
+            "", "Status", "Sequence", "Shot", "Frames", "Res", "FPS", "Source", "Destination",
         ])
         hdr = self._tree.header()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         hdr.resizeSection(0, 28)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         hdr.resizeSection(1, 50)
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         for col in (2, 3, 4, 5, 6):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self._tree.setMinimumHeight(180)
@@ -543,10 +548,12 @@ class IngestWindow(QMainWindow):
             self._status_label.setText("Disconnected")
             self._status_label.setObjectName("statusDisconnected")
             self._project_label.setText("Project: — (daemon offline)")
+            self._btn_ingest.setToolTip("Ramses connection required to ingest.")
 
         # Re-polish to apply dynamic objectName change
         self._status_label.style().unpolish(self._status_label)
         self._status_label.style().polish(self._status_label)
+        self._update_summary()
 
     def _populate_rule_combo(self) -> None:
         rules = load_rules()
@@ -585,7 +592,8 @@ class IngestWindow(QMainWindow):
 
         self._summary_label.setText(f"Summary: {', '.join(parts)}")
         self._btn_ingest.setText(f"Ingest {n_enabled}/{total}")
-        self._btn_ingest.setEnabled(n_enabled > 0)
+        # Only enable if there are plans AND we are connected
+        self._btn_ingest.setEnabled(n_enabled > 0 and self._engine.connected)
 
     def _get_enabled_plans(self) -> list[IngestPlan]:
         enabled = []
@@ -648,6 +656,17 @@ class IngestWindow(QMainWindow):
             item.setText(7, clip.base_name)
             item.setToolTip(7, clip.first_file)
 
+            # Destination
+            if plan.target_publish_dir:
+                dest_base = os.path.basename(os.path.dirname(plan.target_publish_dir)) # _published
+                version = os.path.basename(plan.target_publish_dir) # v001
+                # Show a shortened version: SHOT/STEP/_published/v001
+                display_path = f"{plan.shot_id}/{plan.step_id}/{dest_base}/{version}"
+                item.setText(8, display_path)
+                item.setToolTip(8, plan.target_publish_dir)
+            else:
+                item.setText(8, "—")
+
             # Editable seq/shot for unmatched
             if not plan.match.matched:
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
@@ -666,15 +685,12 @@ class IngestWindow(QMainWindow):
         if self._scan_worker and self._scan_worker.isRunning():
             return
 
-        # Use the first directory, or the parent of the first file
-        path = paths[0]
-        if os.path.isfile(path):
-            path = os.path.dirname(path)
+        self._log(f"Loading delivery: {len(paths)} item(s)")
+        self._drop_zone._label.setText(f"Scanning {len(paths)} item(s)...")
 
-        self._log(f"Loading delivery: {path}")
-        self._drop_zone._label.setText(f"Scanning: {os.path.basename(path)}...")
-
-        self._scan_worker = ScanWorker(self._engine, path, parent=self)
+        # Scan all dropped paths. LoadDelivery in app might need to be updated 
+        # or we call it multiple times. Let's update engine.load_delivery to handle list.
+        self._scan_worker = ScanWorker(self._engine, paths, parent=self)
         self._scan_worker.progress.connect(self._log)
         self._scan_worker.finished_plans.connect(self._on_scan_done)
         self._scan_worker.error.connect(self._on_scan_error)
@@ -770,6 +786,12 @@ def launch_gui() -> None:
     """Create the QApplication and show the main window."""
     existing = QApplication.instance()
     app = existing or QApplication(sys.argv)
+    
+    # Set a default font to avoid setPointSize warnings
+    font = app.font()
+    font.setPointSize(12)
+    app.setFont(font)
+    
     app.setStyleSheet(STYLESHEET)
 
     window = IngestWindow()
