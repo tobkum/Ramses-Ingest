@@ -165,6 +165,8 @@ class IngestEngine:
             paths = [paths]
 
         all_clips: list[Clip] = []
+        seen_seq_keys: set[tuple[str, str, str]] = set() # (dir, base, ext)
+
         for p in paths:
             _log(f"Scanning {p}...")
             if os.path.isfile(p):
@@ -175,21 +177,35 @@ class IngestEngine:
                 if m:
                     # It's part of a sequence, find the whole sequence in parent
                     parent = os.path.dirname(p)
+                    base = m.group("base")
+                    ext = m.group("ext").lower()
+                    key = (parent, base, ext)
+                    if key in seen_seq_keys:
+                        continue
+                    
                     clips = scan_directory(parent)
                     # Filter to only the sequence this file belongs to
-                    base = m.group("base")
-                    all_clips.extend([c for c in clips if c.base_name == base])
+                    seq_clips = [c for c in clips if c.base_name == base and c.extension == ext]
+                    all_clips.extend(seq_clips)
+                    seen_seq_keys.add(key)
                 else:
                     # Single movie or image
                     all_clips.append(Clip(
                         base_name=os.path.splitext(name)[0],
-                        extension=os.path.splitext(name)[1].lstrip("."),
+                        extension=os.path.splitext(name)[1].lstrip(".").lower(),
                         directory=Path(os.path.dirname(p)),
                         first_file=str(p)
                     ))
             else:
                 # Directory scan
-                all_clips.extend(scan_directory(p))
+                new_clips = scan_directory(p)
+                for c in new_clips:
+                    if c.is_sequence:
+                        key = (str(c.directory), c.base_name, c.extension.lower())
+                        if key in seen_seq_keys:
+                            continue
+                        seen_seq_keys.add(key)
+                    all_clips.append(c)
 
         _log(f"  Found {len(all_clips)} clip(s).")
 
@@ -253,11 +269,18 @@ class IngestEngine:
         total = len(executable)
         _log(f"Starting ingest for {total} clips...")
 
+        # Pre-fetch caches for speed
+        _log("Fetching project metadata...")
+        from ramses.daemon_interface import RamDaemonInterface
+        daemon = RamDaemonInterface.instance()
+        seq_cache = {s.shortName().upper(): s.uuid() for s in daemon.getObjects("RamSequence")}
+        shot_cache = self._shot_objects # Already cached in connect_ramses
+
         # Phase 1: Register Ramses Objects (Sequential, Thread-Safe)
         _log("Phase 1: Registering shots in Ramses database...")
         for i, plan in enumerate(executable, 1):
             try:
-                register_ramses_objects(plan, lambda _: None) # Silent log for registration
+                register_ramses_objects(plan, lambda _: None, sequence_cache=seq_cache)
             except Exception as exc:
                 _log(f"  Warning: Failed to register {plan.shot_id}: {exc}")
 
@@ -271,7 +294,7 @@ class IngestEngine:
                 plan,
                 generate_thumbnail=generate_thumbnails,
                 generate_proxy=generate_proxies,
-                progress_callback=None, # Thread-safe logging is tricky, better to just return result
+                progress_callback=None,
                 ocio_config=self.ocio_config,
                 ocio_in=self.ocio_in,
                 ocio_out=self.ocio_out,
@@ -299,7 +322,7 @@ class IngestEngine:
             for res in results:
                 if res.success:
                     try:
-                        update_ramses_status(res.plan, "OK")
+                        update_ramses_status(res.plan, "OK", shot_cache=shot_cache)
                     except Exception:
                         pass
 

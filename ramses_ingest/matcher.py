@@ -64,25 +64,22 @@ class EDLMapper:
             return
         
         # Simple CMX 3600 Parser
-        # Look for lines like: * FROM CLIP NAME:  SH010_PLATE
-        # Followed by shot info
-        current_shot = ""
         try:
             with open(path, "r", encoding="utf-8") as f:
+                last_clip = ""
                 for line in f:
                     line = line.strip()
                     if line.startswith("* FROM CLIP NAME:"):
-                        current_shot = line.split(":")[-1].strip()
+                        last_clip = line.split(":")[-1].strip().upper()
+                        # Default: map clip to itself if no comment found later
+                        self.mappings[last_clip] = last_clip
                     elif line.startswith("* COMMENT:"):
-                        # Sometimes shot IDs are in comments
-                        pass
-                    
-                    # Store mapping if we find a clip name
-                    if current_shot:
-                        # Logic: Use the clip name as the key, but we might 
-                        # need more logic to extract the 'real' shot ID.
-                        # For now, assume CLIP NAME matches the desired Shot ID.
-                        self.mappings[current_shot.upper()] = current_shot
+                        comment = line.split(":")[-1].strip()
+                        if last_clip:
+                            # If we have a comment like '* COMMENT: SH010', map the clip to it
+                            # Shot IDs are usually short alphanumeric strings
+                            if re.match(r"^[A-Za-z0-9_-]+$", comment):
+                                self.mappings[last_clip] = comment
         except Exception:
             pass
 

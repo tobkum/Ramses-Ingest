@@ -388,7 +388,11 @@ def execute_plan(
     return result
 
 
-def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> None:
+def register_ramses_objects(
+    plan: IngestPlan, 
+    log: Callable[[str], None], 
+    sequence_cache: dict[str, str] | None = None
+) -> None:
     """Attempt to create RamSequence / RamShot via the Daemon API."""
     try:
         from ramses import Ramses
@@ -405,9 +409,11 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> Non
     info = plan.media_info
     daemon = RamDaemonInterface.instance()
 
-    # Cache sequences for the duration of this call to avoid redundant lookups
-    # In a production environment, we might want to pass this cache in.
-    sequences = {s.shortName().upper(): s.uuid() for s in daemon.getObjects("RamSequence")}
+    # Use provided cache or fetch fresh (less efficient)
+    if sequence_cache is not None:
+        sequences = sequence_cache
+    else:
+        sequences = {s.shortName().upper(): s.uuid() for s in daemon.getObjects("RamSequence")}
 
     if plan.is_new_sequence and plan.sequence_id:
         seq_upper = plan.sequence_id.upper()
@@ -451,7 +457,11 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None]) -> Non
             log(f"  Shot creation failed: {exc}")
 
 
-def update_ramses_status(plan: IngestPlan, status_name: str = "OK") -> bool:
+def update_ramses_status(
+    plan: IngestPlan, 
+    status_name: str = "OK",
+    shot_cache: dict[str, object] | None = None,
+) -> bool:
     """Update the status of the target step in Ramses and assign current user."""
     try:
         from ramses import Ramses
@@ -465,10 +475,13 @@ def update_ramses_status(plan: IngestPlan, status_name: str = "OK") -> bool:
 
         # Find the shot object
         target_shot = None
-        for shot in project.shots():
-            if shot.shortName().upper() == plan.shot_id.upper():
-                target_shot = shot
-                break
+        if shot_cache and plan.shot_id.upper() in shot_cache:
+            target_shot = shot_cache[plan.shot_id.upper()]
+        else:
+            for shot in project.shots():
+                if shot.shortName().upper() == plan.shot_id.upper():
+                    target_shot = shot
+                    break
         
         if not target_shot:
             return False
