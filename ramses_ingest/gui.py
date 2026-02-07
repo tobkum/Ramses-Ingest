@@ -1002,7 +1002,7 @@ class IngestWindow(QMainWindow):
 
             if (
                 self._engine._project_fps > 0
-                and plan.media_info.fps != self._engine._project_fps
+                and abs(plan.media_info.fps - self._engine._project_fps) > 0.001
             ):
                 fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps:.3f})</b>"
 
@@ -1386,8 +1386,8 @@ class IngestWindow(QMainWindow):
             fps_text = f"{plan.media_info.fps:.3f}" if plan.media_info.fps > 0 else "—"
             is_fps_mismatch = False
             if self._engine._project_fps > 0 and plan.media_info.fps > 0:
-                # Strict comparison as requested
-                if plan.media_info.fps != self._engine._project_fps:
+                # Use tolerance-based comparison to avoid floating-point precision issues
+                if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
                     is_fps_mismatch = True
 
             fps_item = QTableWidgetItem(fps_text)

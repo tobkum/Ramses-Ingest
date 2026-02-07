@@ -182,9 +182,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     .status-fail { color: var(--error); font-weight: bold; }
     .status-warn { color: var(--warning); font-weight: bold; }
     
-    .xray-wrap { display: flex; flex-direction: column; gap: 6px; }
-    .xray-target { color: var(--text-main); font-weight: bold; font-size: 14px; line-height: 1.4; }
-    .xray-source { color: var(--text-muted); font-size: 10px; font-family: 'Consolas', monospace; line-height: 1.5; }
+    .xray-wrap { display: flex; flex-direction: column; gap: 10px; padding: 15px 10px !important; vertical-align: middle; justify-content: center; }
+    .xray-target { color: var(--text-main); font-weight: bold; font-size: 14px; line-height: 1.5; white-space: nowrap; }
+    .xray-source { color: var(--text-muted); font-size: 10px; font-family: 'Consolas', monospace; line-height: 1.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .xray-arrow { color: var(--accent); margin: 0 4px; font-size: 10px; }
 
     .deviation { background-color: rgba(243, 156, 18, 0.1); color: var(--warning); border: 1px solid var(--warning); border-radius: 3px; padding: 1px 4px; font-size: 11px; }
@@ -282,7 +282,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         res_display = f'<span class="deviation" title="Deviation">{res_val}</span>' if res_dev else res_val
         
         fps_val = mi.fps if mi.fps else 0
-        fps_dev = (fps_val != common_fps and common_fps)
+        # Use tolerance-based comparison for floating-point FPS values (avoid false positives)
+        fps_dev = (common_fps and abs(fps_val - common_fps) > 0.001)
         fps_display = f'<span class="deviation">{fps_val:.3f}</span>' if fps_dev else f"{fps_val:.3f}"
         
         codec_val = mi.codec.upper() if mi.codec else "—"
