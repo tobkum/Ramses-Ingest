@@ -18,6 +18,10 @@ from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING
 from ramses_ingest.matcher import match_clips, NamingRule, MatchResult
 from ramses_ingest.prober import probe_file, MediaInfo, flush_cache
 from ramses_ingest.publisher import (
+    build_plans, execute_plan, resolve_paths, resolve_paths_from_daemon,
+    register_ramses_objects, IngestPlan, IngestResult, check_for_duplicates,
+    update_ramses_status
+)
 
 
 def _optimal_io_workers() -> int:
@@ -30,10 +34,6 @@ def _optimal_io_workers() -> int:
         Optimal number of worker threads (typically 8-32).
     """
     return min(32, (os.cpu_count() or 1) + 4)
-    build_plans, execute_plan, resolve_paths, resolve_paths_from_daemon,
-    register_ramses_objects, IngestPlan, IngestResult, check_for_duplicates,
-    update_ramses_status
-)
 from ramses_ingest.config import load_rules
 from ramses_ingest.reporting import generate_html_report, generate_json_audit_trail
 from ramses_ingest.path_utils import normalize_path, validate_path_within_root

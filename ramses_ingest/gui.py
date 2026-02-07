@@ -1863,7 +1863,15 @@ class IngestWindow(QMainWindow):
         # 1. Error Check (Highest Priority)
         # We check errors first because a message like "Complete: 1 failed" 
         # should be red, even though it contains "Complete".
-        if any(k in msg_upper for k in ["ERROR", "FAILED", "CRITICAL", "FAIL", "✖", ": FAILED"]):
+        has_error = any(k in msg_upper for k in ["ERROR", "FAILED", "CRITICAL", "FAIL", "✖", ": FAILED"])
+        
+        # Exception: "0 FAILED" or "0 FAIL" usually means success in a summary context
+        if has_error and ("0 FAILED" in msg_upper or "0 FAIL" in msg_upper):
+            # Only downgrade if it doesn't contain actual ERROR or CRITICAL labels elsewhere
+            if not any(k in msg_upper for k in ["ERROR", "CRITICAL", "✖", "INGEST ERROR"]):
+                has_error = False
+
+        if has_error:
             colored_msg = f'<span style="color: #f44747; font-weight: bold;">{msg}</span>'
             
         # 2. Success Check
