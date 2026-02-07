@@ -826,14 +826,8 @@ class IngestWindow(QMainWindow):
             # Type filter
             if show:
                 # Check if it's a sequence or movie
-                frames_item = self._table.item(row, 4)  # Frames column
-                if frames_item:
-                    frames_text = frames_item.text()
-                    try:
-                        is_sequence = "f" in frames_text and int(frames_text.replace("f", "")) > 1
-                    except (ValueError, AttributeError):
-                        is_sequence = False  # Default to single frame on error
-
+                if row < len(self._plans):
+                    is_sequence = self._plans[row].match.clip.is_sequence
                     if is_sequence and not self._chk_sequences.isChecked():
                         show = False
                     elif not is_sequence and not self._chk_movies.isChecked():
@@ -882,7 +876,13 @@ class IngestWindow(QMainWindow):
         details.append(f"<b>Clip:</b> {plan.match.clip.base_name}.{plan.match.clip.extension}")
         details.append(f"<b>Shot:</b> {plan.shot_id or '—'}")
         details.append(f"<b>Sequence:</b> {plan.sequence_id or '—'}")
-        details.append(f"<b>Frames:</b> {plan.match.clip.frame_count if plan.match.clip.is_sequence else 1}")
+        
+        # Proper frame count for movies
+        fc = plan.match.clip.frame_count if plan.match.clip.is_sequence else plan.media_info.frame_count
+        if not plan.match.clip.is_sequence and fc <= 0:
+            fc = 1 # Fallback
+            
+        details.append(f"<b>Frames:</b> {fc}")
 
         if plan.media_info.width and plan.media_info.height:
             details.append(f"<b>Resolution:</b> {plan.media_info.width}x{plan.media_info.height}")
@@ -1094,8 +1094,12 @@ class IngestWindow(QMainWindow):
             self._table.setItem(idx, 3, seq_item)
 
             # Column 4: Frames
-            frames_text = f"{clip.frame_count}f" if clip.is_sequence else "1f"
-            frames_item = QTableWidgetItem(frames_text)
+            if clip.is_sequence:
+                fc = clip.frame_count
+            else:
+                fc = plan.media_info.frame_count if plan.media_info.frame_count > 0 else 1
+            
+            frames_item = QTableWidgetItem(str(fc))
             frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._table.setItem(idx, 4, frames_item)
 

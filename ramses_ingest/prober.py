@@ -170,6 +170,13 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     if not tc:
         tc = fmt.get("tags", {}).get("timecode", "")
 
+    # Frame count fallback (nb_frames is often missing in movies)
+    nb_frames = int(s.get("nb_frames", 0))
+    if nb_frames <= 0:
+        dur = float(s.get("duration", 0.0))
+        if dur > 0 and fps > 0:
+            nb_frames = int(round(dur * fps))
+
     info = MediaInfo(
         width=int(s.get("width", 0)),
         height=int(s.get("height", 0)),
@@ -180,7 +187,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         color_transfer=s.get("color_transfer", ""),
         color_primaries=s.get("color_primaries", ""),
         duration_seconds=float(s.get("duration", 0.0)),
-        frame_count=int(s.get("nb_frames", 0)),
+        frame_count=nb_frames,
         start_timecode=tc,
     )
 
