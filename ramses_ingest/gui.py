@@ -455,7 +455,7 @@ class IngestWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RAMSES INGEST")
-        self.resize(1200, 700)  # Wider for 3-panel layout
+        self.resize(1400, 800)  # Increased from 1200x700
 
         self._engine = IngestEngine()
         self._plans: list[IngestPlan] = []
@@ -1375,24 +1375,31 @@ class IngestWindow(QMainWindow):
         sb = self._log_edit.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-    def _resolve_all_paths(self) -> None:
-        """Update target paths and version numbers for all plans."""
-        if not self._plans:
-            return
-
-        from ramses_ingest.publisher import resolve_paths, resolve_paths_from_daemon
-
-        # 1. Try resolving via daemon if connected
-        if self._engine.connected and self._engine._shot_objects:
-            resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
-
-        # 2. Use project path as fallback for any unresolved plans
-        if self._engine.project_path:
-            unresolved = [p for p in self._plans if not p.target_publish_dir]
-            if unresolved:
-                resolve_paths(unresolved, self._engine.project_path)
-
-    def _try_connect(self) -> None:
+        def _resolve_all_paths(self) -> None:
+            """Update target paths and version numbers for all plans."""
+            if not self._plans:
+                return
+                
+            from ramses_ingest.publisher import resolve_paths, resolve_paths_from_daemon, check_for_path_collisions
+            
+            # Reset errors before re-calculating (clears old collisions)
+            for p in self._plans:
+                if "COLLISION" in (p.error or ""):
+                    p.error = "" 
+    
+            # 1. Try resolving via daemon if connected
+            if self._engine.connected and self._engine._shot_objects:
+                resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
+                
+            # 2. Use project path as fallback for any unresolved plans
+            if self._engine.project_path:
+                unresolved = [p for p in self._plans if not p.target_publish_dir]
+                if unresolved:
+                    resolve_paths(unresolved, self._engine.project_path)
+    
+            # 3. Check for collisions in the new state
+            check_for_path_collisions(self._plans)
+        def _try_connect(self) -> None:
         ok = self._engine.connect_ramses()
         if ok:
             self._status_orb.setStyleSheet("""

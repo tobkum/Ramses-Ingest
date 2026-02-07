@@ -418,6 +418,34 @@ def check_for_duplicates(plans: list[IngestPlan]) -> None:
             plan.error = f"Duplicate of v{dup_version:03d}"
 
 
+def check_for_path_collisions(plans: list[IngestPlan]) -> None:
+    """Identify plans that resolve to the same destination path within the current batch.
+
+    Updates the IngestPlan.error field if a collision is detected.
+    """
+    from collections import defaultdict
+    path_to_plans = defaultdict(list)
+
+    for plan in plans:
+        # Only check matched plans that have a target path
+        if not plan.match.matched or not plan.target_publish_dir:
+            continue
+        
+        # Normalize path for comparison
+        path_key = os.path.normpath(plan.target_publish_dir).lower()
+        path_to_plans[path_key].append(plan)
+
+    for path, colliding in path_to_plans.items():
+        if len(colliding) > 1:
+            for plan in colliding:
+                # Only append if not already showing a more specific error
+                collision_msg = f"COLLISION: {len(colliding)} clips resolving to same path"
+                if not plan.error:
+                    plan.error = collision_msg
+                elif "COLLISION" not in plan.error:
+                    plan.error += f" | {collision_msg}"
+
+
 def resolve_paths(
     plans: list[IngestPlan],
     project_root: str,

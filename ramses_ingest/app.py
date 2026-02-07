@@ -330,8 +330,11 @@ class IngestEngine:
 
         # Enhancement #9: Check for duplicate versions
         _log("Checking for duplicate versions...")
-        from ramses_ingest.publisher import check_for_duplicates
+        from ramses_ingest.publisher import check_for_duplicates, check_for_path_collisions
         check_for_duplicates(plans)
+        
+        # New: Check for collisions within the current batch
+        check_for_path_collisions(plans)
 
         matched = sum(1 for p in plans if p.match.matched)
         duplicates = sum(1 for p in plans if p.is_duplicate)
