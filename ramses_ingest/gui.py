@@ -73,7 +73,7 @@ QLabel#headerLabel {
 QLabel#projectLabel {
     font-size: 12px;
     font-weight: bold;
-    color: #094771;
+    color: #ffffff;
 }
 
 QLabel#mutedLabel {
@@ -103,7 +103,7 @@ QLineEdit {
     background-color: #1e1e1e;
     border: 1px solid #333333;
     border-radius: 4px;
-    padding: 4px 10px;
+    padding: 6px 12px;
     color: #ffffff;
 }
 
@@ -112,11 +112,24 @@ QLineEdit:focus {
     background-color: #252526;
 }
 
+QTextEdit {
+    background-color: #1e1e1e;
+    border: 1px solid #333333;
+    border-radius: 4px;
+    padding: 8px;
+    color: #ffffff;
+}
+
+QTextEdit:focus {
+    border-color: #00bff3;
+    background-color: #252526;
+}
+
 QComboBox {
     background-color: #1e1e1e;
     border: 1px solid #333333;
     border-radius: 4px;
-    padding: 4px 10px;
+    padding: 6px 12px;
 }
 
 QComboBox:hover {
@@ -128,11 +141,16 @@ QComboBox::drop-down {
     width: 20px;
 }
 
+QCheckBox {
+    spacing: 8px;
+    padding: 4px;
+}
+
 QPushButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #333333, stop:1 #2d2d2d);
     border: 1px solid #444444;
     border-radius: 4px;
-    padding: 5px 15px;
+    padding: 6px 16px;
     color: #e0e0e0;
     font-weight: 500;
 }
@@ -147,12 +165,27 @@ QPushButton:pressed {
     color: white;
 }
 
+/* Secondary button style for less prominent actions */
+QPushButton#secondaryButton {
+    background: transparent;
+    border: 1px solid #333333;
+    color: #888888;
+    padding: 4px 12px;
+}
+
+QPushButton#secondaryButton:hover {
+    border-color: #555555;
+    color: #cccccc;
+}
+
 QPushButton#ingestButton {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00bff3, stop:1 #0095c2);
     border: none;
     color: #ffffff;
     font-weight: bold;
-    padding: 8px 25px;
+    font-size: 13px;
+    padding: 10px 32px;
+    min-height: 40px;
 }
 
 QPushButton#ingestButton:hover {
@@ -191,30 +224,53 @@ QHeaderView::section {
     background-color: #252526;
     border: none;
     border-right: 1px solid #121212;
-    padding: 6px;
+    border-bottom: 1px solid #333333;
+    padding: 8px;
     color: #888888;
     font-weight: bold;
     font-size: 10px;
     text-transform: uppercase;
 }
 
+/* --- Table --- */
+QTableWidget {
+    background-color: #181818;
+    border: 1px solid #2d2d2d;
+    gridline-color: #252526;
+    border-radius: 4px;
+}
+
+QTableWidget::item {
+    padding: 8px;
+    border-bottom: 1px solid #252526;
+    min-height: 36px;
+}
+
+QTableWidget::item:selected {
+    background-color: #094771;
+    color: #ffffff;
+}
+
 /* --- Progress --- */
 QProgressBar {
     background-color: #1e1e1e;
     border: 1px solid #333333;
-    border-radius: 3px;
+    border-radius: 4px;
     text-align: center;
-    height: 6px;
+    height: 12px;
+    font-size: 10px;
+    font-weight: bold;
 }
 
 QProgressBar::chunk {
-    background-color: #094771;
+    background-color: #00bff3;
+    border-radius: 4px;
 }
 
 QFrame#dropZone {
     background-color: #1e1e1e;
     border: 2px dashed #333333;
-    border-radius: 10px;
+    border-radius: 8px;
 }
 
 QFrame#dropZone[dragOver="true"] {
@@ -420,7 +476,7 @@ class StatusIndicator(QLabel):
     def set_status(self, status: str):
         """Update status color: ready=green, warning=yellow, error=red, pending=gray"""
         colors = {
-            "ready": "#4ec9b0",  # Green
+            "ready": "#27ae60",  # Green (matches DAEMON ONLINE)
             "warning": "#f39c12",  # Yellow/Orange
             "error": "#f44747",  # Red
             "pending": "#666666",  # Gray
@@ -590,7 +646,7 @@ class IngestWindow(QMainWindow):
         self._filter_ready = QPushButton("● Ready (0)")
         self._filter_ready.setCheckable(True)
         self._filter_ready.setStyleSheet(
-            "QPushButton { text-align: left; color: #4ec9b0; }"
+            "QPushButton { text-align: left; color: #27ae60; }"
         )
         self._filter_ready.clicked.connect(lambda: self._apply_filter("ready"))
         left_lay.addWidget(self._filter_ready)
@@ -749,11 +805,13 @@ class IngestWindow(QMainWindow):
         action_bar_lay.setContentsMargins(8, 4, 8, 4)
 
         self._btn_clear = QPushButton("Clear")
+        self._btn_clear.setObjectName("secondaryButton")
+        self._btn_clear.setToolTip("Clear all clips from the table")
         self._btn_clear.clicked.connect(self._on_clear)
         action_bar_lay.addWidget(self._btn_clear)
 
         self._summary_label = QLabel("No delivery loaded.")
-        self._summary_label.setObjectName("mutedLabel")
+        self._summary_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #888888;")
         action_bar_lay.addWidget(self._summary_label)
 
         action_bar_lay.addStretch()
@@ -762,9 +820,9 @@ class IngestWindow(QMainWindow):
         self._btn_view_report.clicked.connect(self._on_view_report)
         self._btn_view_report.setVisible(False)
         self._btn_view_report.setStyleSheet("""
-            background-color: rgba(0, 191, 243, 0.1);
-            border: 1px solid #00bff3;
-            color: #00bff3;
+            background-color: rgba(39, 174, 96, 0.1);
+            border: 1px solid #27ae60;
+            color: #27ae60;
             font-weight: bold;
             padding: 6px 16px;
         """)
@@ -787,9 +845,8 @@ class IngestWindow(QMainWindow):
         self._btn_ingest = QPushButton("Execute")
         self._btn_ingest.setObjectName("ingestButton")
         self._btn_ingest.setEnabled(False)
+        self._btn_ingest.setToolTip("Start ingest execution (Enter)")
         self._btn_ingest.clicked.connect(self._on_ingest)
-        self._btn_ingest.setMinimumWidth(120)
-        self._btn_ingest.setMinimumHeight(36)
         action_bar_lay.addWidget(self._btn_ingest)
 
         root.addWidget(action_bar)
@@ -800,15 +857,29 @@ class IngestWindow(QMainWindow):
         root.addWidget(self._progress)
 
         # Log panel (collapsible)
-        self._log_toggle = QPushButton("[ + ] Log")
-        self._log_toggle.setMaximumWidth(80)
+        log_header = QHBoxLayout()
+        self._log_toggle = QPushButton("▼ Show Log")
+        self._log_toggle.setObjectName("secondaryButton")
+        self._log_toggle.setMaximumWidth(100)
         self._log_toggle.clicked.connect(self._toggle_log)
-        root.addWidget(self._log_toggle)
+        log_header.addWidget(self._log_toggle)
+
+        log_header.addStretch()
+
+        self._btn_clear_log = QPushButton("Clear Log")
+        self._btn_clear_log.setObjectName("secondaryButton")
+        self._btn_clear_log.setMaximumWidth(80)
+        self._btn_clear_log.clicked.connect(lambda: self._log_edit.clear())
+        self._btn_clear_log.setVisible(False)
+        log_header.addWidget(self._btn_clear_log)
+
+        root.addLayout(log_header)
 
         self._log_edit = QTextEdit()
         self._log_edit.setReadOnly(True)
         self._log_edit.setMaximumHeight(160)
         self._log_edit.setVisible(False)
+        self._log_edit.setStyleSheet("QTextEdit { font-family: 'Consolas', monospace; font-size: 11px; }")
         root.addWidget(self._log_edit)
 
         # Keyboard shortcuts
@@ -1525,7 +1596,18 @@ class IngestWindow(QMainWindow):
     # -- Helpers -------------------------------------------------------------
 
     def _log(self, msg: str) -> None:
-        self._log_edit.append(msg)
+        # Add syntax highlighting for log messages
+        # Check success patterns FIRST (before error patterns that might contain "failed")
+        if "SUCCEEDED" in msg.upper() or "COMPLETE" in msg.upper() or msg.startswith("✓"):
+            colored_msg = f'<span style="color: #27ae60;">{msg}</span>'
+        elif "ERROR" in msg.upper() or msg.upper().startswith("FAILED"):
+            colored_msg = f'<span style="color: #f44747; font-weight: bold;">{msg}</span>'
+        elif "WARNING" in msg.upper() or "WARN" in msg.upper():
+            colored_msg = f'<span style="color: #f39c12;">{msg}</span>'
+        else:
+            colored_msg = msg
+
+        self._log_edit.append(colored_msg)
         sb = self._log_edit.verticalScrollBar()
         sb.setValue(sb.maximum())
 
@@ -1654,28 +1736,42 @@ class IngestWindow(QMainWindow):
             return
 
         total = len(self._plans)
-        matched = sum(1 for p in self._plans if p.match.matched)
-        unmatched = total - matched
         new_shots = sum(1 for p in self._plans if p.is_new_shot and p.match.matched)
-        updates = matched - new_shots
 
         enabled = self._get_enabled_plans()
         n_enabled = len(enabled)
 
-        parts = []
-        if matched:
-            parts.append(f"{matched} shot{'s' if matched != 1 else ''}")
-            sub = []
-            if new_shots:
-                sub.append(f"{new_shots} new")
-            if updates:
-                sub.append(f"{updates} update")
-            if sub:
-                parts[-1] += f" ({', '.join(sub)})"
-        if unmatched:
-            parts.append(f"{unmatched} unmatched")
+        # Count status types
+        ready_count = sum(1 for p in self._plans if p.can_execute and not p.error)
+        warning_count = sum(1 for p in self._plans if p.can_execute and p.error and "warning" in p.error.lower())
+        error_count = sum(1 for p in self._plans if not p.can_execute or (p.error and "error" in p.error.lower()))
 
-        self._summary_label.setText(f"Summary: {', '.join(parts)}")
+        # Build summary with color coding
+        summary_parts = [f"<b>{total} clips</b>"]
+
+        if ready_count > 0:
+            summary_parts.append(f"<span style='color: #27ae60;'>{ready_count} ready</span>")
+        if warning_count > 0:
+            summary_parts.append(f"<span style='color: #f39c12;'>{warning_count} warnings</span>")
+        if error_count > 0:
+            summary_parts.append(f"<span style='color: #f44747;'>{error_count} errors</span>")
+
+        if new_shots > 0:
+            summary_parts.append(f"{new_shots} new shots")
+
+        self._summary_label.setText(" • ".join(summary_parts))
+
+        # Set overall label color based on status
+        if error_count > 0:
+            label_color = "#f44747"
+        elif warning_count > 0:
+            label_color = "#f39c12"
+        elif ready_count > 0:
+            label_color = "#27ae60"
+        else:
+            label_color = "#888888"
+
+        self._summary_label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {label_color};")
 
         is_dry = self._chk_dry_run.isChecked()
         btn_text = "Simulate" if is_dry else "Ingest"
@@ -1983,7 +2079,8 @@ class IngestWindow(QMainWindow):
     def _toggle_log(self) -> None:
         visible = not self._log_edit.isVisible()
         self._log_edit.setVisible(visible)
-        self._log_toggle.setText("[ - ] Log" if visible else "[ + ] Log")
+        self._btn_clear_log.setVisible(visible)
+        self._log_toggle.setText("▲ Hide Log" if visible else "▼ Show Log")
 
 
 # ---------------------------------------------------------------------------

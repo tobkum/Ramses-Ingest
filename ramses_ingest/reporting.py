@@ -685,12 +685,21 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     common_fps = get_mode(framerates)
     common_codec = get_mode(codecs)
 
-    # 2. Build Rows & Track Deviations
+    # 2. Sort results by sequence -> shot
+    sorted_results = sorted(
+        results,
+        key=lambda r: (
+            r.plan.sequence_id or "" if r and r.plan else "",
+            r.plan.shot_id or "" if r and r.plan else ""
+        )
+    )
+
+    # 3. Build Rows & Track Deviations
     rows = []
     has_deviations = False
     row_number = 0
 
-    for res in results:
+    for res in sorted_results:
         if not res or not res.plan: continue
         
         mi = res.plan.media_info
@@ -816,7 +825,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         rows.append(row_html)
 
     if not rows:
-        rows.append("<tr><td colspan='9' style='text-align:center; padding:40px; color:var(--text-muted);'>No clips processed in this session.</td></tr>")
+        rows.append("<tr><td colspan='10' style='text-align:center; padding:40px; color:var(--text-muted);'>No clips processed in this session.</td></tr>")
 
     # Analytics Header Formatting
     if total_size_bytes >= (1024**3):
@@ -875,7 +884,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
 
     html_parts = [
         "<!DOCTYPE html>",
-        "<html>",
+        '<html data-theme="dark">',
         "<head>",
         '    <meta charset="utf-8">',
         f"    <title>Ingest Manifest - {project}</title>",
@@ -899,7 +908,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '            </div>',
         '            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 10px;">',
         '                <button class="theme-toggle" onclick="toggleTheme()">',
-        '                    <span id="theme-label">DARK MODE</span>',
+        '                    <span id="theme-label">LIGHT MODE</span>',
         '                </button>',
         f'                <div style="font-size: 13px; color: var(--text-muted); text-align: right; font-weight: 600;">Batch ID: {int(time.time())}<br>{timestamp}</div>',
         '            </div>',
