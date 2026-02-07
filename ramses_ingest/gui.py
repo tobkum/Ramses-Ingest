@@ -945,12 +945,29 @@ class IngestWindow(QMainWindow):
 
         details.append(f"<b>Frames:</b> {fc}")
 
-        if plan.media_info.width and plan.media_info.height:
-            details.append(
-                f"<b>Resolution:</b> {plan.media_info.width}x{plan.media_info.height}"
-            )
-        if plan.media_info.fps:
-            details.append(f"<b>FPS:</b> {plan.media_info.fps:.2f}")
+                if plan.media_info.width and plan.media_info.height:
+
+                    res_val = f"{plan.media_info.width}x{plan.media_info.height}"
+
+                    if self._engine._project_width > 0 and (plan.media_info.width != self._engine._project_width or plan.media_info.height != self._engine._project_height):
+
+                        res_val = f"<b style='color:#f44747'>{res_val} (Project: {self._engine._project_width}x{self._engine._project_height})</b>"
+
+                    details.append(f"<b>Resolution:</b> {res_val}")
+
+                    
+
+                if plan.media_info.fps:
+
+                    fps_val = f"{plan.media_info.fps:.2f}"
+
+                    if self._engine._project_fps > 0 and abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+
+                        fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps:.2f})</b>"
+
+                    details.append(f"<b>FPS:</b> {fps_val}")
+
+        
         if plan.media_info.codec:
             details.append(f"<b>Codec:</b> {plan.media_info.codec}")
         if plan.media_info.color_space:
@@ -1241,6 +1258,10 @@ class IngestWindow(QMainWindow):
             ver_item = QTableWidgetItem(f"v{plan.version:03d}")
             ver_item.setFlags(ver_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            # Check if filename version matches Ramses version
+            if plan.match.version and plan.match.version != plan.version:
+                ver_item.setBackground(QColor(120, 100, 0, 100)) # Muted Yellow
+                ver_item.setToolTip(f"Version Mismatch: Filename is v{plan.match.version:03d}, Ramses next is v{plan.version:03d}")
             self._table.setItem(idx, 3, ver_item)
 
             # Column 4: Sequence
@@ -1260,19 +1281,46 @@ class IngestWindow(QMainWindow):
 
             frames_item = QTableWidgetItem(str(fc))
             frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if clip.missing_frames:
+                frames_item.setBackground(QColor(150, 50, 0, 150)) # Muted Orange
+                frames_item.setToolTip(f"Gaps detected: {len(clip.missing_frames)} missing frames")
             self._table.setItem(idx, 5, frames_item)
 
             # Column 6: Resolution
             res_text = "—"
+            is_tech_mismatch = False
+            mismatch_msg = ""
+            
             if plan.media_info.width and plan.media_info.height:
                 res_text = f"{plan.media_info.width}x{plan.media_info.height}"
+                # Check Resolution
+                if self._engine._project_width > 0 and (plan.media_info.width != self._engine._project_width or plan.media_info.height != self._engine._project_height):
+                    is_tech_mismatch = True
+                    mismatch_msg = f"Resolution mismatch: Project is {self._engine._project_width}x{self._engine._project_height}"
+                
+                # Check FPS
+                if not is_tech_mismatch and self._engine._project_fps > 0 and abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+                    is_tech_mismatch = True
+                    mismatch_msg = f"FPS mismatch: Project is {self._engine._project_fps:.2f} (Clip: {plan.media_info.fps:.2f})"
+            
             res_item = QTableWidgetItem(res_text)
             res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if is_tech_mismatch:
+                res_item.setBackground(QColor(120, 100, 0, 100)) # Muted Yellow
+                res_item.setToolTip(mismatch_msg)
             self._table.setItem(idx, 6, res_item)
 
             # Column 7: Status (color dot)
             status = "pending"
-            if plan.can_execute and not plan.error:
+            status_msg = ""
+            
+            if plan.match.clip.missing_frames:
+                status = "warning"
+                status_msg = f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
+            elif is_tech_mismatch:
+                status = "warning"
+                status_msg = "Technical mismatch (Res/FPS)"
+            elif plan.can_execute and not plan.error:
                 status = "ready"
             elif plan.error:
                 if "warning" in plan.error.lower():
@@ -1283,6 +1331,8 @@ class IngestWindow(QMainWindow):
                 status = "duplicate"
 
             status_indicator = StatusIndicator(status)
+            if status_msg:
+                status_indicator.setToolTip(status_msg)
             self._table.setCellWidget(idx, 7, status_indicator)
 
             # Set row height for better readability

@@ -217,6 +217,11 @@ def copy_frames(
     first_checksum = ""
     first_filename = ""
     
+    # Enforce case-consistency for destination filenames
+    project_id = project_id.upper()
+    shot_id = shot_id.upper()
+    step_id = step_id.upper()
+    
     frames_to_copy = []
     if clip.is_sequence:
         padding = clip.padding
@@ -311,32 +316,23 @@ def _get_next_version(publish_root: str) -> int:
                 v_path = os.path.join(publish_root, item)
                 is_valid_version = False
 
-                # Strategy 1: Check for completion marker
+                # Strategy 1: Check for completion marker (Strongest)
                 if os.path.exists(os.path.join(v_path, ".ramses_complete")):
                     is_valid_version = True
                 else:
-                    # Strategy 2: Check for any media files
-                    has_media = False
+                    # Strategy 2: Check if folder is very recent (ingest in progress)
                     try:
-                        for f in os.listdir(v_path):
-                            if not f.startswith("_") and not f.startswith("."):
-                                has_media = True
-                                break
+                        mtime = os.path.getmtime(v_path)
+                        age_seconds = time.time() - mtime
+                        # Consider folders < 1 hour old as potentially in progress
+                        if age_seconds < 3600:
+                            is_valid_version = True
                     except (OSError, PermissionError):
                         pass
-
-                    if has_media:
-                        is_valid_version = True
-                    else:
-                        # Strategy 3: Check if folder is recent (ingest in progress)
-                        try:
-                            mtime = os.path.getmtime(v_path)
-                            age_seconds = time.time() - mtime
-                            # Consider folders < 1 hour old as potentially in progress
-                            if age_seconds < 3600:
-                                is_valid_version = True
-                        except (OSError, PermissionError):
-                            pass
+                    
+                    # NOTE: We no longer treat folders with "any media files" as valid 
+                    # if they are old and have no marker. This allows reclaiming
+                    # failed version numbers.
 
                 if is_valid_version:
                     v = int(item[1:])
@@ -463,21 +459,26 @@ def resolve_paths(
         if not plan.can_execute:
             continue
 
+        # Force Uppercase for Ramses naming components to ensure case-sensitivity safety
+        proj_id = plan.project_id.upper()
+        shot_id = plan.shot_id.upper()
+        step_id = plan.step_id.upper()
+
         # Build standard Shot Root folder name: PROJ_S_SH010
         snm = RamFileInfo()
-        snm.project = plan.project_id
+        snm.project = proj_id
         snm.ramType = ItemType.SHOT
-        snm.shortName = plan.shot_id
+        snm.shortName = shot_id
         shot_root_name = snm.fileName()
 
         shot_root = os.path.join(project_root, shots_folder, shot_root_name)
 
         # Build step folder name using API convention: PROJ_S_SH010_PLATE
         nm = RamFileInfo()
-        nm.project = plan.project_id
+        nm.project = proj_id
         nm.ramType = ItemType.SHOT
-        nm.shortName = plan.shot_id
-        nm.step = plan.step_id
+        nm.shortName = shot_id
+        nm.step = step_id
         step_folder_name = nm.fileName()
 
         step_folder = os.path.join(shot_root, step_folder_name)
@@ -518,12 +519,17 @@ def resolve_paths_from_daemon(
             if not base_path:
                 continue
 
+            # Force Uppercase for standard identifiers
+            proj_id = plan.project_id.upper()
+            shot_id = plan.shot_id.upper()
+            step_id = plan.step_id.upper()
+
             # Build step folder name using API convention
             nm = RamFileInfo()
-            nm.project = plan.project_id
+            nm.project = proj_id
             nm.ramType = ItemType.SHOT
-            nm.shortName = plan.shot_id
-            nm.step = plan.step_id
+            nm.shortName = shot_id
+            nm.step = step_id
             step_folder_name = nm.fileName()
 
             # Construct paths manually (Dry)
