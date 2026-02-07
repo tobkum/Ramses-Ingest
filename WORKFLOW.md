@@ -1,6 +1,6 @@
-shou# Workflow Guide: Ingesting New Footage
+# Workflow Guide: Ingesting New Footage
 
-This guide walks you through the process of using Ramses-Ingest when you receive a new delivery of footage from a client, specifically for a **completely new project**.
+This guide walks you through the process of using Ramses-Ingest when you receive a new delivery of footage from a client.
 
 ## 1. New Project Checklist (Ramses Client)
 
@@ -9,73 +9,68 @@ Before running the Ingest tool, perform these steps in the **Ramses Client** app
 1.  **Create the Project**: Set up your project name and folder path.
 2.  **Define the Pipeline**: Go to *Project Settings > Pipeline*.
 3.  **Create the PLATE Step**:
-    *   Add a step named `PLATE`.
+    *   Add a step named `PLATE` (or your preferred ingest step).
     *   Set its **Type** to `Shot Production`.
-    *   *Why?* The Ingest tool queries the database for these steps. If the step exists, Ramses defines exactly where the files should live. If it doesn't exist, the tool will fall back to a default folder name, but the files won't be linked to a database task.
-4.  **Ensure Project is Active**: The Ingest tool connects to whichever project is currently open/active in the Ramses Client.
-    *   **CRITICAL**: Ingestion is disabled if the tool is not connected to the Ramses Daemon. Check the status indicator in the top right.
+    *   *Why?* The Ingest tool queries these steps. If the step exists, Ramses defines exactly where the files live.
+4.  **Ensure Project is Active**: The tool connects to whichever project is currently open in the Ramses Client.
 
 ## 2. Scanning the Delivery
-what
+
 1.  **Launch the Tool**: `python -m ramses_ingest`
-2.  **Select Source**: 
-    *   Click **"Select Source Directory"** to choose a single folder.
-    *   **Multi-Selection Drop**: Drag and drop multiple folders or a specific selection of files onto the "Drop Zone".
-3.  **Editorial Mapping (Optional)**:
-    *   If your delivery comes with a **CMX 3600 EDL**, click **"Load EDL..."**.
-    *   The tool will parse the EDL and automatically map clip names to the correct shot IDs based on EDL comments.
-4.  **Review Matches**:
-    *   **Destination Column**: Shows exactly where the files will land (e.g., `SH010/PLATE/_published/v001`). This conforms to the Ramses folder standard.
-    *   **New Items**: Shots/Sequences will be highlighted as `[NEW]`.
-    *   **Manual Overrides**: If a shot wasn't matched, you can click the shot ID in the list to type in the correct identifier.
+2.  **Connection**: The tool will attempt to connect automatically. If the connection is lost, use the **"↻ Refresh"** button in the header.
+3.  **Select Source**: 
+    *   Drag and drop folders or files onto the center **"Drop Zone"**.
+    *   The tool uses `pyseq` to instantly group image sequences, supporting both `.` and `_` separators.
+4.  **Editorial Mapping (Optional)**:
+    *   If the delivery includes a **CMX 3600 EDL**, click **"Load EDL..."** in the Options dialog.
+    *   The tool will automatically map clip names to shot IDs based on EDL comments.
 
-## 3. Configuration & Execution
+## 3. Review & Verification
 
-1.  **Select Target Step**: Ensure `PLATE` is selected in the Step dropdown.
-2.  **Color Management (OCIO)**:
-    *   The tool supports **OpenColorIO** for professional color transforms.
-    *   Set your `$OCIO` environment variable to point to your `config.ocio` file.
-    *   **Common Input Colorspaces (`ocio_in`)**:
-        *   `ACES - ACEScg`: The standard for CG renders (linear, wide gamut).
-        *   `Input - ARRI - V3 LogC (EI800) - Wide Gamut`: Standard for ARRI Alexa footage.
-        *   `Input - Sony - S-Log3 - SGamut3.Cine`: Common for Sony Venice/Alpha cameras.
-        *   `Input - RED - Log3G10 - REDWideGamutRGB`: For RED camera deliveries.
-        *   `Input - Panasonic - V-Log - V-Gamut`: For Panasonic workflows.
-        *   `Utility - Linear - Rec.709`: Generic linear data.
-    *   **Common Output Colorspaces (`ocio_out`)**:
-        *   `Output - sRGB`: Standard for computer monitors and web viewing.
-        *   `Output - Rec.709`: Standard for HDTV and broadcast reference.
-        *   `ACES - ACESproxy`: For low-bandwidth ACES workflows.
-    *   *Note: Names must exactly match the "colorspaces" or "roles" defined in your specific `config.ocio` file.*
-3.  **Preview Options**:
-    *   **Generate Thumbnails**: Creates a `.jpg` in the `_preview` folder (recommended).
-    *   **Generate Proxies**: Creates an `.mp4` for playback (useful for long sequences).
-4.  **Process Ingest**: Click the button. The tool uses a **High-Performance Parallel Pipeline**:
-    *   **Phase 1**: Sequentially registers objects in the database.
-    *   **Phase 2**: Parallel processing across CPU cores for file copying and preview generation.
-    *   **Data Verification**: Every file is verified for size integrity after copying.
+The professional 3-panel UI is designed for rapid verification:
 
-## 4. Post-Ingest Verification
+1.  **Filter (Left Panel)**: 
+    *   Click status dots (● All, ● Ready, ● Warnings, ● Errors) to isolate problematic clips.
+    *   Toggle between "Sequences" and "Movies" to focus your review.
+    *   Use the search box (`Ctrl+F`) to find specific shot IDs.
+2.  **Verify (Center Table)**:
+    *   **Status Dot**: Green means ready. Yellow/Red indicates technical mismatches (Res/FPS) or missing frames.
+    *   **Metadata**: Review the Resolution and FPS columns. Items mismatched with the Ramses Project Standards will be highlighted in yellow.
+3.  **Edit (Right Panel)**:
+    *   Select a clip to view its full metadata and destination path in the **Detail Panel**.
+    *   **Override**: Use the Shot ID input in the right panel to manually correct a naming mismatch.
+
+## 4. Configuration & Execution
+
+1.  **Ingest Options**: Click the **⚙ (Options)** button in the sidebar.
+    *   Enable **Generate Thumbnails** and **Generate Proxies** as needed.
+    *   Toggle **Fast Verify** for large deliveries if bit-perfect MD5 is not required for every single frame.
+2.  **Dry-Run**: Check the "Dry Run" box in the action bar to simulate the process and verify paths without moving files.
+3.  **Process Ingest**: Click **Execute**. The tool follows a transactional workflow:
+    *   **Phase 1**: Database registration (Sequences/Shots).
+    *   **Phase 2**: Parallel multi-threaded transfer and verification.
+    *   **Rollback**: If a critical error occurs, the tool automatically deletes the failed version folder to keep your project tree clean.
+
+## 5. Post-Ingest Verification
 
 Once the process finishes:
 1.  **Ingest Manifest**: 
-    *   A professional **HTML Ingest Manifest** is automatically generated.
-    *   Location: `{ProjectRoot}/_ingest_reports/`.
-    *   This provides a permanent audit trail including frame counts and destination paths.
-    *   **Studio Branding**: You can set your studio name in the GUI; it is persistent and will appear in the manifest header/footer.
-2.  **Check Ramses Client**: Refresh the tree. You should see the new Sequences and Shots.
-2.  **Check Files**: Navigate to your project root. You will find the files organized under:
-    `04-SHOTS/{Shot}/PLATE/_published/v001/`
-3.  **Check Previews**: Open the `_preview` folder to verify the generated thumbnails.
+    *   A professional **HTML Ingest Manifest** is generated in `{ProjectRoot}/_ingest_reports/`.
+    *   Click **"View Report"** in the action bar to open it immediately.
+2.  **Check Ramses Client**: Refresh the client to see the newly created and linked shots.
+3.  **Check Files**: Files are organized under your project root following the standard hierarchy:
+    `SHOTS/{Shot}/{Step}/_published/v001/`
 
-## Summary of Automatic vs. Manual Tasks
+---
+
+## Summary of Tasks
 
 | Task | Where | Handling |
 | :--- | :--- | :--- |
-| Create Project | Ramses Client | **Manual** (Must be done first) |
-| Create Steps (PLATE) | Ramses Client | **Manual** (Recommended first) |
-| Create Sequences | Ingest Tool | **Automatic** |
-| Create Shots | Ingest Tool | **Automatic** |
-| Create Folders | Ingest Tool | **Automatic** |
-| Rename & Copy Files | Ingest Tool | **Automatic** |
-| Generate Thumbnails | Ingest Tool | **Automatic** |
+| Create Project/Steps | Ramses Client | **Manual** (Prerequisite) |
+| Scan & Match Clips | Ingest Tool | **Automatic** |
+| Technical QA (Res/FPS) | Ingest Tool | **Automatic (Visual Warning)** |
+| DB Registration | Ingest Tool | **Automatic** |
+| Copy & Verify Files | Ingest Tool | **Automatic** |
+| Rollback on Failure | Ingest Tool | **Automatic** |
+| Generate Report | Ingest Tool | **Automatic** |

@@ -1,101 +1,79 @@
 # Changelog - Ramses Ingest
 
-## [Unreleased] - 2026-02-07
+## [Released] - 2026-02-07
 
-### 🔧 Critical Bug Fixes
+### ✨ New Features (Professional UI & Workflow)
 
-#### Scanner (EXR Sequence Detection Fixed)
-- **FIXED**: Frame padding regex now supports 2-digit padding (was 3-digit minimum)
-  - Files like `shot.01.exr` through `shot.99.exr` now detect correctly
-  - Reverted from greedy `.*` to non-greedy `.+?` to prevent catastrophic backtracking
-  - Location: `ramses_ingest/scanner.py:21`
+#### Professional Master-Detail Interface
+- **IMPLEMENTED**: Complete 3-panel layout (Filter | Table | Details) matching ShotGrid/production standards.
+- **ADDED**: Status Sidebar with live count badges and clickable filters.
+- **ADDED**: Editable Table with in-place cell editing for Shot IDs.
+- **ADDED**: Detail Panel showing comprehensive metadata (Res, FPS, Codec) and override controls.
+- **ADDED**: Color-coded status dots (●●●) replacing text labels for instant readability.
+- **ADDED**: "Fast Verify" mode for rapid ingestion of massive deliveries (First/Mid/Last checks).
+- **ADDED**: Integrated GUI Log Panel with syntax highlighting for Errors/Warnings/Success.
+
+#### Robust Scanning Engine
+- **ADDED**: Integration with `pyseq` for industry-standard image sequence detection.
+- **IMPROVED**: Scanner now supports both `.` and `_` frame separators (e.g., `shot.1001.exr` and `shot_1001.exr`).
+- **ADDED**: Recursive directory walking with proper error handling for permission issues.
+
+#### Transactional Integrity
+- **ADDED**: All-or-nothing ingest logic. If a file copy or metadata write fails, the entire version folder is automatically rolled back (deleted) to prevent "zombie" versions.
+- **ADDED**: Explicit "Disk Space Guard" checks before starting transfer.
+
+### 🚀 Performance & Reliability
+
+#### Responsiveness
+- **OPTIMIZED**: Implemented `ConnectionWorker` for non-blocking background daemon connection on startup.
+- **OPTIMIZED**: Added debouncing (300ms) to Shot ID overrides to prevent UI freezing during typing.
+- **OPTIMIZED**: Refactored table population to perform in-place updates, eliminating flicker and scroll jumping.
+
+#### Core System
+- **FIXED**: Critical bug where source file paths were incorrectly reconstructed with hardcoded separators.
+- **FIXED**: Hardcoded `"05-SHOTS"` folder path replaced with dynamic `FolderNames.shots` from Ramses API.
+- **FIXED**: Missing `ffprobe` dependency now triggers a proactive startup warning.
+- **FIXED**: Silent `OSError` failures during MD5 calculation are now properly caught and reported.
+
+### 🔧 Previous Critical Fixes (Retained)
+
+#### Scanner (EXR Sequence Detection)
+- **FIXED**: Frame padding regex supports 2-digit padding.
+- **FIXED**: Reverted to non-greedy regex to prevent catastrophic backtracking.
 
 #### Cache System (Performance & LRU)
-- **FIXED**: Implemented proper LRU (Least Recently Used) cache eviction
-  - Was keeping random entries, now keeps most recently accessed
-  - Added access time tracking for intelligent pruning
-  - Location: `ramses_ingest/prober.py:19-62`
-- **OPTIMIZED**: Batched cache writes (was writing after every probe)
-  - Now writes once at end of processing via `flush_cache()`
-  - ~1000x fewer disk writes on large ingests
-  - Location: `ramses_ingest/prober.py:185`, `ramses_ingest/app.py:483`
+- **FIXED**: Implemented proper LRU (Least Recently Used) cache eviction.
+- **OPTIMIZED**: Batched cache writes (writes once at end of processing).
 
 #### Path Normalization (Cross-Platform)
-- **FIXED**: Inconsistent path separators causing cache misses on Windows
-  - Created centralized `path_utils.py` module
-  - All paths now use forward slashes internally
-  - Prevents string comparison failures between cached and new paths
-  - Locations: `ramses_ingest/path_utils.py` (NEW), `ramses_ingest/app.py:17`, `ramses_ingest/publisher.py:28`
+- **FIXED**: Inconsistent path separators causing cache misses on Windows.
+- **ADDED**: Centralized `path_utils.py` module.
 
-#### Version Detection (Zombie Prevention)
-- **IMPROVED**: Smart 3-tier validation for version folders
-  1. `.ramses_complete` marker = always valid
-  2. Contains media files = valid
-  3. Recent empty folder (<1 hour) = valid (ingest in progress)
-  4. Old empty folder = zombie (ignored)
-  - Prevents version number collisions from failed ingests
-  - Auto-creates completion marker on successful ingest
-  - Location: `ramses_ingest/publisher.py:242-298, 620-627`
+#### Version Detection
+- **IMPROVED**: Smart 3-tier validation for version folders to prevent collisions.
 
-#### Security (Input Validation)
-- **ADDED**: Validation for extracted shot/sequence/step/project IDs
-  - Prevents path traversal attacks (`../`, `../../etc/passwd`)
-  - Blocks injection of special characters
-  - Validates against strict patterns
-  - Location: `ramses_ingest/matcher.py:21-53, 143-161`
-
-### 🎨 GUI Improvements (Prepared)
-
-- **ADDED**: `StatusIndicator` class for color-coded status dots (●●●)
-- **ADDED**: `EditableDelegate` class for inline cell editing
-- **ADDED**: Import of professional table widgets (`QTableWidget`, delegates)
-- Location: `ramses_ingest/gui.py:378-415`
-
-### 📚 Documentation
-
-- **UPDATED**: README.md with comprehensive feature list
-  - Added all 7 enhancements (#3, #5, #8, #9, #12, #20)
-  - Documented Architect feature
-  - Organized into categories (Core, Quality Assurance, Production, Advanced)
-  - Fixed markdown linting warnings
-
-### 🐛 Bug Fixes
-
-- **FIXED**: `studio_name` in config resetting to "Plates"
-  - Was being overwritten by step dropdown handler
-  - Removed erroneous lines from `_on_step_changed()`
-  - Location: `ramses_ingest/gui.py:779-780` (removed)
+#### Security
+- **ADDED**: Validation for extracted IDs to prevent path traversal and injection attacks.
 
 ---
 
 ## Impact Summary
 
-| Issue | Before | After |
-|-------|--------|-------|
-| EXR Detection | ❌ Broken (3-digit min) | ✅ Works (2-digit min) |
-| Cache Performance | ❌ 1000 writes/ingest | ✅ 1 write/ingest |
-| Path Consistency | ❌ Mixed `\` and `/` | ✅ All `/` |
-| Version Detection | ❌ Ignores metadata-only | ✅ Smart 3-tier validation |
-| Security | ⚠️ No validation | ✅ Injection prevention |
-| GUI Status | ⚠️ Text-based | ✅ Color dots ready |
+| Feature | Before | After |
+|---------|--------|-------|
+| UI Layout | ❌ Crowded/Single | ✅ Professional 3-Panel |
+| Data Safety | ❌ Zombie folders | ✅ Transactional Rollback |
+| Responsiveness | ❌ UI Freezes | ✅ Async Background Threads |
+| Sequence Support | ❌ Strict regex | ✅ `pyseq` + flexible separators |
+| Error Handling | ⚠️ Silent failures | ✅ Explicit GUI logging + Alerts |
 
 ---
 
 ## Testing Checklist
 
-- [x] Scanner regex supports 2-digit frames
-- [x] Cache pruning uses LRU
-- [x] Path normalization consistent
-- [x] Version detection handles edge cases
-- [x] Input validation blocks malicious IDs
-- [ ] GUI status dots working (needs UI refactor)
-- [ ] Inline editing working (needs UI refactor)
-- [ ] Filter sidebar (needs UI refactor)
+- [x] **Scanner**: Correctly groups `.` and `_` separated sequences.
+- [x] **Ingest**: Files copy correctly; rollback triggers on failure.
+- [x] **UI**: Filters, Search, and Overrides work without lag.
+- [x] **Performance**: Large lists update instantly without flicker.
+- [x] **Integrity**: MD5 checks verify data; bad files trigger errors.
 
----
-
-## Next Steps: Professional UI Refactor
-
-See `REFACTOR_PLAN.md` and `UI_IMPLEMENTATION_GUIDE.md` for complete implementation guide.
-
-**Estimated effort**: 4-6 hours for full master-detail layout implementation and testing.
