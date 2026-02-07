@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QMenu, QCheckBox, QSpinBox, QTextEdit, QApplication, QComboBox
 )
 
+from ramses_ingest.gui import STYLESHEET
+
 if TYPE_CHECKING:
     from ramses_ingest.matcher import NamingRule
 
@@ -622,6 +624,7 @@ class NamingArchitectDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Ramses Naming Architect")
         self.resize(1100, 650)
+        self.setStyleSheet(STYLESHEET)
         self._samples = []
         self._setup_ui()
 

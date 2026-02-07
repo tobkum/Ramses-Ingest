@@ -61,6 +61,7 @@ QWidget {
 /* --- Labels --- */
 QLabel {
     color: #cccccc;
+    background-color: transparent;
 }
 
 QLabel#headerLabel {
@@ -68,34 +69,30 @@ QLabel#headerLabel {
     font-weight: bold;
     color: #ffffff;
     letter-spacing: 1px;
+    background-color: transparent;
 }
 
 QLabel#projectLabel {
     font-size: 12px;
     font-weight: bold;
     color: #ffffff;
+    background-color: transparent;
 }
 
 QLabel#mutedLabel {
     color: #666666;
+    background-color: transparent;
 }
 
 QLabel#statusConnected {
     color: #27ae60;
     font-weight: bold;
+    background-color: transparent;
 }
 
 QLabel#statusDisconnected {
     color: #f44747;
-}
-
-/* --- Status Orb --- */
-QFrame#statusOrb {
-    border-radius: 6px;
-    max-width: 12px;
-    max-height: 12px;
-    min-width: 12px;
-    min-height: 12px;
+    background-color: transparent;
 }
 
 /* --- Inputs --- */
@@ -143,11 +140,25 @@ QComboBox::drop-down {
 
 QCheckBox {
     spacing: 8px;
+    background-color: transparent;
+    color: #e0e0e0;
 }
 
 QCheckBox::indicator {
     width: 16px;
     height: 16px;
+    border: 1px solid #555555; /* Light grey border */
+    background-color: #1e1e1e; /* Dark background for the box */
+    border-radius: 3px; /* Slightly rounded corners */
+}
+
+QCheckBox::indicator:checked {
+    background-color: #094771; /* Darker accent color when checked */
+    border-color: #094771;
+}
+
+QCheckBox::indicator:hover {
+    border-color: #00bff3; /* Accent color on hover */
 }
 
 QPushButton {
@@ -225,15 +236,16 @@ QTreeWidget::item:selected {
 }
 
 QHeaderView::section {
-    background-color: #252526;
+    background-color: #2d2d2d;
     border: none;
-    border-right: 1px solid #121212;
-    border-bottom: 1px solid #333333;
-    padding: 8px;
-    color: #888888;
-    font-weight: bold;
-    font-size: 10px;
+    border-right: 1px solid #1a1a1a;
+    border-bottom: 2px solid #444444;
+    padding: 12px 8px;
+    color: #aaaaaa;
+    font-weight: 700;
+    font-size: 11px;
     text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 /* --- Table --- */
@@ -278,7 +290,7 @@ QProgressBar {
 }
 
 QProgressBar::chunk {
-    background-color: #00bff3;
+    background-color: #0a7fad;
     border-radius: 4px;
 }
 
@@ -288,9 +300,33 @@ QFrame#dropZone {
     border-radius: 8px;
 }
 
+QFrame#dropZone:hover {
+    border-color: #444444;
+    background-color: #242424;
+}
+
 QFrame#dropZone[dragOver="true"] {
     border-color: #00bff3;
     background-color: #162633;
+}
+
+/* --- Group Box --- */
+QGroupBox {
+    background-color: #1e1e1e;
+    border: 1px solid #333333;
+    border-radius: 4px;
+    margin-top: 10px; /* Space for the title */
+    padding: 10px;
+    color: #e0e0e0;
+    font-weight: bold;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left; /* Position at the top left */
+    padding: 0 5px;
+    color: #cccccc;
+    background-color: transparent; /* Ensure title background is transparent */
 }
 """
 
@@ -525,7 +561,7 @@ class IngestWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("RAMSES INGEST")
+        self.setWindowTitle("Ramses Ingest")
         self.resize(1400, 800)  # Increased from 1200x700
 
         self._engine = IngestEngine()
@@ -562,14 +598,6 @@ class IngestWindow(QMainWindow):
         header_lay = QHBoxLayout(header)
         header_lay.setContentsMargins(8, 4, 8, 4)
         header_lay.setSpacing(12)
-
-        # Status orb
-        self._status_orb = QFrame()
-        self._status_orb.setObjectName("statusOrb")
-        self._status_orb.setStyleSheet(
-            "background-color: #f44747; border: 1px solid rgba(255,255,255,0.1);"
-        )
-        header_lay.addWidget(self._status_orb)
 
         self._status_label = QLabel("OFFLINE")
         self._status_label.setObjectName("statusDisconnected")
@@ -863,6 +891,7 @@ class IngestWindow(QMainWindow):
         self._btn_ingest.setObjectName("ingestButton")
         self._btn_ingest.setEnabled(False)
         self._btn_ingest.setToolTip("Start ingest execution (Enter)")
+        self._btn_ingest.setFixedWidth(200)
         self._btn_ingest.clicked.connect(self._on_ingest)
         action_bar_lay.addWidget(self._btn_ingest)
 
@@ -882,6 +911,15 @@ class IngestWindow(QMainWindow):
         log_header.addWidget(self._log_toggle)
 
         log_header.addStretch()
+
+        # Overmind Studios credit
+        credit_label = QLabel('<a href="https://www.overmind-studios.de/" style="color: #666666; text-decoration: none;">Made by Overmind Studios</a>')
+        credit_label.setStyleSheet("font-size: 10px; font-style: italic;")
+        credit_label.setOpenExternalLinks(True)
+        credit_label.setCursor(Qt.CursorShape.PointingHandCursor)
+        log_header.addWidget(credit_label)
+
+        log_header.addSpacing(12)
 
         self._btn_clear_log = QPushButton("Clear Log")
         self._btn_clear_log.setObjectName("secondaryButton")
@@ -1221,36 +1259,38 @@ class IngestWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Advanced Options")
         dialog.resize(400, 300)
+        dialog.setStyleSheet(STYLESHEET)
 
         lay = QVBoxLayout(dialog)
 
+        # Ingest Options Group
+        ingest_options_group = QGroupBox("Ingest Processing Options")
+        ingest_options_lay = QVBoxLayout(ingest_options_group)
+        
         # Thumbnails
         chk_thumb = QCheckBox("Generate thumbnails")
         chk_thumb.setChecked(self._chk_thumb.isChecked())
-        lay.addWidget(chk_thumb)
+        ingest_options_lay.addWidget(chk_thumb)
 
         # Proxies
         chk_proxy = QCheckBox("Generate video proxies")
         chk_proxy.setChecked(self._chk_proxy.isChecked())
-        lay.addWidget(chk_proxy)
+        ingest_options_lay.addWidget(chk_proxy)
 
         # Status update
         chk_status = QCheckBox("Set step status to OK on success")
         chk_status.setChecked(self._chk_status.isChecked())
-        lay.addWidget(chk_status)
+        ingest_options_lay.addWidget(chk_status)
 
         # Fast Verify
-
         chk_fast = QCheckBox("Fast Verify (MD5 first/mid/last only)")
-
         chk_fast.setToolTip(
             "Speeds up ingest by only verifying 3 frames per sequence instead of all."
         )
-
         chk_fast.setChecked(self._chk_fast_verify.isChecked())
-
-        lay.addWidget(chk_fast)
-
+        ingest_options_lay.addWidget(chk_fast)
+        
+        lay.addWidget(ingest_options_group)
         lay.addSpacing(10)
 
         # OCIO
@@ -1297,6 +1337,37 @@ class IngestWindow(QMainWindow):
 
         lay.addWidget(rule_group)
 
+        lay.addSpacing(10)
+
+        # Daemon Settings
+        from ramses.ram_settings import RamSettings
+        ram_settings = RamSettings.instance()
+
+        daemon_group = QGroupBox("Daemon Connection")
+        daemon_lay = QVBoxLayout(daemon_group)
+
+        daemon_lay.addWidget(QLabel("Daemon Port:"))
+        port_edit = QLineEdit(str(ram_settings.ramsesClientPort))
+        port_edit.setPlaceholderText("18185 (default)")
+        daemon_lay.addWidget(port_edit)
+
+        daemon_lay.addWidget(QLabel("Daemon Address:"))
+        address_edit = QLineEdit("localhost")
+        address_edit.setPlaceholderText("localhost (default)")
+        address_edit.setEnabled(False)  # Usually always localhost
+        daemon_lay.addWidget(address_edit)
+
+        daemon_lay.addWidget(QLabel("Ramses Client Path (optional):"))
+        path_edit = QLineEdit(ram_settings.ramsesClientPath)
+        path_edit.setPlaceholderText("Path to Ramses Client executable...")
+        daemon_lay.addWidget(path_edit)
+
+        btn_browse = QPushButton("Browse...")
+        btn_browse.clicked.connect(lambda: self._browse_ramses_path(path_edit))
+        daemon_lay.addWidget(btn_browse)
+
+        lay.addWidget(daemon_group)
+
         lay.addStretch()
 
         # Buttons
@@ -1310,6 +1381,8 @@ class IngestWindow(QMainWindow):
                 chk_fast,
                 ocio_in,
                 rule_combo,
+                port_edit,
+                path_edit,
                 dialog,
             )
         )
@@ -1321,6 +1394,29 @@ class IngestWindow(QMainWindow):
 
         dialog.exec()
 
+    def _browse_ramses_path(self, path_edit: QLineEdit) -> None:
+        """Browse for Ramses Client executable"""
+        from PySide6.QtWidgets import QFileDialog
+        import sys
+
+        # Determine file filter based on platform
+        if sys.platform == "win32":
+            file_filter = "Executable (*.exe)"
+        elif sys.platform == "darwin":
+            file_filter = "Application (*.app)"
+        else:
+            file_filter = "All Files (*)"
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Ramses Client Executable",
+            "",
+            file_filter
+        )
+
+        if path:
+            path_edit.setText(path)
+
     def _apply_options(
         self,
         chk_thumb,
@@ -1329,6 +1425,8 @@ class IngestWindow(QMainWindow):
         chk_fast,
         ocio_in,
         rule_combo,
+        port_edit,
+        path_edit,
         dialog,
     ):
         """Apply options from dialog"""
@@ -1338,6 +1436,27 @@ class IngestWindow(QMainWindow):
         self._chk_fast_verify.setChecked(chk_fast.isChecked())
         self._ocio_in.setCurrentText(ocio_in.currentText())
         self._rule_combo.setCurrentIndex(rule_combo.currentIndex())
+
+        # Apply daemon settings
+        from ramses.ram_settings import RamSettings
+        ram_settings = RamSettings.instance()
+
+        try:
+            new_port = int(port_edit.text())
+            if new_port != ram_settings.ramsesClientPort:
+                ram_settings.ramsesClientPort = new_port
+                ram_settings.save()
+                self._log(f"Daemon port updated to {new_port}")
+        except ValueError:
+            self._log("Invalid port number - using default 18185")
+
+        new_path = path_edit.text().strip()
+        if new_path != ram_settings.ramsesClientPath:
+            ram_settings.ramsesClientPath = new_path
+            ram_settings.save()
+            if new_path:
+                self._log(f"Ramses client path updated to {new_path}")
+
         self._update_summary()
         dialog.accept()
 
@@ -1684,20 +1803,6 @@ class IngestWindow(QMainWindow):
         if ok:
             self._reconnect_timer.stop()
             self._btn_reconnect.setVisible(False)
-            
-            self._status_orb.setStyleSheet("""
-                background-color: #27ae60; 
-                border: 1px solid rgba(255,255,255,0.2);
-                border-radius: 6px;
-            """)
-            # Apply glowing shadow for "Live" feel
-            from PySide6.QtWidgets import QGraphicsDropShadowEffect
-
-            glow = QGraphicsDropShadowEffect()
-            glow.setBlurRadius(15)
-            glow.setColor(QColor("#27ae60"))
-            glow.setOffset(0)
-            self._status_orb.setGraphicsEffect(glow)
 
             self._status_label.setText("DAEMON ONLINE")
             self._status_label.setObjectName("statusConnected")
@@ -1733,10 +1838,6 @@ class IngestWindow(QMainWindow):
                 self._populate_table()
                 
         else:
-            self._status_orb.setStyleSheet(
-                "background-color: #f44747; border-radius: 6px;"
-            )
-            self._status_orb.setGraphicsEffect(None)
             self._status_label.setText("OFFLINE")
             self._status_label.setObjectName("statusDisconnected")
             self._project_label_display.setText("— (Connection Required)")
