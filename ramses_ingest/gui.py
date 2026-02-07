@@ -589,7 +589,7 @@ class IngestWindow(QMainWindow):
         # Project
         header_lay.addWidget(QLabel("Project:"))
         self._project_label_display = QLabel("—")
-        self._project_label_display.setStyleSheet("color: #094771; font-weight: 800; font-size: 13px;")
+        self._project_label_display.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 13px;")
         header_lay.addWidget(self._project_label_display)
 
         # Step
@@ -733,6 +733,7 @@ class IngestWindow(QMainWindow):
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
         self._table.setAlternatingRowColors(True)
+        self._table.verticalHeader().setDefaultSectionSize(42)
         self._table.setSortingEnabled(True)
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
@@ -776,11 +777,12 @@ class IngestWindow(QMainWindow):
 
         self._detail_widget = QTextEdit()
         self._detail_widget.setReadOnly(True)
-        self._detail_widget.setMaximumHeight(200)
+        self._detail_widget.setMinimumHeight(300)
         self._detail_widget.setPlaceholderText("Select a clip to view details...")
+        self._detail_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         right_lay.addWidget(self._detail_widget)
 
-        right_lay.addSpacing(8)
+        right_lay.addSpacing(20)
 
         # Override controls
         override_label = QLabel("OVERRIDE")
@@ -1115,7 +1117,10 @@ class IngestWindow(QMainWindow):
 
         if plan.target_publish_dir:
             details.append(
-                f"<br><b style='color:#094771; font-size:10px;'>DESTINATION PATH:</b><br><code style='color:#aaa; font-size:10px;'>{plan.target_publish_dir}</code>"
+                f"<br><b style='color:#888; font-size:11px; text-transform: uppercase;'>Destination Path:</b><br>"
+                f"<div style='background:#1a1a1a; padding:8px; border-radius:4px; margin-top:4px;'>"
+                f"<code style='color:#00bff3; font-size:11px; word-wrap:break-word;'>{plan.target_publish_dir}</code>"
+                f"</div>"
             )
 
         self._detail_widget.setHtml("<br>".join(details))
@@ -1390,10 +1395,12 @@ class IngestWindow(QMainWindow):
             chk.setChecked(plan.enabled)
             chk.stateChanged.connect(self._on_checkbox_changed)
             chk_widget = QWidget()
+            chk_widget.setStyleSheet("background: transparent;")
             chk_lay = QHBoxLayout(chk_widget)
             chk_lay.addWidget(chk)
             chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
             chk_lay.setContentsMargins(0, 0, 0, 0)
+            chk_lay.setSpacing(0)
             self._table.setCellWidget(idx, 0, chk_widget)
 
             # Column 1: Filename
