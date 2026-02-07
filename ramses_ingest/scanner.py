@@ -16,8 +16,9 @@ from pathlib import Path
 
 
 # Matches a frame number between two dots: name.0001.exr
-# Optimized to prevent catastrophic backtracking on long complex filenames
-RE_FRAME_PADDING = re.compile(r"^(?P<base>.*)\.(?P<frame>\d{3,})\.(?P<ext>[a-zA-Z0-9]+)$")
+# Uses non-greedy .+? to prevent catastrophic backtracking on long complex filenames
+# Minimum 2 digits for frame numbers to support legacy deliveries (01-99)
+RE_FRAME_PADDING = re.compile(r"^(?P<base>.+?)\.(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
 
 # Common media extensions (lowercase)
 MEDIA_EXTENSIONS = frozenset({

@@ -19,33 +19,53 @@ from pathlib import Path
 # Cache Settings
 CACHE_PATH = os.path.join(os.path.expanduser("~"), ".ramses_ingest_cache.json")
 _METADATA_CACHE: dict[str, dict] = {}
+_CACHE_ACCESS_TIMES: dict[str, float] = {}  # Track last access time for LRU
 _CACHE_LOCK = threading.Lock()  # Thread-safe cache access
+_CACHE_DIRTY = False  # Batch writes instead of writing on every probe
+_MAX_CACHE_SIZE = 5000
 
 def _load_cache():
-    global _METADATA_CACHE
+    global _METADATA_CACHE, _CACHE_ACCESS_TIMES
     if os.path.exists(CACHE_PATH):
         try:
             with open(CACHE_PATH, "r", encoding="utf-8") as f:
-                _METADATA_CACHE = json.load(f)
+                data = json.load(f)
+                _METADATA_CACHE = data.get("cache", {})
+                _CACHE_ACCESS_TIMES = data.get("access_times", {})
         except Exception:
             _METADATA_CACHE = {}
+            _CACHE_ACCESS_TIMES = {}
 
 def _save_cache():
-    global _METADATA_CACHE
+    global _METADATA_CACHE, _CACHE_ACCESS_TIMES, _CACHE_DIRTY
     try:
-        # Prune cache if it exceeds 5000 entries (Tier 1 Stability)
-        if len(_METADATA_CACHE) > 5000:
-            # Sort by key (contains path) and keep newest entries by removing random keys 
-            # or just slice it. Since keys are strings, let's keep it simple.
-            keys = list(_METADATA_CACHE.keys())
-            for k in keys[:-5000]:
-                _METADATA_CACHE.pop(k, None)
+        # Prune cache using LRU if it exceeds limit
+        if len(_METADATA_CACHE) > _MAX_CACHE_SIZE:
+            import time
+            # Sort by access time (oldest first) and remove oldest entries
+            sorted_keys = sorted(_CACHE_ACCESS_TIMES.items(), key=lambda x: x[1])
+            num_to_remove = len(_METADATA_CACHE) - _MAX_CACHE_SIZE
+
+            for key, _ in sorted_keys[:num_to_remove]:
+                _METADATA_CACHE.pop(key, None)
+                _CACHE_ACCESS_TIMES.pop(key, None)
 
         os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
         with open(CACHE_PATH, "w", encoding="utf-8") as f:
-            json.dump(_METADATA_CACHE, f)
+            json.dump({
+                "cache": _METADATA_CACHE,
+                "access_times": _CACHE_ACCESS_TIMES
+            }, f)
+        _CACHE_DIRTY = False
     except Exception:
         pass
+
+def flush_cache():
+    """Flush dirty cache to disk. Call this at the end of processing."""
+    global _CACHE_DIRTY
+    with _CACHE_LOCK:
+        if _CACHE_DIRTY:
+            _save_cache()
 
 # Initialize cache on module load
 _load_cache()
@@ -83,10 +103,13 @@ def probe_file(file_path: str | Path) -> MediaInfo:
 
     # 1. Check Cache (thread-safe)
     try:
+        import time
         mtime = os.path.getmtime(file_path)
         cache_key = f"{file_path}|{mtime}"
         with _CACHE_LOCK:
             if cache_key in _METADATA_CACHE:
+                # Update access time for LRU
+                _CACHE_ACCESS_TIMES[cache_key] = time.time()
                 return MediaInfo(**_METADATA_CACHE[cache_key])
     except Exception:
         pass
@@ -162,8 +185,12 @@ def probe_file(file_path: str | Path) -> MediaInfo:
 
     # 3. Update Cache (thread-safe)
     if info.is_valid:
+        import time
         with _CACHE_LOCK:
+            global _CACHE_DIRTY
             _METADATA_CACHE[cache_key] = asdict(info)
-            _save_cache()
+            _CACHE_ACCESS_TIMES[cache_key] = time.time()
+            _CACHE_DIRTY = True
+            # Note: Cache is flushed at end of processing via flush_cache()
 
     return info

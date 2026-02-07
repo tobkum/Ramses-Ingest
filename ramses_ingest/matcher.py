@@ -18,6 +18,41 @@ from typing import Optional
 from ramses_ingest.scanner import Clip
 
 
+# Validation patterns for extracted IDs (security: prevent path traversal and injection)
+_VALID_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+_VALID_STEP_PATTERN = re.compile(r'^[A-Z0-9_]{1,20}$')
+
+
+def _validate_id(value: str, field_name: str, pattern: re.Pattern = _VALID_ID_PATTERN) -> str:
+    """Validate and sanitize extracted IDs.
+
+    Args:
+        value: The extracted value from regex
+        field_name: Name of the field (for error reporting)
+        pattern: Regex pattern to validate against
+
+    Returns:
+        Validated value or empty string if invalid
+
+    Security: Prevents path traversal (../, ../../etc/passwd) and injection attacks
+    """
+    if not value:
+        return ""
+
+    # Remove whitespace
+    value = value.strip()
+
+    # Check against pattern
+    if not pattern.match(value):
+        return ""  # Silently reject invalid IDs
+
+    # Explicit path traversal check
+    if ".." in value or "/" in value or "\\" in value:
+        return ""
+
+    return value
+
+
 @dataclass
 class MatchResult:
     """The result of matching a clip to a shot/sequence identity."""
@@ -140,6 +175,10 @@ def _try_rule(clip: Clip, rule: NamingRule) -> MatchResult:
     if rule.use_parent_dir_as_sequence:
         seq_raw = clip.directory.name
 
+    # Validate extracted IDs (security: prevent injection)
+    shot_raw = _validate_id(shot_raw, "shot")
+    seq_raw = _validate_id(seq_raw, "sequence")
+
     shot_id = (rule.shot_prefix + shot_raw) if shot_raw else ""
     seq_id = (rule.sequence_prefix + seq_raw) if seq_raw else ""
 
@@ -152,13 +191,17 @@ def _try_rule(clip: Clip, rule: NamingRule) -> MatchResult:
         if digits:
             version = int(digits.group(1))
 
+    # Validate additional fields
+    step_raw = _validate_id(groups.get("step", ""), "step", _VALID_STEP_PATTERN)
+    project_raw = _validate_id(groups.get("project", ""), "project")
+
     matched = bool(shot_id)  # Shot is mandatory
     return MatchResult(
         clip=clip,
         sequence_id=seq_id,
         shot_id=shot_id,
         version=version,
-        step_id=groups.get("step", ""),
-        project_id=groups.get("project", ""),
+        step_id=step_raw,
+        project_id=project_raw,
         matched=matched,
     )

@@ -25,6 +25,7 @@ from typing import Optional, Callable
 from ramses_ingest.scanner import Clip
 from ramses_ingest.matcher import MatchResult
 from ramses_ingest.prober import MediaInfo
+from ramses_ingest.path_utils import normalize_path, join_normalized
 
 from ramses.file_info import RamFileInfo
 from ramses.constants import ItemType
@@ -240,27 +241,52 @@ def copy_frames(
 
 def _get_next_version(publish_root: str) -> int:
     """Find the next available version number by scanning vNNN folders.
-    
-    Tier 1 Stability: Only counts a version as 'existing' if it contains media.
-    Empty folders (from failed ingests) are ignored to prevent 'Zombie' gaps.
+
+    Zombie Prevention Strategy:
+    1. Folder with .ramses_complete marker = valid version (even if empty)
+    2. Folder with media files = valid version
+    3. Folder with only _ramses_data.json < 1 hour old = valid (ingest in progress)
+    4. Old empty folders = zombies (ignored)
     """
-    publish_root = publish_root.replace("\\", "/")
+    publish_root = normalize_path(publish_root)
     if not os.path.isdir(publish_root):
         return 1
-    
+
     max_v = 0
     try:
         for item in os.listdir(publish_root):
             if item.startswith("v") and len(item) == 4 and item[1:].isdigit():
                 v_path = os.path.join(publish_root, item)
-                # Check if folder contains any media files (not just sidecars)
-                has_media = False
-                for f in os.listdir(v_path):
-                    if not f.startswith("_"):
-                        has_media = True
-                        break
-                
-                if has_media:
+                is_valid_version = False
+
+                # Strategy 1: Check for completion marker
+                if os.path.exists(os.path.join(v_path, ".ramses_complete")):
+                    is_valid_version = True
+                else:
+                    # Strategy 2: Check for any media files
+                    has_media = False
+                    try:
+                        for f in os.listdir(v_path):
+                            if not f.startswith("_") and not f.startswith("."):
+                                has_media = True
+                                break
+                    except (OSError, PermissionError):
+                        pass
+
+                    if has_media:
+                        is_valid_version = True
+                    else:
+                        # Strategy 3: Check if folder is recent (ingest in progress)
+                        try:
+                            mtime = os.path.getmtime(v_path)
+                            age_seconds = time.time() - mtime
+                            # Consider folders < 1 hour old as potentially in progress
+                            if age_seconds < 3600:
+                                is_valid_version = True
+                        except (OSError, PermissionError):
+                            pass
+
+                if is_valid_version:
                     v = int(item[1:])
                     if v > max_v:
                         max_v = v
@@ -408,7 +434,7 @@ def resolve_paths_from_daemon(
         try:
             # We bypass high-level API methods to avoid os.makedirs side-effects.
             # Get the raw path from daemon without triggering the API's internal folder creation.
-            base_path = daemon.getPath(shot_obj.uuid(), "RamShot").replace("\\", "/")
+            base_path = normalize_path(daemon.getPath(shot_obj.uuid(), "RamShot"))
             if not base_path:
                 continue
 
@@ -589,6 +615,15 @@ def execute_plan(
         except Exception as exc:
             _log(f"  Proxy (non-fatal): {exc}")
 
+    # Mark version as complete (prevents zombie detection on next ingest)
+    if not dry_run and plan.target_publish_dir:
+        try:
+            marker_path = os.path.join(plan.target_publish_dir, ".ramses_complete")
+            with open(marker_path, "w") as f:
+                f.write(f"{time.time()}\n")
+        except Exception:
+            pass  # Non-fatal
+
     result.success = True
     return result
 
@@ -634,7 +669,7 @@ def register_ramses_objects(
                     seq_obj = s
                     break
         
-        seq_folder = os.path.join(project.folderPath(), "05-SHOTS", plan.sequence_id).replace("\\", "/")
+        seq_folder = join_normalized(project.folderPath(), "05-SHOTS", plan.sequence_id)
         seq_data = {
             "shortName": plan.sequence_id,
             "name": plan.sequence_id,
@@ -680,9 +715,9 @@ def register_ramses_objects(
 
         # Derive folder path
         if plan.sequence_id:
-            shot_folder = os.path.join(project.folderPath(), "05-SHOTS", plan.sequence_id, plan.shot_id).replace("\\", "/")
+            shot_folder = join_normalized(project.folderPath(), "05-SHOTS", plan.sequence_id, plan.shot_id)
         else:
-            shot_folder = os.path.join(project.folderPath(), "05-SHOTS", plan.shot_id).replace("\\", "/")
+            shot_folder = join_normalized(project.folderPath(), "05-SHOTS", plan.shot_id)
 
         duration = 5.0
         if info.fps and info.fps > 0:

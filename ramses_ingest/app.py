@@ -16,7 +16,7 @@ from typing import Callable
 
 from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING
 from ramses_ingest.matcher import match_clips, NamingRule, MatchResult
-from ramses_ingest.prober import probe_file, MediaInfo
+from ramses_ingest.prober import probe_file, MediaInfo, flush_cache
 from ramses_ingest.publisher import (
     build_plans, execute_plan, resolve_paths, resolve_paths_from_daemon,
     register_ramses_objects, IngestPlan, IngestResult, check_for_duplicates,
@@ -24,6 +24,7 @@ from ramses_ingest.publisher import (
 )
 from ramses_ingest.config import load_rules
 from ramses_ingest.reporting import generate_html_report, generate_json_audit_trail
+from ramses_ingest.path_utils import normalize_path, validate_path_within_root
 
 
 class IngestEngine:
@@ -223,8 +224,8 @@ class IngestEngine:
         if not isinstance(paths, list):
             paths = [paths]
 
-        # Tier 1 Normalization: Forward-slashes only for database/logic consistency
-        paths = [os.path.normpath(str(p)).replace("\\", "/") for p in paths]
+        # Normalize all paths to forward slashes for consistency
+        paths = [normalize_path(p) for p in paths]
 
         all_clips: list[Clip] = []
         seen_seq_keys: set[tuple[str, str, str]] = set() # (dir, base, ext)
@@ -476,6 +477,10 @@ class IngestEngine:
 
         succeeded = sum(1 for r in results if r.success)
         _log(f"Done: {succeeded}/{len(plans)} succeeded.")
+
+        # Flush metadata cache to disk (batched write for performance)
+        flush_cache()
+
         return results
 
 
