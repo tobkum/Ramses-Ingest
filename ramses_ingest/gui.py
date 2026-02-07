@@ -761,7 +761,13 @@ class IngestWindow(QMainWindow):
         self._btn_view_report = QPushButton("View Report")
         self._btn_view_report.clicked.connect(self._on_view_report)
         self._btn_view_report.setVisible(False)
-        self._btn_view_report.setStyleSheet("color: #4ec9b0; font-weight: bold;")
+        self._btn_view_report.setStyleSheet("""
+            background-color: rgba(0, 191, 243, 0.1);
+            border: 1px solid #00bff3;
+            color: #00bff3;
+            font-weight: bold;
+            padding: 6px 16px;
+        """)
         action_bar_lay.addWidget(self._btn_view_report)
 
         self._btn_cancel = QPushButton("Cancel")

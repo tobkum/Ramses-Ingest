@@ -389,24 +389,57 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         white-space: nowrap;
     }
 
-    thead th:nth-child(1) { width: 160px; } /* Thumbnail - fixed */
-    thead th:nth-child(2) { min-width: 140px; } /* Shot ID */
-    thead th:nth-child(3) { text-align: center; } /* Version */
-    thead th:nth-child(4) { text-align: center; } /* Verification */
-    thead th:nth-child(5) { text-align: right; white-space: nowrap; } /* # Frames */
-    thead th:nth-child(6) { text-align: center; } /* Frame Continuity */
-    thead th:nth-child(8) { text-align: center; white-space: nowrap; } /* Timecode */
-    thead th:nth-child(9) { font-family: 'Consolas', monospace; font-size: 11px; } /* MD5 */
+    thead th:nth-child(1) { width: 50px; text-align: center; } /* Row # */
+    thead th:nth-child(2) { width: 160px; } /* Thumbnail - fixed */
+    thead th:nth-child(3) { min-width: 140px; } /* Shot ID */
+    thead th:nth-child(4) { text-align: center; } /* Version */
+    thead th:nth-child(5) { text-align: center; } /* Verification */
+    thead th:nth-child(6) { text-align: right; white-space: nowrap; } /* # Frames */
+    thead th:nth-child(7) { text-align: center; } /* Frame Continuity */
+    thead th:nth-child(9) { text-align: center; white-space: nowrap; } /* Timecode */
+    thead th:nth-child(10) { font-family: 'Consolas', monospace; font-size: 11px; } /* MD5 */
+
+    .row-num {
+        text-align: center;
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+    }
 
     tbody tr {
         transition: background-color 0.15s ease;
     }
 
+    tbody tr:nth-child(even) {
+        background: rgba(0, 0, 0, 0.035);
+    }
+
+    [data-theme="dark"] tbody tr:nth-child(even) {
+        background: rgba(255, 255, 255, 0.02);
+    }
+
     tbody tr:hover {
-        background: var(--table-row-hover);
+        background: var(--table-row-hover) !important;
     }
 
     tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    tfoot {
+        position: sticky;
+        bottom: 0;
+        background: var(--table-header);
+        border-top: 2px solid var(--border);
+        font-weight: 600;
+        z-index: 5;
+    }
+
+    tfoot td {
+        padding: 16px 12px;
+        font-size: 12px;
+        color: var(--text-main);
         border-bottom: none;
     }
 
@@ -417,11 +450,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         vertical-align: middle;
     }
 
-    td:nth-child(3) { text-align: center; } /* Version */
-    td:nth-child(4) { text-align: center; } /* Verification */
-    td:nth-child(5) { text-align: right; font-variant-numeric: tabular-nums; } /* # Frames */
-    td:nth-child(6) { text-align: center; } /* Frame Continuity */
-    td:nth-child(8) { text-align: center; } /* Timecode */
+    td:nth-child(4) { text-align: center; } /* Version */
+    td:nth-child(5) { text-align: center; } /* Verification */
+    td:nth-child(6) { text-align: right; font-variant-numeric: tabular-nums; } /* # Frames */
+    td:nth-child(7) { text-align: center; } /* Frame Continuity */
+    td:nth-child(9) { text-align: center; } /* Timecode */
 
     .thumb {
         width: 140px;
@@ -655,7 +688,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     # 2. Build Rows & Track Deviations
     rows = []
     has_deviations = False
-    
+    row_number = 0
+
     for res in results:
         if not res or not res.plan: continue
         
@@ -755,8 +789,10 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         b64_img = _get_base64_image(res.preview_path)
         img_tag = f'<img src="{b64_img}" class="thumb">' if b64_img else '<div class="thumb"></div>'
 
+        row_number += 1
         row_html = f"""
         <tr>
+            <td class="row-num">{row_number}</td>
             <td>{img_tag}</td>
             <td>
                 <div class="xray-wrap">
@@ -887,6 +923,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "        <table>",
         "            <thead>",
         "                <tr>",
+        "                    <th>#</th>",
         "                    <th>Thumbnail</th>",
         "                    <th>Shot ID</th>",
         "                    <th>Version</th>",
@@ -901,6 +938,13 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "            <tbody>",
         "".join(rows),
         "            </tbody>",
+        "            <tfoot>",
+        "                <tr>",
+        "                    <td colspan='10' style='text-align: left;'>",
+        f"                        <strong>Summary:</strong> {len(results)} clips · {succeeded} succeeded · {len(results) - succeeded} failed · {total_frames} frames · {size_display}",
+        "                    </td>",
+        "                </tr>",
+        "            </tfoot>",
         "        </table>",
         '        <div class="footer">',
         f"            With &epsilon;&gt; from {studio_name}",
