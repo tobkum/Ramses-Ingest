@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QThread, QUrl
+from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QColor, QPalette
 from PySide6.QtWidgets import (
     QApplication,
@@ -464,6 +464,10 @@ class IngestWindow(QMainWindow):
         self._current_filter_status = "all"  # For filter sidebar
         self._selected_plan: IngestPlan | None = None  # For detail panel
 
+        self._reconnect_timer = QTimer(self)
+        self._reconnect_timer.setInterval(5000) # Check every 5 seconds
+        self._reconnect_timer.timeout.connect(self._try_connect)
+
         self._build_ui()
         self._try_connect()
 
@@ -500,6 +504,14 @@ class IngestWindow(QMainWindow):
         self._status_label.setObjectName("statusDisconnected")
         self._status_label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         header_lay.addWidget(self._status_label)
+
+        self._btn_reconnect = QPushButton("Reconnect")
+        self._btn_reconnect.setFixedWidth(80)
+        self._btn_reconnect.setFixedHeight(22)
+        self._btn_reconnect.setStyleSheet("font-size: 9px; padding: 2px;")
+        self._btn_reconnect.clicked.connect(self._try_connect)
+        self._btn_reconnect.setVisible(False)
+        header_lay.addWidget(self._btn_reconnect)
 
         header_lay.addWidget(QLabel(" | "))
 
@@ -1075,6 +1087,9 @@ class IngestWindow(QMainWindow):
                 self._plans.remove(plan)
             self._table.removeRow(row)
 
+        # Re-resolve and re-populate to clear any collisions that might have been resolved
+        self._resolve_all_paths()
+        self._populate_table()
         self._update_summary()
         self._update_filter_counts()
 
@@ -1500,6 +1515,9 @@ class IngestWindow(QMainWindow):
     def _try_connect(self) -> None:
         ok = self._engine.connect_ramses()
         if ok:
+            self._reconnect_timer.stop()
+            self._btn_reconnect.setVisible(False)
+            
             self._status_orb.setStyleSheet("""
                 background-color: #00bff3; 
                 border: 1px solid rgba(255,255,255,0.2);
@@ -1526,21 +1544,34 @@ class IngestWindow(QMainWindow):
             # h = self._engine._project_height
 
             # Populate steps
+            self._step_combo.blockSignals(True)
             self._step_combo.clear()
             for s in self._engine.steps:
                 self._step_combo.addItem(s)
             if "PLATE" in self._engine.steps:
                 self._step_combo.setCurrentText("PLATE")
-                    else:
-                        self._status_orb.setStyleSheet(
-                            "background-color: #f44747; border-radius: 6px;"
-                        )
-                        self._status_orb.setGraphicsEffect(None)
-                        self._status_label.setText("OFFLINE")
-                        self._status_label.setObjectName("statusDisconnected")
-                        self._project_edit.setText("— (Connection Required)")
-                        self._btn_ingest.setToolTip("Ramses connection required to ingest.")
-                # Re-polish to apply dynamic objectName change
+            self._step_combo.blockSignals(False)
+            
+            # If we were already working, refresh paths now that we're connected
+            if self._plans:
+                self._resolve_all_paths()
+                self._populate_table()
+                
+        else:
+            self._status_orb.setStyleSheet(
+                "background-color: #f44747; border-radius: 6px;"
+            )
+            self._status_orb.setGraphicsEffect(None)
+            self._status_label.setText("OFFLINE")
+            self._status_label.setObjectName("statusDisconnected")
+            self._project_edit.setText("— (Connection Required)")
+            self._btn_ingest.setToolTip("Ramses connection required to ingest.")
+            
+            self._btn_reconnect.setVisible(True)
+            if not self._reconnect_timer.isActive():
+                self._reconnect_timer.start()
+
+        # Re-polish to apply dynamic objectName change
         self._status_label.style().unpolish(self._status_label)
         self._status_label.style().polish(self._status_label)
         self._update_summary()
@@ -1583,25 +1614,18 @@ class IngestWindow(QMainWindow):
         self._summary_label.setText(f"Summary: {', '.join(parts)}")
 
         is_dry = self._chk_dry_run.isChecked()
-
         btn_text = "Simulate" if is_dry else "Ingest"
-
         self._btn_ingest.setText(f"{btn_text} {n_enabled}/{total}")
 
         # UI Polish: Apply specific colors for different states
-
         if is_dry:
             # Orange for Simulation
-
             self._btn_ingest.setStyleSheet(
                 "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f39c12, stop:1 #d35400); color: white; border: none; font-weight: bold;"
             )
-
         else:
             # Standard Blue for Ingest (matching Ramses-Fusion accent)
-
             # We apply this specifically when enabled so it doesn't override the disabled look
-
             if (
                 n_enabled > 0
                 and self._engine.connected
@@ -1610,14 +1634,10 @@ class IngestWindow(QMainWindow):
                 self._btn_ingest.setStyleSheet(
                     "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00bff3, stop:1 #0095c2); color: white; border: none; font-weight: bold;"
                 )
-
             else:
-                self._btn_ingest.setStyleSheet(
-                    ""
-                )  # Revert to stylesheet default (muted)
+                self._btn_ingest.setStyleSheet("")  # Revert to stylesheet default (muted)
 
         # Strict enforcement: Connection AND valid plans AND a defined pipeline step
-
         has_step = bool(self._step_combo.currentText())
         self._btn_ingest.setEnabled(
             n_enabled > 0 and self._engine.connected and has_step
