@@ -21,7 +21,10 @@ Before running the Ingest tool, perform these steps in the **Ramses Client** app
 2.  **Select Source**: 
     *   Click **"Select Source Directory"** to choose a single folder.
     *   **Multi-Selection Drop**: Drag and drop multiple folders or a specific selection of files onto the "Drop Zone".
-3.  **Review Matches**:
+3.  **Editorial Mapping (Optional)**:
+    *   If your delivery comes with a **CMX 3600 EDL**, click **"Load EDL..."**.
+    *   The tool will parse the EDL and automatically map clip names to the correct shot IDs based on EDL comments.
+4.  **Review Matches**:
     *   **Destination Column**: Shows exactly where the files will land (e.g., `SH010/PLATE/_published/v001`). This conforms to the Ramses folder standard.
     *   **New Items**: Shots/Sequences will be highlighted as `[NEW]`.
     *   **Manual Overrides**: If a shot wasn't matched, you can click the shot ID in the list to type in the correct identifier.
@@ -55,7 +58,12 @@ Before running the Ingest tool, perform these steps in the **Ramses Client** app
 ## 4. Post-Ingest Verification
 
 Once the process finishes:
-1.  **Check Ramses Client**: Refresh the tree. You should see the new Sequences and Shots.
+1.  **Ingest Manifest**: 
+    *   A professional **HTML Ingest Manifest** is automatically generated.
+    *   Location: `{ProjectRoot}/_ingest_reports/`.
+    *   This provides a permanent audit trail including frame counts and destination paths.
+    *   **Studio Branding**: You can set your studio name in the GUI; it is persistent and will appear in the manifest header/footer.
+2.  **Check Ramses Client**: Refresh the tree. You should see the new Sequences and Shots.
 2.  **Check Files**: Navigate to your project root. You will find the files organized under:
     `04-SHOTS/{Shot}/PLATE/_published/v001/`
 3.  **Check Previews**: Open the `_preview` folder to verify the generated thumbnails.

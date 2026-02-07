@@ -11,14 +11,18 @@ The Ramses API (located in `lib/ramses/`) communicates with the **Ramses Client*
 
 ## Optimizations
 
-### 1. Sequence Caching in Publisher
-In `ramses_ingest/publisher.py`, the `_create_ramses_objects` function caches sequence UUIDs at the start of each execution. This prevents the tool from repeatedly querying the daemon for the same sequence list when ingesting multiple shots in a batch.
+### 1. Batch Optimized Metadata Caching
+The `IngestEngine` and `Publisher` have been refactored for "Tier 1" performance. Instead of per-item API lookups, the tool now:
+1.  **Pre-fetches** all sequence and shot objects once per batch execution.
+2.  Passes these **Caches** into the thread pool.
+3.  Performs database registration and status updates using local cache lookups.
 
-**Before:** $O(N 	imes M)$ where $N$ is the number of shots and $M$ is the number of sequences in the project.
-**After:** $O(M + N)$.
+This reduces socket overhead and avoids the $O(N 	imes M)$ bottleneck during the registration phase.
 
-### 2. Connection Lifecycle
-The `IngestEngine` in `ramses_ingest/app.py` caches project metadata (sequences, shots, steps) upon connection. This minimizes socket overhead during the "Scanning" and "Matching" phases.
+### 2. Parallel Media Probing
+Media metadata extraction (Timecode, Resolution, FPS) via `ffprobe` is parallelized using a `ThreadPoolExecutor`. 
+- **Scanning Performance**: The directory scanner uses `os.scandir` (recursive) for high-speed file discovery.
+- **Concurrent Probing**: Multiple `ffprobe` instances are launched simultaneously, saturating CPU cores to minimize the "Probing..." wait time during delivery loads.
 
 ## Known Limitations & Considerations
 

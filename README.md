@@ -9,8 +9,10 @@ It bridges the gap between raw delivery folders and a structured production envi
 - **Automated Scanning**: Detects image sequences and movie files in source directories (supports multi-selection drop).
 - **High-Performance Ingest**: Optimized two-phase pipeline using multi-threaded parallel processing for file transfers and preview generation.
 - **Data Integrity**: Built-in file size verification ensures copies are 100% accurate.
-- **Editorial Ready**: Automatically extracts start timecodes from media metadata.
+- **Editorial Ready**: Automatically extracts start timecodes from media metadata; supports **CMX 3600 EDL** mapping for name-to-shot resolution.
 - **Regex-based Matching**: Uses configurable naming rules to extract sequence and shot IDs.
+- **Production Reporting**: Automatically generates professional **HTML Ingest Manifests** in the project's `_ingest_reports/` folder.
+- **Studio Customization**: Persistent studio branding for manifests.
 - **Color Management**: Integrated **OpenColorIO (OCIO)** support for professional color-accurate previews.
 - **Structure Enforcement**: Organizes files into the standard Ramses folder structure:
   `{Project}/{Shot}/{Step}/_published/v{Version}/`
