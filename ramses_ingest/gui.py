@@ -50,7 +50,7 @@ QLabel#headerLabel {
 QLabel#projectLabel {
     font-size: 12px;
     font-weight: bold;
-    color: #4ec9b0;
+    color: #00bff3;
 }
 
 QLabel#mutedLabel {
@@ -58,7 +58,7 @@ QLabel#mutedLabel {
 }
 
 QLabel#statusConnected {
-    color: #4ec9b0;
+    color: #00bff3;
     font-weight: bold;
 }
 
@@ -85,7 +85,7 @@ QLineEdit {
 }
 
 QLineEdit:focus {
-    border-color: #007acc;
+    border-color: #00bff3;
     background-color: #252526;
 }
 
@@ -116,16 +116,16 @@ QPushButton {
 
 QPushButton:hover {
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333333);
-    border-color: #007acc;
+    border-color: #00bff3;
 }
 
 QPushButton:pressed {
-    background-color: #007acc;
+    background-color: #00bff3;
     color: white;
 }
 
 QPushButton#ingestButton {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0e639c, stop:1 #0a4d7a);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00bff3, stop:1 #0095c2);
     border: none;
     color: #ffffff;
     font-weight: bold;
@@ -133,7 +133,7 @@ QPushButton#ingestButton {
 }
 
 QPushButton#ingestButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1177bb, stop:1 #0e639c);
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #33ccff, stop:1 #00bff3);
 }
 
 QPushButton#ingestButton:disabled {
@@ -185,7 +185,7 @@ QProgressBar {
 }
 
 QProgressBar::chunk {
-    background-color: #007acc;
+    background-color: #00bff3;
 }
 
 QFrame#dropZone {
@@ -195,7 +195,7 @@ QFrame#dropZone {
 }
 
 QFrame#dropZone[dragOver="true"] {
-    border-color: #007acc;
+    border-color: #00bff3;
     background-color: #162633;
 }
 """
@@ -471,7 +471,7 @@ class IngestWindow(QMainWindow):
         
         btn_architect = QPushButton("Architect...")
         btn_architect.clicked.connect(self._on_launch_architect)
-        btn_architect.setStyleSheet("font-weight: bold; color: #4ec9b0;")
+        btn_architect.setStyleSheet("font-weight: bold; color: #00bff3;")
         rule_row.addWidget(btn_architect)
 
         self._btn_edl = QPushButton("Load EDL...")
@@ -502,14 +502,21 @@ class IngestWindow(QMainWindow):
             "", "Status", "Sequence", "Shot", "Frames", "Res", "FPS", "Source", "Destination",
         ])
         hdr = self._tree.header()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        hdr.setSectionsMovable(True)
+        hdr.setSectionsClickable(True)
+        
+        # Reset modes to allow manual resizing while keeping smart defaults
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed) # Checkbox
         hdr.resizeSection(0, 28)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        hdr.resizeSection(1, 50)
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.Interactive)
-        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
-        for col in (2, 3, 4, 5, 6):
-            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed) # Status
+        hdr.resizeSection(1, 55)
+        
+        # All data columns are interactive by default
+        for col in range(2, 8):
+            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+            hdr.resizeSection(col, 80) # Default starting width
+            
+        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch) # Destination
         
         self._tree.setSortingEnabled(True) # Enable header sorting
         self._tree.setMinimumHeight(180)
@@ -598,7 +605,7 @@ class IngestWindow(QMainWindow):
         ok = self._engine.connect_ramses()
         if ok:
             self._status_orb.setStyleSheet("""
-                background-color: #4ec9b0; 
+                background-color: #00bff3; 
                 border: 1px solid rgba(255,255,255,0.2);
                 border-radius: 6px;
             """)
@@ -606,7 +613,7 @@ class IngestWindow(QMainWindow):
             from PySide6.QtWidgets import QGraphicsDropShadowEffect
             glow = QGraphicsDropShadowEffect()
             glow.setBlurRadius(15)
-            glow.setColor(QColor("#4ec9b0"))
+            glow.setColor(QColor("#00bff3"))
             glow.setOffset(0)
             self._status_orb.setGraphicsEffect(glow)
 

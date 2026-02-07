@@ -184,7 +184,7 @@ class TokenEngine:
 # ---------------------------------------------------------------------------
 
 class VisualTokenWidget(QFrame):
-    """A pill-shaped interactive token with high-fidelity styling."""
+    """A pill-shaped interactive token with professional pipeline styling."""
     
     clicked = Signal(ArchitectToken)
     deleted = Signal(object)
@@ -196,52 +196,60 @@ class VisualTokenWidget(QFrame):
         self.update_visuals()
 
     def _setup_layout(self) -> None:
-        self.setFrameShape(QFrame.Shape.NoFrame)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(32)
-        self.setMinimumWidth(90)
+        self.setFixedHeight(28) # Tighter, professional height
+        self.setMinimumWidth(80)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 0, 14, 0)
+        layout.setContentsMargins(0, 0, 10, 0) # Margin for the accent bar
+        layout.setSpacing(8)
+        
+        # Color Accent Bar (Tier 1 Aesthetic)
+        self.accent = QFrame()
+        self.accent.setFixedWidth(4)
+        self.accent.setStyleSheet("border-top-left-radius: 4px; border-bottom-left-radius: 4px;")
+        layout.addWidget(self.accent)
         
         self.label = QLabel()
-        self.label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.label)
+        self.label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        self.label.setStyleSheet("color: #eee; border: none; background: transparent;")
+        layout.addWidget(self.label, 1)
 
     def update_visuals(self, has_collision: bool = False) -> None:
-        """Apply high-fidelity theme with gradients and reactive state."""
+        """Apply a professional matte theme with color-coded accents."""
         colors = {
-            TokenType.SEQUENCE: ("#2ecc71", "#27ae60"), # Emerald Gradient
-            TokenType.SHOT:     ("#3498db", "#2980b9"), # Blue Gradient
-            TokenType.VERSION:  ("#f1c40f", "#f39c12"), # Amber Gradient
-            TokenType.SEPARATOR:("#95a5a6", "#7f8c8d"), # Slate Gradient
-            TokenType.WILDCARD: ("#9b59b6", "#8e44ad"), # Purple Gradient
-            TokenType.IGNORE:   ("#34495e", "#2c3e50"), # Dark Slate
+            TokenType.SEQUENCE: "#27ae60", # Emerald
+            TokenType.SHOT:     "#00bff3", # Standard Cyan
+            TokenType.VERSION:  "#f39c12", # Amber
+            TokenType.SEPARATOR:"#555555", # Muted Gray
+            TokenType.WILDCARD: "#8e44ad", # Purple
+            TokenType.IGNORE:   "#333333", # Dark
         }
-        c1, c2 = colors.get(self.token.type, ("#444", "#333"))
+        accent_color = colors.get(self.token.type, "#444")
+        if has_collision:
+            accent_color = "#f44747" # Red collision
         
-        # Collision State
-        border = "#ff4757" if has_collision else "transparent"
-        glow = "0 0 10px rgba(255, 71, 87, 0.5)" if has_collision else "none"
+        self.accent.setStyleSheet(f"background-color: {accent_color};")
         
         text = self.token.type.name.capitalize()
         if self.token.type == TokenType.SEPARATOR:
             text = f"'{self.token.value or ' '}'"
         elif self.token.type == TokenType.VERSION and self.token.prefix:
             text = f"{self.token.prefix}Ver"
-        self.label.setText(text)
+        self.label.setText(text.upper())
+
+        border = "#f44747" if has_collision else "#333"
+        bg = "#252526" if not has_collision else "#3d1c1c"
 
         self.setStyleSheet(f"""
             VisualTokenWidget {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {c1}, stop:1 {c2});
-                border-radius: 16px;
+                background-color: {bg};
+                border-radius: 4px;
                 border: 1px solid {border};
-                color: white;
             }}
             VisualTokenWidget:hover {{
-                border: 1px solid white;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {c1}, stop:1 #555);
+                background-color: #2d2d30;
+                border-color: #555;
             }}
         """)
 
@@ -413,7 +421,20 @@ class SimulationTable(QTableWidget):
         super().__init__(parent)
         self.setColumnCount(4)
         self.setHorizontalHeaderLabels(["X-Ray Filename", "Sequence", "Shot", "Status"])
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        
+        hdr = self.horizontalHeader()
+        hdr.setSectionsMovable(True)
+        hdr.setSectionsClickable(True)
+        
+        # Interactive Resizing (Tier 1 Logic)
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive) # Filename
+        hdr.resizeSection(0, 300)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive) # Seq
+        hdr.resizeSection(1, 100)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive) # Shot
+        hdr.resizeSection(2, 100)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)     # Status
+        
         self.setStyleSheet("background-color: #1a1a1a; color: #ccc; gridline-color: #333;")
         self.verticalHeader().setVisible(False)
 
@@ -605,7 +626,7 @@ class NamingArchitectDialog(QDialog):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # --- Sidebar: Vendor Presets ---
+        # --- Sidebar Left: Vendor Presets ---
         self.sidebar = QFrame()
         self.sidebar.setFixedWidth(180)
         self.sidebar.setStyleSheet("background-color: #252526; border-right: 1px solid #333;")
@@ -625,36 +646,36 @@ class NamingArchitectDialog(QDialog):
         for name, pattern in presets:
             btn = QPushButton(name)
             btn.setStyleSheet("text-align: left; padding: 8px; border: none; background: transparent;")
-            # Use default value in lambda to capture current pattern
             btn.clicked.connect(lambda checked=False, p=pattern: self._apply_preset(p))
             side_lay.addWidget(btn)
         
         side_lay.addStretch()
         main_layout.addWidget(self.sidebar)
 
-        # --- Content Area ---
+        # --- Center Content Area ---
         content = QWidget()
         layout = QVBoxLayout(content)
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
         main_layout.addWidget(content, 1)
 
-        # 1. Blueprint Area (with Inspector side-panel)
+        # 1. Blueprint Area (Hardened Container to prevent jumping)
         lbl_blue = QLabel("interactive rule blueprint")
         lbl_blue.setStyleSheet("color: #888; text-transform: uppercase; font-size: 10px; font-weight: bold;")
         layout.addWidget(lbl_blue)
         
-        blueprint_cont = QHBoxLayout()
+        self.blueprint_container = QFrame()
+        self.blueprint_container.setFixedHeight(60) # Hard vertical lock
+        self.blueprint_container.setStyleSheet("background-color: #1a1a1a; border-radius: 6px;")
+        
+        blueprint_cont_lay = QHBoxLayout(self.blueprint_container)
+        blueprint_cont_lay.setContentsMargins(5, 5, 5, 5)
+        
         self.drop_zone = TokenDropZone()
         self.drop_zone.changed.connect(self._on_rule_changed)
-        blueprint_cont.addWidget(self.drop_zone, 1)
+        blueprint_cont_lay.addWidget(self.drop_zone)
         
-        self.inspector = TokenInspector()
-        self.inspector.changed.connect(self._on_rule_changed)
-        self.drop_zone.token_clicked.connect(self.inspector.inspect)
-        blueprint_cont.addWidget(self.inspector)
-        
-        layout.addLayout(blueprint_cont)
+        layout.addWidget(self.blueprint_container)
 
         # Token Ribbon (Available Tokens)
         ribbon = QHBoxLayout()
@@ -669,7 +690,7 @@ class NamingArchitectDialog(QDialog):
         
         ribbon.addSpacing(20)
         self.btn_magic = QPushButton("✨ Magic Wand")
-        self.btn_magic.setStyleSheet("background-color: #4a4a4a; color: #4ec9b0; font-weight: bold;")
+        self.btn_magic.setStyleSheet("background-color: #4a4a4a; color: #00bff3; font-weight: bold;")
         self.btn_magic.clicked.connect(self._on_magic_wand)
         self.btn_magic.setEnabled(False)
         ribbon.addWidget(self.btn_magic)
@@ -708,7 +729,7 @@ class NamingArchitectDialog(QDialog):
         
         layout.addWidget(splitter, 1)
 
-        # 3. Footer Area (Developer View)
+        # 3. Footer Area
         self.regex_label = QLabel("Generated Regex: —")
         self.regex_label.setStyleSheet("font-family: 'Consolas'; color: #555; font-size: 11px;")
         layout.addWidget(self.regex_label)
@@ -721,10 +742,16 @@ class NamingArchitectDialog(QDialog):
         btns.addWidget(btn_cancel)
         
         btn_apply = QPushButton("Apply to Project")
-        btn_apply.setStyleSheet("background-color: #0e639c; color: white; font-weight: bold;")
+        btn_apply.setStyleSheet("background-color: #00bff3; color: white; font-weight: bold;")
         btn_apply.clicked.connect(self.accept)
         btns.addWidget(btn_apply)
         layout.addLayout(btns)
+
+        # --- Sidebar Right: Token Inspector ---
+        self.inspector = TokenInspector()
+        self.inspector.changed.connect(self._on_rule_changed)
+        self.drop_zone.token_clicked.connect(self.inspector.inspect)
+        main_layout.addWidget(self.inspector)
 
     def _apply_preset(self, pattern: list[TokenType | str]) -> None:
         """Apply a predefined pattern to the blueprint."""
