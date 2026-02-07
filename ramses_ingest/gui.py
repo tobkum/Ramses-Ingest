@@ -510,6 +510,19 @@ class IngestWindow(QMainWindow):
         self._chk_status = QCheckBox("Set PLATE status to OK")
         self._chk_status.setChecked(True)
         opt_row2.addWidget(self._chk_status)
+        
+        opt_row2.addSpacing(20)
+        opt_row2.addWidget(QLabel("Colorspace:"))
+        self._ocio_in = QComboBox()
+        self._ocio_in.addItems(["Linear", "sRGB", "Rec.709", "LogC", "S-Log3", "V-Log"])
+        self._ocio_in.currentTextChanged.connect(self._on_ocio_in_changed)
+        opt_row2.addWidget(self._ocio_in)
+        opt_row2.addWidget(QLabel("→"))
+        self._ocio_out = QComboBox()
+        self._ocio_out.addItems(["sRGB", "Rec.709", "Linear"])
+        self._ocio_out.currentTextChanged.connect(self._on_ocio_out_changed)
+        opt_row2.addWidget(self._ocio_out)
+        
         opt_row2.addStretch()
         root.addLayout(opt_row2)
 
@@ -524,6 +537,13 @@ class IngestWindow(QMainWindow):
         self._btn_clear.clicked.connect(self._on_clear)
         btn_row.addWidget(self._btn_clear)
         btn_row.addStretch()
+        
+        self._btn_view_report = QPushButton("View Report")
+        self._btn_view_report.clicked.connect(self._on_view_report)
+        self._btn_view_report.setVisible(False)
+        self._btn_view_report.setStyleSheet("color: #4ec9b0; font-weight: bold;")
+        btn_row.addWidget(self._btn_view_report)
+
         self._btn_cancel = QPushButton("Cancel")
         self._btn_cancel.clicked.connect(self._on_cancel)
         self._btn_cancel.setVisible(False)
@@ -709,6 +729,25 @@ class IngestWindow(QMainWindow):
 
     # -- Slots ---------------------------------------------------------------
 
+    def _on_ocio_in_changed(self, text: str) -> None:
+        self._engine.ocio_in = text
+
+    def _on_ocio_out_changed(self, text: str) -> None:
+        self._engine.ocio_out = text
+
+    def _on_view_report(self) -> None:
+        """Open the last generated HTML report in the system browser."""
+        if self._engine.last_report_path and os.path.exists(self._engine.last_report_path):
+            import webbrowser
+            webbrowser.open(f"file:///{os.path.abspath(self._engine.last_report_path)}")
+
+    def keyPressEvent(self, event) -> None:
+        """Handle Delete key for batch removal."""
+        if event.key() == Qt.Key.Key_Delete:
+            self._remove_selected_plans()
+        else:
+            super().keyPressEvent(event)
+
     def _on_step_changed(self, text: str) -> None:
         if text:
             self._engine.step_id = text
@@ -736,33 +775,48 @@ class IngestWindow(QMainWindow):
         from PySide6.QtWidgets import QMenu
         from PySide6.QtGui import QAction
         
-        item = self._tree.itemAt(pos)
-        if not item:
+        selected = self._tree.selectedItems()
+        if not selected:
             return
 
-        idx = self._tree.indexOfTopLevelItem(item)
-        if idx < 0 or idx >= len(self._plans):
-            return
-        
-        plan = self._plans[idx]
         menu = QMenu(self)
         
-        act_src = QAction("Open Source Folder", self)
-        act_src.triggered.connect(lambda: os.startfile(plan.match.clip.directory))
-        menu.addAction(act_src)
+        if len(selected) == 1:
+            item = selected[0]
+            idx = self._tree.indexOfTopLevelItem(item)
+            plan = self._plans[idx]
+            
+            act_src = QAction("Open Source Folder", self)
+            act_src.triggered.connect(lambda: os.startfile(plan.match.clip.directory))
+            menu.addAction(act_src)
 
-        if plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
-            act_dst = QAction("Open Destination Folder", self)
-            act_dst.triggered.connect(lambda: os.startfile(plan.target_publish_dir))
-            menu.addAction(act_dst)
+            if plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
+                act_dst = QAction("Open Destination Folder", self)
+                act_dst.triggered.connect(lambda: os.startfile(plan.target_publish_dir))
+                menu.addAction(act_dst)
+            
+            menu.addSeparator()
         
-        menu.addSeparator()
-        
-        act_remove = QAction("Remove from List", self)
-        act_remove.triggered.connect(lambda: self._remove_plan_at(idx))
+        label = f"Remove {len(selected)} item(s) from List"
+        act_remove = QAction(label, self)
+        act_remove.triggered.connect(self._remove_selected_plans)
         menu.addAction(act_remove)
 
         menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _remove_selected_plans(self) -> None:
+        """Batch remove all selected items from the internal plans list."""
+        selected = self._tree.selectedItems()
+        if not selected:
+            return
+            
+        # Get indices in reverse order to pop safely
+        indices = sorted([self._tree.indexOfTopLevelItem(it) for item in selected], reverse=True)
+        for idx in indices:
+            if 0 <= idx < len(self._plans):
+                self._plans.pop(idx)
+        
+        self._populate_tree()
 
     def _remove_plan_at(self, index: int) -> None:
         self._plans.pop(index)
@@ -840,6 +894,9 @@ class IngestWindow(QMainWindow):
     def _on_ingest_done(self, results: list[IngestResult]) -> None:
         self._btn_cancel.setVisible(False)
         self._btn_ingest.setEnabled(True)
+        
+        if self._engine.last_report_path:
+            self._btn_view_report.setVisible(True)
 
         ok = sum(1 for r in results if r.success)
         fail = len(results) - ok

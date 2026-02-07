@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+"""Ingest report generation (HTML/JSON)."""
+
+from __future__ import annotations
+
 import os
 import time
 import base64
@@ -20,31 +25,45 @@ def _get_base64_image(path: str) -> str:
 
 
 def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", operator: str = "Unknown") -> bool:
-    """Generate a professional HTML manifest with embedded visuals and tech specs."""
+    """Generate a clean, professional HTML manifest with MD5 integrity and technical specs."""
     
     css = """
-    body { font-family: 'Segoe UI', sans-serif; background: #f0f2f5; color: #333; padding: 20px; }
-    .report { max-width: 1200px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-    h1 { color: #1a365d; border-bottom: 2px solid #e2e8f0; padding-bottom: 10px; margin-top: 0; font-size: 24px; }
-    .studio-header { font-size: 11px; font-weight: 800; color: #3182ce; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 25px; }
-    th { text-align: left; background: #edf2f7; padding: 12px 10px; border-bottom: 2px solid #cbd5e0; color: #4a5568; font-size: 12px; text-transform: uppercase; }
-    td { padding: 10px; border-bottom: 1px solid #e2e8f0; font-size: 13px; vertical-align: middle; }
-    .thumb { width: 120px; height: 68px; background: #eee; border-radius: 4px; object-fit: cover; display: block; border: 1px solid #ddd; }
-    .status-ok { color: #2f855a; font-weight: bold; }
-    .status-fail { color: #c53030; font-weight: bold; }
-    .status-warn { color: #c05621; font-weight: bold; }
-    .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px; padding: 15px; background: #f8fafc; border-radius: 6px; border: 1px solid #e2e8f0; }
-    .meta-item { font-size: 12px; color: #64748b; }
-    .meta-item strong { color: #1e293b; display: block; font-size: 14px; }
-    .code { font-family: 'Consolas', monospace; background: #f1f5f9; padding: 2px 4px; border-radius: 3px; font-size: 12px; color: #475569; }
-    .footer { margin-top: 40px; font-size: 11px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #f5f5f5; color: #333; padding: 30px; margin: 0; }
+    .report { max-width: 1200px; margin: 0 auto; background: white; padding: 40px; border: 1px solid #ddd; border-radius: 4px; }
+    
+    header { border-bottom: 2px solid #005a9e; padding-bottom: 20px; margin-bottom: 25px; }
+    .studio-badge { display: inline-block; font-size: 11px; font-weight: bold; color: white; background: #005a9e; padding: 3px 10px; border-radius: 10px; margin-bottom: 10px; text-transform: uppercase; }
+    h1 { margin: 0; font-size: 26px; color: #222; }
+    
+    .meta-grid { display: flex; gap: 2px; background: #eee; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; margin-bottom: 30px; }
+    .meta-item { flex: 1; background: white; padding: 15px; border-right: 1px solid #eee; }
+    .meta-item:last-child { border-right: none; }
+    .meta-label { font-size: 11px; font-weight: bold; color: #888; text-transform: uppercase; margin-bottom: 5px; display: block; }
+    .meta-value { font-size: 14px; color: #222; font-weight: 600; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th { text-align: left; background: #f9f9f9; padding: 12px 10px; border-bottom: 2px solid #eee; color: #666; font-size: 12px; text-transform: uppercase; }
+    td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: middle; }
+    
+    .thumb { width: 120px; height: 68px; background: #eee; border-radius: 2px; object-fit: cover; display: block; border: 1px solid #ccc; }
+    
+    .status-ok { color: #27ae60; font-weight: bold; }
+    .status-fail { color: #c0392b; font-weight: bold; }
+    .status-warn { color: #f39c12; font-weight: bold; }
+    
+    .code { font-family: 'Consolas', 'Courier New', monospace; background: #f4f4f4; padding: 2px 5px; border-radius: 3px; font-size: 11px; color: #444; }
+    .tech { color: #777; font-size: 12px; line-height: 1.4; }
+
+    .footer { margin-top: 50px; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
     """
 
     rows = []
+    step_id = "—"
     for res in results:
         if not res or not res.plan:
             continue
+        
+        step_id = res.plan.step_id
 
         status_cls = "status-ok" if res.success else "status-fail"
         if res.success:
@@ -58,9 +77,10 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         # Tech Specs
         mi = res.plan.media_info
         res_str = f"{mi.width}x{mi.height}" if mi.width else "—"
-        fps_str = f"{mi.fps}" if mi.fps else "—"
         codec_str = mi.codec.upper() if mi.codec else "—"
         tc_str = mi.start_timecode or "—"
+        version_str = f"v{res.plan.version:03d}"
+        md5_str = res.checksum or "—"
         
         # Visuals
         b64_img = _get_base64_image(res.preview_path)
@@ -69,19 +89,19 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         row_html = f"""
         <tr>
             <td>{img_tag}</td>
-            <td><strong>{res.plan.shot_id}</strong><br><small style="color:#94a3b8">{res.plan.sequence_id or ""}</small></td>
-            <td>{res.plan.step_id}</td>
+            <td><strong>{res.plan.shot_id}</strong><br><small style="color:#888">{res.plan.sequence_id or ""}</small></td>
+            <td><span class="code">{version_str}</span></td>
             <td class="{status_cls}">{status_text}</td>
             <td>{res.frames_copied}</td>
-            <td><small>{res_str}<br>{fps_str} fps<br>{codec_str}</small></td>
-            <td class="code">{tc_str}</td>
-            <td><span class="code">{res.published_path or res.error or "N/A"}</span></td>
+            <td class="tech"><b>{res_str}</b><br>{mi.fps} fps<br>{codec_str}</td>
+            <td><span class="code">{tc_str}</span></td>
+            <td><span class="code" style="font-size:10px;">{md5_str}</span></td>
         </tr>
         """
         rows.append(row_html)
 
     if not rows:
-        rows.append("<tr><td colspan='8' style='text-align:center; padding:40px; color:#94a3b8;'>No clips processed in this session.</td></tr>")
+        rows.append("<tr><td colspan='8' style='text-align:center; padding:40px; color:#999;'>No clips processed in this session.</td></tr>")
 
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     project = getattr(results[0].plan, 'project_name', "") or results[0].plan.project_id if results and results[0].plan else "Unknown"
@@ -96,25 +116,28 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "</head>",
         "<body>",
         '    <div class="report">',
-        f'        <div class="studio-header">{studio_name}</div>',
-        "        <h1>Ingest Manifest</h1>",
+        '        <header>',
+        f'            <div class="studio-badge">{studio_name}</div>',
+        "            <h1>Ingest Manifest</h1>",
+        '        </header>',
         '        <div class="meta-grid">',
-        f'            <div class="meta-item"><strong>Project</strong>{project}</div>',
-        f'            <div class="meta-item"><strong>Operator</strong>{operator}</div>',
-        f'            <div class="meta-item"><strong>Date</strong>{timestamp}</div>',
-        f'            <div class="meta-item"><strong>Volume</strong>{len(results)} Clips</div>',
+        '            <div class="meta-item"><span class="meta-label">Project</span><span class="meta-value">' + project + '</span></div>',
+        '            <div class="meta-item"><span class="meta-label">Operator</span><span class="meta-value">' + operator + '</span></div>',
+        '            <div class="meta-item"><span class="meta-label">Step</span><span class="meta-value">' + step_id + '</span></div>',
+        '            <div class="meta-item"><span class="meta-label">Timestamp</span><span class="meta-value">' + timestamp + '</span></div>',
+        '            <div class="meta-item"><span class="meta-label">Volume</span><span class="meta-value">' + str(len(results)) + ' Clips</span></div>',
         '        </div>',
         "        <table>",
         "            <thead>",
         "                <tr>",
-        "                    <th>Visual</th>",
+        "                    <th>Thumbnail</th>",
         "                    <th>Shot ID</th>",
-        "                    <th>Step</th>",
-        "                    <th>Status</th>",
-        "                    <th>Frames</th>",
+        "                    <th>Version</th>",
+        "                    <th>Verification</th>",
+        "                    <th># Frames</th>",
         "                    <th>Technical</th>",
         "                    <th>Timecode</th>",
-        "                    <th>Destination</th>",
+        "                    <th>MD5 Checksum</th>",
         "                </tr>",
         "            </thead>",
         "            <tbody>",

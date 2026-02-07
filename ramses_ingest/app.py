@@ -41,6 +41,7 @@ class IngestEngine:
         self._operator_name: str = "Unknown"
 
         self._rules, self.studio_name = load_rules()
+        self.last_report_path: str | None = None
 
         # OCIO Defaults
         self.ocio_config: str | None = os.getenv("OCIO")
@@ -367,6 +368,7 @@ class IngestEngine:
         
         report_name = f"Ingest_Report_{self.project_id}_{int(time.time())}.html"
         report_path = os.path.join(self.project_path, "_ingest_reports", report_name) if self.project_path else report_name
+        self.last_report_path = report_path
         
         if generate_html_report(results, report_path, studio_name=self.studio_name, operator=self._operator_name):
             _log(f"  Manifest created: {report_path}")

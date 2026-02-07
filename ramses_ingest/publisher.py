@@ -67,6 +67,7 @@ class IngestResult:
     published_path: str = ""
     preview_path: str = ""
     frames_copied: int = 0
+    checksum: str = "" # MD5 of the first frame/file
     error: str = ""
 
 
@@ -121,51 +122,72 @@ def build_plans(
 
 
 import concurrent.futures
+import hashlib
 
-def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> int:
-    """Copy clip frames into *dest_dir* using Ramses naming and verify file sizes.
+def _calculate_md5(file_path: str) -> str:
+    """Calculate MD5 hash of a file in chunks."""
+    hash_md5 = hashlib.md5()
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(4096), b""):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
-    Returns the number of files copied.
-    Raises OSError if verification fails.
+def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> tuple[int, str]:
+    """Copy clip frames into *dest_dir* and verify bit-for-bit using MD5.
+
+    Returns (number of files copied, MD5 checksum of the first file).
+    Raises OSError if verification or checksum fails.
     """
     os.makedirs(dest_dir, exist_ok=True)
     copied = 0
+    first_checksum = ""
 
-    def _verify(src: str, dst: str) -> None:
+    def _copy_and_verify(src: str, dst: str) -> str:
+        shutil.copy2(src, dst)
+        # 1. Quick size check
         if os.path.getsize(src) != os.path.getsize(dst):
-            raise OSError(f"Verification failed for {dst}: size mismatch.")
+            raise OSError(f"Size mismatch: {dst}")
+        
+        # 2. Bit-for-bit MD5 check
+        src_md5 = _calculate_md5(src)
+        if src_md5 != _calculate_md5(dst):
+            raise OSError(f"Checksum mismatch: {dst}")
+        return src_md5
 
     if clip.is_sequence:
         padding = clip.padding
         
-        def _copy_one_frame(frame: int) -> None:
-            src = os.path.join(
-                str(clip.directory),
-                f"{clip.base_name}.{str(frame).zfill(padding)}.{clip.extension}",
-            )
-            dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
-            dst = os.path.join(dest_dir, dst_name)
-            shutil.copy2(src, dst)
-            _verify(src, dst)
+        # We'll copy the first frame separately to get its checksum safely
+        f1 = clip.frames[0]
+        s1 = os.path.join(str(clip.directory), f"{clip.base_name}.{str(f1).zfill(padding)}.{clip.extension}")
+        d1_name = f"{project_id}_S_{shot_id}_{step_id}.{str(f1).zfill(padding)}.{clip.extension}"
+        d1 = os.path.join(dest_dir, d1_name)
+        first_checksum = _copy_and_verify(s1, d1)
+        copied = 1
 
-        # Use threads for I/O bound copy operations
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            # We map the copy function to all frames.
-            # Convert to list to force execution and catch any exceptions if needed,
-            # though map raises them when iterated.
-            list(executor.map(_copy_one_frame, clip.frames))
-            
-        copied = len(clip.frames)
+        if len(clip.frames) > 1:
+            def _copy_one_frame(frame: int) -> None:
+                src = os.path.join(
+                    str(clip.directory),
+                    f"{clip.base_name}.{str(frame).zfill(padding)}.{clip.extension}",
+                )
+                dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
+                dst = os.path.join(dest_dir, dst_name)
+                _copy_and_verify(src, dst)
+
+            # Use threads for the remaining frames
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                list(executor.map(_copy_one_frame, clip.frames[1:]))
+            copied = len(clip.frames)
 
     else:
         src = clip.first_file
         dst_name = f"{project_id}_S_{shot_id}_{step_id}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
-        shutil.copy2(src, dst)
-        _verify(src, dst)
+        first_checksum = _copy_and_verify(src, dst)
         copied = 1
 
-    return copied
+    return copied, first_checksum
 
 
 def _get_next_version(publish_root: str) -> int:
@@ -365,7 +387,7 @@ def execute_plan(
     # --- Copy frames ---
     try:
         _log(f"  Copying {clip.frame_count or 1} file(s)...")
-        copied_count = copy_frames(
+        copied_count, checksum = copy_frames(
             clip, plan.target_publish_dir,
             plan.project_id, plan.shot_id, plan.step_id,
         )
@@ -375,6 +397,7 @@ def execute_plan(
         else:
             result.frames_copied = copied_count
 
+        result.checksum = checksum
         result.published_path = plan.target_publish_dir
     except Exception as exc:
         result.error = f"Copy failed: {exc}"
@@ -554,12 +577,17 @@ def register_ramses_objects(
                 shot_obj.setData(shot_data)
 
 
+# Track daemon feature support globally to prevent log flooding
+_USER_ASSIGNMENT_SUPPORTED = True
+
+
 def update_ramses_status(
     plan: IngestPlan, 
     status_name: str = "OK",
     shot_cache: dict[str, object] | None = None,
 ) -> bool:
     """Update the status of the target step in Ramses and assign current user."""
+    global _USER_ASSIGNMENT_SUPPORTED
     try:
         from ramses import Ramses
         ram = Ramses.instance()
@@ -610,11 +638,13 @@ def update_ramses_status(
                     status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
                     
                     # setUser calls setStatusModifiedBy which fails on some Daemon versions
-                    try:
-                        status.setUser() 
-                    except Exception:
-                        # Non-fatal: Some daemons don't support setStatusModifiedBy
-                        pass
+                    if _USER_ASSIGNMENT_SUPPORTED:
+                        try:
+                            status.setUser() 
+                        except Exception as exc:
+                            # If we see "Unknown query", stop trying for this session
+                            if "Unknown query" in str(exc):
+                                _USER_ASSIGNMENT_SUPPORTED = False
                         
                     return True
                 except Exception:
