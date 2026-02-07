@@ -296,6 +296,7 @@ class IngestWorker(QThread):
         proxies: bool,
         update_status: bool = False,
         fast_verify: bool = False,
+        dry_run: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -305,6 +306,7 @@ class IngestWorker(QThread):
         self._proxies = proxies
         self._update_status = update_status
         self._fast_verify = fast_verify
+        self._dry_run = dry_run
         self._count = 0
 
     def run(self) -> None:
@@ -323,6 +325,7 @@ class IngestWorker(QThread):
                 progress_callback=_cb,
                 update_status=self._update_status,
                 fast_verify=self._fast_verify,
+                dry_run=self._dry_run,
             )
             self.finished_results.emit(results)
         except Exception as exc:
@@ -746,6 +749,8 @@ class IngestWindow(QMainWindow):
         self._chk_status.setChecked(True)
         self._chk_fast_verify = QCheckBox()
         self._chk_fast_verify.setChecked(False)
+        self._chk_dry_run = QCheckBox()
+        self._chk_dry_run.setChecked(False)
         self._ocio_in = QComboBox()
         self._ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
         self._btn_edl = QPushButton("Load EDL...")
@@ -899,6 +904,9 @@ class IngestWindow(QMainWindow):
         if plan.match.clip.missing_frames:
             details.append(f"<br><b style='color:#f39c12'>Missing Frames:</b> {len(plan.match.clip.missing_frames)}")
 
+        if plan.target_publish_dir:
+            details.append(f"<br><b style='color:#00bff3'>Destination:</b><br><small>{plan.target_publish_dir}</small>")
+
         self._detail_widget.setHtml("<br>".join(details))
 
         # Enable override
@@ -988,6 +996,12 @@ class IngestWindow(QMainWindow):
         chk_fast.setChecked(self._chk_fast_verify.isChecked())
         lay.addWidget(chk_fast)
 
+        # Dry Run
+        chk_dry = QCheckBox("Dry Run (Simulation mode)")
+        chk_dry.setToolTip("Runs the entire process but skips actual file copying.")
+        chk_dry.setChecked(self._chk_dry_run.isChecked())
+        lay.addWidget(chk_dry)
+
         lay.addSpacing(10)
 
         # OCIO
@@ -1039,7 +1053,7 @@ class IngestWindow(QMainWindow):
         # Buttons
         btn_row = QHBoxLayout()
         btn_apply = QPushButton("Apply")
-        btn_apply.clicked.connect(lambda: self._apply_options(chk_thumb, chk_proxy, chk_status, chk_fast, ocio_in, rule_combo, dialog))
+        btn_apply.clicked.connect(lambda: self._apply_options(chk_thumb, chk_proxy, chk_status, chk_fast, chk_dry, ocio_in, rule_combo, dialog))
         btn_row.addWidget(btn_apply)
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(dialog.accept)
@@ -1048,14 +1062,16 @@ class IngestWindow(QMainWindow):
 
         dialog.exec()
 
-    def _apply_options(self, chk_thumb, chk_proxy, chk_status, chk_fast, ocio_in, rule_combo, dialog):
+    def _apply_options(self, chk_thumb, chk_proxy, chk_status, chk_fast, chk_dry, ocio_in, rule_combo, dialog):
         """Apply options from dialog"""
         self._chk_thumb.setChecked(chk_thumb.isChecked())
         self._chk_proxy.setChecked(chk_proxy.isChecked())
         self._chk_status.setChecked(chk_status.isChecked())
         self._chk_fast_verify.setChecked(chk_fast.isChecked())
+        self._chk_dry_run.setChecked(chk_dry.isChecked())
         self._ocio_in.setCurrentText(ocio_in.currentText())
         self._rule_combo.setCurrentIndex(rule_combo.currentIndex())
+        self._update_summary()
         dialog.accept()
 
     def _update_filter_counts(self) -> None:
@@ -1322,7 +1338,16 @@ class IngestWindow(QMainWindow):
             parts.append(f"{unmatched} unmatched")
 
         self._summary_label.setText(f"Summary: {', '.join(parts)}")
-        self._btn_ingest.setText(f"Ingest {n_enabled}/{total}")
+        
+        is_dry = self._chk_dry_run.isChecked()
+        btn_text = "Simulate" if is_dry else "Ingest"
+        self._btn_ingest.setText(f"{btn_text} {n_enabled}/{total}")
+        
+        # UI Polish: Change button style if simulating
+        if is_dry:
+            self._btn_ingest.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f39c12, stop:1 #d35400); color: white;")
+        else:
+            self._btn_ingest.setStyleSheet("") # Reset to STYLESHEET default
         
         # Strict enforcement: Connection AND valid plans AND a defined pipeline step
         has_step = bool(self._step_combo.currentText())
@@ -1496,6 +1521,7 @@ class IngestWindow(QMainWindow):
             proxies=self._chk_proxy.isChecked(),
             update_status=self._chk_status.isChecked(),
             fast_verify=self._chk_fast_verify.isChecked(),
+            dry_run=self._chk_dry_run.isChecked(),
             parent=self,
         )
         self._ingest_worker.progress.connect(self._log)
