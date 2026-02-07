@@ -117,8 +117,6 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         --warning: #f39c12;
         --error: #c53030;
         --table-header: #f9f9f9;
-        --health-stable-bg: linear-gradient(135deg, #e6fffa 0%, #27ae60 100%);
-        --health-stable-text: #1a4e3a;
     }
 
     [data-theme="dark"] {
@@ -132,8 +130,6 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         --warning: #f39c12;
         --error: #f44747;
         --table-header: #252526;
-        --health-stable-bg: linear-gradient(135deg, #1e3a2a 0%, #27ae60 100%);
-        --health-stable-text: #afffcf;
     }
 
     body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: var(--bg); color: var(--text-main); padding: 30px; margin: 0; transition: background-color 0.3s, color 0.3s; }
@@ -148,17 +144,18 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     .theme-toggle:hover { opacity: 0.8; }
 
     /* Executive Health Dashboard */
-    .health-dashboard { display: flex; gap: 20px; margin-bottom: 30px; }
-    .health-badge { flex: 0 0 240px; padding: 20px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid rgba(0,0,0,0.05); }
-    .health-score { font-size: 42px; font-weight: 900; line-height: 1; margin-bottom: 5px; }
-    .health-label { font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
+    .health-dashboard { display: flex; gap: 24px; margin-bottom: 35px; }
+    .health-badge { flex: 0 0 260px; padding: 25px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid var(--border); box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+    .health-score { font-size: 44px; font-weight: 900; line-height: 1; margin-bottom: 8px; letter-spacing: -1px; }
+    .health-label { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; opacity: 0.9; }
     
-    .health-green { background: var(--health-stable-bg); color: var(--health-stable-text); border-color: var(--success); }
-    .health-yellow { background: linear-gradient(135deg, #fffaf0 0%, #f39c12 100%); color: #5f370e; border-color: #f39c12; }
-    .health-red { background: linear-gradient(135deg, #fff5f5 0%, #f44747 100%); color: #742a2a; border-color: #f44747; }
+    .health-green { background-color: var(--success); color: #fff; border-color: var(--success); }
+    .health-yellow { background-color: var(--warning); color: #fff; border-color: var(--warning); }
+    .health-red { background-color: var(--error); color: #fff; border-color: var(--error); }
 
-    [data-theme="dark"] .health-yellow { background: linear-gradient(135deg, #3d2b10 0%, #f39c12 100%); color: #ffe4b5; }
-    [data-theme="dark"] .health-red { background: linear-gradient(135deg, #3d1414 0%, #f44747 100%); color: #ffcaca; }
+    [data-theme="dark"] .health-green { color: #fff; }
+    [data-theme="dark"] .health-yellow { color: #000; }
+    [data-theme="dark"] .health-red { color: #fff; }
 
     .meta-grid { display: flex; flex-wrap: wrap; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex-grow: 1; }
     .meta-item { flex: 1; background: var(--card-bg); padding: 15px; min-width: 120px; }
@@ -396,10 +393,10 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         health_cls = "health-red"
         health_score = "CRITICAL"
         health_label = f"{failed} Clips Failed"
-    elif sequences_with_gaps > 0 or critical_colorspace_issues:
+    elif sequences_with_gaps > 0 or critical_colorspace_issues or has_deviations:
         health_cls = "health-yellow"
         health_score = "WARNING"
-        health_label = "Gaps / Mismatches"
+        health_label = "Gaps / Deviations"
 
     # Build error summary section
     error_summary_html = ""

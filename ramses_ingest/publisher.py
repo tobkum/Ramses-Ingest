@@ -218,7 +218,7 @@ def copy_frames(
     first_filename = ""
     
     # Enforce case-consistency for destination filenames
-    project_id = project_id.upper()
+    # Project casing is preserved, but Shot/Step are standardized to Upper
     shot_id = shot_id.upper()
     step_id = step_id.upper()
     
@@ -459,8 +459,9 @@ def resolve_paths(
         if not plan.can_execute:
             continue
 
-        # Force Uppercase for Ramses naming components to ensure case-sensitivity safety
-        proj_id = plan.project_id.upper()
+        # Preserve project casing (Ramses is case-sensitive for projects)
+        # but enforce uppercase for Shot/Step as per standard convention
+        proj_id = plan.project_id
         shot_id = plan.shot_id.upper()
         step_id = plan.step_id.upper()
 
@@ -519,8 +520,8 @@ def resolve_paths_from_daemon(
             if not base_path:
                 continue
 
-            # Force Uppercase for standard identifiers
-            proj_id = plan.project_id.upper()
+            # Preserve project casing
+            proj_id = plan.project_id
             shot_id = plan.shot_id.upper()
             step_id = plan.step_id.upper()
 

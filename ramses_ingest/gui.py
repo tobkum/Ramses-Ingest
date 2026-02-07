@@ -73,7 +73,7 @@ QLabel#headerLabel {
 QLabel#projectLabel {
     font-size: 12px;
     font-weight: bold;
-    color: #00bff3;
+    color: #094771;
 }
 
 QLabel#mutedLabel {
@@ -81,7 +81,7 @@ QLabel#mutedLabel {
 }
 
 QLabel#statusConnected {
-    color: #00bff3;
+    color: #27ae60;
     font-weight: bold;
 }
 
@@ -208,7 +208,7 @@ QProgressBar {
 }
 
 QProgressBar::chunk {
-    background-color: #00bff3;
+    background-color: #094771;
 }
 
 QFrame#dropZone {
@@ -437,9 +437,9 @@ class EditableDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent, option, index):
         """Create editor for shot ID override"""
-        if index.column() == 3:  # Shot column
+        if index.column() == 3:  # Shot column (swapped with Ver)
             editor = QLineEdit(parent)
-            editor.setStyleSheet("background: #2d2d30; border: 1px solid #00bff3;")
+            editor.setStyleSheet("background: #2d2d30; border: 1px solid #094771;")
             return editor
         return super().createEditor(parent, option, index)
 
@@ -517,11 +517,9 @@ class IngestWindow(QMainWindow):
 
         # Project
         header_lay.addWidget(QLabel("Project:"))
-        self._project_edit = QLineEdit("—")
-        self._project_edit.setReadOnly(True)
-        self._project_edit.setMinimumWidth(180)
-        self._project_edit.setStyleSheet("background-color: #252526; color: #00bff3; font-weight: bold;")
-        header_lay.addWidget(self._project_edit)
+        self._project_label_display = QLabel("—")
+        self._project_label_display.setStyleSheet("color: #094771; font-weight: 800; font-size: 13px;")
+        header_lay.addWidget(self._project_label_display)
 
         # Step
         header_lay.addWidget(QLabel("Step:"))
@@ -530,6 +528,13 @@ class IngestWindow(QMainWindow):
         self._step_combo.addItem("PLATE")
         self._step_combo.currentTextChanged.connect(self._on_step_changed)
         header_lay.addWidget(self._step_combo)
+
+        header_lay.addSpacing(10)
+
+        # Standards
+        self._standards_label = QLabel("—")
+        self._standards_label.setStyleSheet("color: #888; font-family: 'Consolas', monospace; font-size: 10px;")
+        header_lay.addWidget(self._standards_label)
 
         header_lay.addStretch()
 
@@ -649,9 +654,9 @@ class IngestWindow(QMainWindow):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(8)
+        self._table.setColumnCount(9)
         self._table.setHorizontalHeaderLabels(
-            ["", "Filename", "Shot", "Ver", "Seq", "Frames", "Res", "Status"]
+            ["", "Filename", "Ver", "Shot", "Seq", "Frames", "Res", "FPS", "Status"]
         )
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -668,16 +673,16 @@ class IngestWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(0, 28)  # Checkbox
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Filename
-        for col in [2, 3, 4, 5, 6]:  # Shot, Ver, Seq, Frames, Res
+        for col in [2, 3, 4, 5, 6, 7]:  # Ver, Shot, Seq, Frames, Res, FPS
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            header.resizeSection(col, 60 if col == 3 else 80)
-        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(7, 55)  # Status (dot)
+            header.resizeSection(col, 60 if col in [2, 7] else 80)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(8, 55)  # Status (dot)
 
         # Set delegate for inline editing
         self._table.setItemDelegateForColumn(
-            2, EditableDelegate(self._table)
-        )  # Shot column
+            3, EditableDelegate(self._table)
+        )  # Shot column (now index 3)
 
         center_lay.addWidget(self._table, 1)
 
@@ -890,7 +895,7 @@ class IngestWindow(QMainWindow):
             # Status filter
             if self._current_filter_status != "all":
                 # Check status column
-                status_item = self._table.cellWidget(row, 7)  # Status column (was 6)
+                status_item = self._table.cellWidget(row, 8)  # Status column (was 7)
                 if status_item and hasattr(status_item, "toolTip"):
                     status = status_item.toolTip().lower()
                     if self._current_filter_status not in status:
@@ -907,12 +912,19 @@ class IngestWindow(QMainWindow):
                     elif not is_sequence and not self._chk_movies.isChecked():
                         show = False
 
-            # Search filter
-            if show and self._search_edit.text():
-                search = self._search_edit.text().lower()
-                shot_item = self._table.item(row, 2)  # Shot column
-                seq_item = self._table.item(row, 3)  # Seq column
-                file_item = self._table.item(row, 1)  # Filename column
+                        # Search filter
+
+                        if show and self._search_edit.text():
+
+                            search = self._search_edit.text().lower()
+
+                            shot_item = self._table.item(row, 3)  # Shot column (swapped)
+
+                            seq_item = self._table.item(row, 4)   # Seq column
+
+                            file_item = self._table.item(row, 1)  # Filename column
+
+            
 
                 match = False
                 if shot_item and search in shot_item.text().lower():
@@ -1011,7 +1023,7 @@ class IngestWindow(QMainWindow):
 
         if plan.target_publish_dir:
             details.append(
-                f"<br><b style='color:#00bff3; font-size:10px;'>DESTINATION PATH:</b><br><code style='color:#aaa; font-size:10px;'>{plan.target_publish_dir}</code>"
+                f"<br><b style='color:#094771; font-size:10px;'>DESTINATION PATH:</b><br><code style='color:#aaa; font-size:10px;'>{plan.target_publish_dir}</code>"
             )
 
         self._detail_widget.setHtml("<br>".join(details))
@@ -1035,23 +1047,23 @@ class IngestWindow(QMainWindow):
         if self._selected_plan:
             plan = self._selected_plan
             plan.shot_id = text
-            
+
             # Re-resolve paths for this plan to update versioning
             self._resolve_all_paths()
-            
+
             # Find visually where this plan is currently located
             row = self._table.currentRow()
             # Update table with signals blocked to prevent race condition
-            item = self._table.item(row, 2)
+            item = self._table.item(row, 3)  # Shot column (index 3)
             if item:
                 blocked = self._table.blockSignals(True)
                 item.setText(text)
-                
-                # Update Version column too
-                ver_item = self._table.item(row, 3)
+
+                # Update Version column (index 2)
+                ver_item = self._table.item(row, 2)
                 if ver_item:
                     ver_item.setText(f"v{plan.version:03d}")
-                
+
                 self._table.blockSignals(blocked)
             self._update_summary()
 
@@ -1072,7 +1084,7 @@ class IngestWindow(QMainWindow):
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         """Handle inline edits in table"""
-        if item.column() == 2:  # Shot column
+        if item.column() == 3:  # Shot column (was 2)
             row = item.row()
             plan = self._get_plan_from_row(row)
             if plan:
@@ -1081,8 +1093,8 @@ class IngestWindow(QMainWindow):
                 # Re-resolve paths to update versioning
                 self._resolve_all_paths()
 
-                # Update Version column
-                ver_item = self._table.item(row, 3)
+                # Update Version column (index 2)
+                ver_item = self._table.item(row, 2)
                 if ver_item:
                     blocked = self._table.blockSignals(True)
                     ver_item.setText(f"v{plan.version:03d}")
@@ -1257,8 +1269,16 @@ class IngestWindow(QMainWindow):
 
     def _populate_table(self) -> None:
         """Populate the table with current plans (replaces _populate_tree)"""
+        # CRITICAL: Disable sorting while we modify items to prevent row-jumping
+        self._table.setSortingEnabled(False)
+        
         # Block ALL signals to prevent triggering itemSelectionChanged or itemChanged during population
         self._table.blockSignals(True)
+        
+        # CRITICAL: Also block signals on override widgets to prevent "textChanged"
+        # from firing while we clear them, which causes data loss.
+        self._override_shot.blockSignals(True)
+        self._override_seq.blockSignals(True)
 
         # Clear selection state to avoid stale references
         self._selected_plan = None
@@ -1301,13 +1321,7 @@ class IngestWindow(QMainWindow):
                 
             self._table.setItem(idx, 1, file_item)
 
-            # Column 2: Shot (editable)
-            shot_item = QTableWidgetItem(plan.shot_id or "")
-            if not plan.shot_id:
-                shot_item.setForeground(QColor("#f44747"))  # Red if missing
-            self._table.setItem(idx, 2, shot_item)
-
-            # Column 3: Version (new)
+            # Column 2: Version (swapped)
             ver_item = QTableWidgetItem(f"v{plan.version:03d}")
             ver_item.setFlags(ver_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1317,7 +1331,13 @@ class IngestWindow(QMainWindow):
                 ver_item.setToolTip(
                     f"Version Mismatch: Filename is v{plan.match.version:03d}, Ramses next is v{plan.version:03d}"
                 )
-            self._table.setItem(idx, 3, ver_item)
+            self._table.setItem(idx, 2, ver_item)
+
+            # Column 3: Shot (editable, swapped)
+            shot_item = QTableWidgetItem(plan.shot_id or "")
+            if not plan.shot_id:
+                shot_item.setForeground(QColor("#f44747"))  # Red if missing
+            self._table.setItem(idx, 3, shot_item)
 
             # Column 4: Sequence
             seq_item = QTableWidgetItem(plan.sequence_id or "—")
@@ -1345,9 +1365,7 @@ class IngestWindow(QMainWindow):
 
             # Column 6: Resolution
             res_text = "—"
-            is_tech_mismatch = False
-            mismatch_msg = ""
-
+            is_res_mismatch = False
             if plan.media_info.width and plan.media_info.height:
                 res_text = f"{plan.media_info.width}x{plan.media_info.height}"
                 # Check Resolution
@@ -1355,26 +1373,30 @@ class IngestWindow(QMainWindow):
                     plan.media_info.width != self._engine._project_width
                     or plan.media_info.height != self._engine._project_height
                 ):
-                    is_tech_mismatch = True
-                    mismatch_msg = f"Resolution mismatch: Project is {self._engine._project_width}x{self._engine._project_height}"
-
-                # Check FPS
-                if (
-                    not is_tech_mismatch
-                    and self._engine._project_fps > 0
-                    and abs(plan.media_info.fps - self._engine._project_fps) > 0.001
-                ):
-                    is_tech_mismatch = True
-                    mismatch_msg = f"FPS mismatch: Project is {self._engine._project_fps:.2f} (Clip: {plan.media_info.fps:.2f})"
+                    is_res_mismatch = True
 
             res_item = QTableWidgetItem(res_text)
             res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            if is_tech_mismatch:
-                res_item.setBackground(QColor(120, 100, 0, 100))  # Muted Yellow
-                res_item.setToolTip(mismatch_msg)
+            if is_res_mismatch:
+                res_item.setBackground(QColor(120, 100, 0, 100))
+                res_item.setToolTip(f"Resolution mismatch: Project is {self._engine._project_width}x{self._engine._project_height}")
             self._table.setItem(idx, 6, res_item)
 
-            # Column 7: Status (color dot)
+            # Column 7: FPS (new)
+            fps_text = f"{plan.media_info.fps:.2f}" if plan.media_info.fps > 0 else "—"
+            is_fps_mismatch = False
+            if self._engine._project_fps > 0 and plan.media_info.fps > 0:
+                if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+                    is_fps_mismatch = True
+            
+            fps_item = QTableWidgetItem(fps_text)
+            fps_item.setFlags(fps_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if is_fps_mismatch:
+                fps_item.setBackground(QColor(120, 100, 0, 100))
+                fps_item.setToolTip(f"FPS mismatch: Project is {self._engine._project_fps:.2f}")
+            self._table.setItem(idx, 7, fps_item)
+
+            # Column 8: Status (switched to 8)
             status = "pending"
             status_msg = ""
 
@@ -1383,7 +1405,7 @@ class IngestWindow(QMainWindow):
                 status_msg = (
                     f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
                 )
-            elif is_tech_mismatch:
+            elif is_res_mismatch or is_fps_mismatch:
                 status = "warning"
                 status_msg = "Technical mismatch (Res/FPS)"
             elif plan.can_execute and not plan.error:
@@ -1399,13 +1421,16 @@ class IngestWindow(QMainWindow):
             status_indicator = StatusIndicator(status)
             if status_msg:
                 status_indicator.setToolTip(status_msg)
-            self._table.setCellWidget(idx, 7, status_indicator)
+            self._table.setCellWidget(idx, 8, status_indicator)
 
             # Set row height for better readability
             self._table.setRowHeight(idx, 28)
 
-        # Re-enable signals
+        # Re-enable signals and sorting
         self._table.blockSignals(False)
+        self._override_shot.blockSignals(False)
+        self._override_seq.blockSignals(False)
+        self._table.setSortingEnabled(True)
 
         # Update filter counts
         self._update_filter_counts()
@@ -1442,7 +1467,7 @@ class IngestWindow(QMainWindow):
                 plan = self._get_plan_from_row(row)
                 if plan:
                     plan.shot_id = shot_id
-                    item = self._table.item(row, 2)
+                    item = self._table.item(row, 3) # Shot column (was 2)
                     if item:
                         item.setText(shot_id)
 
@@ -1467,7 +1492,7 @@ class IngestWindow(QMainWindow):
                 plan = self._get_plan_from_row(row)
                 if plan:
                     plan.sequence_id = seq_id
-                    item = self._table.item(row, 4)  # Seq column
+                    item = self._table.item(row, 4)  # Seq column (remains 4)
                     if item:
                         item.setText(seq_id or "—")
 
@@ -1497,9 +1522,10 @@ class IngestWindow(QMainWindow):
 
     def _get_plan_from_row(self, row: int) -> IngestPlan | None:
         """Fetch the anchored IngestPlan object from a specific table row."""
-        if row < 0:
+        if row < 0 or row >= self._table.rowCount():
             return None
-        item = self._table.item(row, 1) # Filename column has the data
+        # Filename column (index 1) has the anchored data
+        item = self._table.item(row, 1)
         if item:
             return item.data(Qt.ItemDataRole.UserRole)
         return None
@@ -1540,7 +1566,7 @@ class IngestWindow(QMainWindow):
             self._btn_reconnect.setVisible(False)
             
             self._status_orb.setStyleSheet("""
-                background-color: #00bff3; 
+                background-color: #27ae60; 
                 border: 1px solid rgba(255,255,255,0.2);
                 border-radius: 6px;
             """)
@@ -1549,7 +1575,7 @@ class IngestWindow(QMainWindow):
 
             glow = QGraphicsDropShadowEffect()
             glow.setBlurRadius(15)
-            glow.setColor(QColor("#00bff3"))
+            glow.setColor(QColor("#27ae60"))
             glow.setOffset(0)
             self._status_orb.setGraphicsEffect(glow)
 
@@ -1557,12 +1583,13 @@ class IngestWindow(QMainWindow):
             self._status_label.setObjectName("statusConnected")
             pid = self._engine.project_id
             pname = self._engine.project_name
-            self._project_edit.setText(f"{pid} - {pname}")
+            self._project_label_display.setText(f"{pid} - {pname}")
 
-            # Note: Standards display removed from minimal header in professional UI
-            # fps = self._engine._project_fps
-            # w = self._engine._project_width
-            # h = self._engine._project_height
+            # Update Standards display
+            fps = self._engine._project_fps
+            w = self._engine._project_width
+            h = self._engine._project_height
+            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.2f} FPS")
 
             # Populate steps
             self._step_combo.blockSignals(True)
@@ -1585,7 +1612,7 @@ class IngestWindow(QMainWindow):
             self._status_orb.setGraphicsEffect(None)
             self._status_label.setText("OFFLINE")
             self._status_label.setObjectName("statusDisconnected")
-            self._project_edit.setText("— (Connection Required)")
+            self._project_label_display.setText("— (Connection Required)")
             self._btn_ingest.setToolTip("Ramses connection required to ingest.")
             
             self._btn_reconnect.setVisible(True)
@@ -1653,7 +1680,7 @@ class IngestWindow(QMainWindow):
                 and bool(self._step_combo.currentText())
             ):
                 self._btn_ingest.setStyleSheet(
-                    "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00bff3, stop:1 #0095c2); color: white; border: none; font-weight: bold;"
+                    "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #094771, stop:1 #06314d); color: white; border: none; font-weight: bold;"
                 )
             else:
                 self._btn_ingest.setStyleSheet("")  # Revert to stylesheet default (muted)

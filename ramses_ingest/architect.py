@@ -650,7 +650,7 @@ class NamingArchitectDialog(QDialog):
         header.addStretch()
 
         self.btn_magic = QPushButton("✨ Magic Wand")
-        self.btn_magic.setStyleSheet("background-color: #4a4a4a; color: #00bff3; font-weight: bold; padding: 8px 16px;")
+        self.btn_magic.setStyleSheet("background-color: #4a4a4a; color: white; font-weight: bold; padding: 8px 16px;")
         self.btn_magic.clicked.connect(self._on_magic_wand)
         self.btn_magic.setEnabled(False)
         self.btn_magic.setToolTip("Auto-detect pattern from sample filenames")
@@ -832,7 +832,7 @@ class NamingArchitectDialog(QDialog):
         btn_apply = QPushButton("Apply to Project")
         btn_apply.setMinimumWidth(140)
         btn_apply.setMinimumHeight(36)
-        btn_apply.setStyleSheet("background-color: #00bff3; color: white; font-weight: bold;")
+        btn_apply.setStyleSheet("background-color: #094771; color: white; font-weight: bold;")
         btn_apply.clicked.connect(self.accept)
         btn_row.addWidget(btn_apply)
 
