@@ -454,6 +454,11 @@ class IngestWindow(QMainWindow):
         self._populate_rule_combo()
         rule_row.addWidget(self._rule_combo, 1)
         
+        btn_architect = QPushButton("Architect...")
+        btn_architect.clicked.connect(self._on_launch_architect)
+        btn_architect.setStyleSheet("font-weight: bold; color: #4ec9b0;")
+        rule_row.addWidget(btn_architect)
+
         self._btn_edl = QPushButton("Load EDL...")
         self._btn_edl.clicked.connect(self._on_load_edl)
         rule_row.addWidget(self._btn_edl)
@@ -946,6 +951,27 @@ class IngestWindow(QMainWindow):
             self._engine.studio_name = studio
             self._studio_edit.setText(studio)
             self._log("Rules and Studio name reloaded.")
+
+    def _on_launch_architect(self) -> None:
+        """Launch the visual rule builder and apply the result."""
+        from ramses_ingest.architect import NamingArchitectDialog
+        from ramses_ingest.matcher import NamingRule
+        
+        dlg = NamingArchitectDialog(parent=self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            regex = dlg.get_final_regex()
+            if regex:
+                # Add to engine's rules and persist
+                new_rule = NamingRule(pattern=regex)
+                self._engine.rules.insert(0, new_rule)
+                save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=self._engine.studio_name)
+                
+                # Refresh UI
+                self._rule_combo.clear()
+                self._rule_combo.addItem("Auto-detect")
+                self._populate_rule_combo()
+                self._rule_combo.setCurrentIndex(1) # Select the newly created rule
+                self._log(f"New rule created via Architect: {regex}")
 
     def _on_load_edl(self) -> None:
         from PySide6.QtWidgets import QFileDialog
