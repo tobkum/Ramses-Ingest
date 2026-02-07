@@ -96,9 +96,12 @@ class IngestPlan:
     duplicate_path: str = ""
     """Path to the duplicate version, if found."""
 
+    enabled: bool = True
+    """User-controlled toggle for inclusion in ingest."""
+
     @property
     def can_execute(self) -> bool:
-        return self.error == "" and self.match.matched and not self.is_duplicate
+        return self.enabled and self.error == "" and self.match.matched and not self.is_duplicate
 
 
 @dataclass

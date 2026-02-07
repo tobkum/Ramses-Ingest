@@ -1065,7 +1065,7 @@ class IngestWindow(QMainWindow):
 
             # Column 0: Checkbox
             chk = QCheckBox()
-            chk.setChecked(plan.can_execute)
+            chk.setChecked(plan.enabled)
             chk.stateChanged.connect(self._on_checkbox_changed)
             chk_widget = QWidget()
             chk_lay = QHBoxLayout(chk_widget)
@@ -1144,7 +1144,7 @@ class IngestWindow(QMainWindow):
             chk_widget = self._table.cellWidget(row, 0)
             if chk_widget and chk_widget.findChild(QCheckBox) == sender:
                 if row < len(self._plans):
-                    self._plans[row].can_execute = (state == Qt.CheckState.Checked.value)
+                    self._plans[row].enabled = (state == Qt.CheckState.Checked.value)
                 break
 
         self._update_summary()
@@ -1177,7 +1177,7 @@ class IngestWindow(QMainWindow):
         selected_rows = list(set(item.row() for item in self._table.selectedItems()))
         for row in selected_rows:
             if row < len(self._plans):
-                self._plans[row].can_execute = False
+                self._plans[row].enabled = False
                 chk_widget = self._table.cellWidget(row, 0)
                 if chk_widget:
                     chk = chk_widget.findChild(QCheckBox)
