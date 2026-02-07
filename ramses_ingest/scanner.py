@@ -153,15 +153,42 @@ def scan_directory(root: str | Path) -> list[Clip]:
 
             else:
                 # Multi-frame sequence detected by pyseq
-                is_seq = True
-                frames = [f.frame for f in s]
-                frames.sort()
-
-                # Extract metadata from the first item
+                # BUT: Could be movie files with frame numbers (e.g., shot_100.mov, shot_110.mov)
+                # Extract metadata first to check extension
                 head = s.head()
                 tail = s.tail()
-                base = head.rstrip("._")
                 ext = tail.strip(".").lower()
+
+                # Check if this is actually movie files (not a sequence)
+                if ext in MOVIE_EXTENSIONS:
+                    # pyseq incorrectly grouped movie files - unpack them as individual clips
+                    for item in s:
+                        item_name = item.name
+                        if "." in item_name:
+                            base, ext_raw = item_name.rsplit(".", 1)
+                            ext = ext_raw.lower()
+                        else:
+                            continue  # Skip malformed filenames
+
+                        full_path = os.path.join(str(dir_path), item_name)
+                        clip = Clip(
+                            base_name=base,
+                            extension=ext,
+                            directory=dir_path,
+                            is_sequence=False,
+                            frames=[],
+                            first_file=full_path,
+                            _padding=4,
+                            _separator="."
+                        )
+                        clips.append(clip)
+                    continue  # Skip normal sequence processing
+
+                # Valid image sequence
+                is_seq = True
+                base = head.rstrip("._")
+                frames = [f.frame for f in s]
+                frames.sort()
 
                 # Padding: deduce from first item
                 first_name = s[0].name
