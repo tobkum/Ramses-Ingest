@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Debug script to inspect Ramses database entries."""
+"""Debug script to inspect Ramses database entries and USER info."""
 
 import sys
 import os
@@ -19,38 +19,27 @@ def debug_db():
             print("ERROR: Ramses Daemon is offline.")
             return
 
+        print("--- DAEMON PING ---")
+        ping_data = ram.daemonInterface().ping()
+        print(json.dumps(ping_data, indent=2))
+        
+        user = ram.user()
+        if user:
+            print(f"\n--- USER INFO ---")
+            print(f"UUID: {user.uuid()}")
+            print(f"Name: {user.name()}")
+            print(f"Data: {user.data()}")
+        else:
+            print("\n--- USER: NOT LOGGED IN ---")
+
         project = ram.project()
         if not project:
             print("ERROR: No project currently active in Ramses.")
             return
 
-        print(f"--- PROJECT: {project.name()} ({project.shortName()}) ---")
+        print(f"\n--- PROJECT: {project.name()} ({project.shortName()}) ---")
         print(f"UUID: {project.uuid()}")
-        print(f"Path: {project.folderPath()}")
         print("-" * 40)
-
-        # Inspect Sequences
-        sequences = project.sequences()
-        print(f"\nFOUND {len(sequences)} SEQUENCES:")
-        for seq in sequences:
-            data = seq.data()
-            print(f"  [{seq.shortName()}] {seq.name()}")
-            print(f"    UUID: {seq.uuid()}")
-            print(f"    Project: {data.get('project', 'MISSING')}")
-            print(f"    Folder:  {data.get('folderPath', 'MISSING')}")
-            print("-" * 20)
-
-        # Inspect Shots
-        shots = project.shots()
-        print(f"\nFOUND {len(shots)} SHOTS:")
-        for shot in shots:
-            data = shot.data()
-            print(f"  [{shot.shortName()}] {shot.name()}")
-            print(f"    UUID:     {shot.uuid()}")
-            print(f"    Sequence: {data.get('sequence', 'MISSING')}")
-            print(f"    Project:  {data.get('project', 'MISSING')}")
-            print(f"    Folder:   {data.get('folderPath', 'MISSING')}")
-            print("-" * 20)
 
     except Exception as e:
         print(f"CRITICAL ERROR: {e}")

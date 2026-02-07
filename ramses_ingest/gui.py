@@ -490,6 +490,8 @@ class IngestWindow(QMainWindow):
         hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch)
         for col in (2, 3, 4, 5, 6):
             hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+        
+        self._tree.setSortingEnabled(True) # Enable header sorting
         self._tree.setMinimumHeight(180)
         root.addWidget(self._tree, 1)
 
@@ -663,11 +665,11 @@ class IngestWindow(QMainWindow):
             clip = plan.match.clip
             mi = plan.media_info
             if clip.is_sequence:
-                item.setText(4, f"{clip.frame_count}fr")
+                item.setText(4, str(clip.frame_count))
             elif mi.frame_count > 0:
-                item.setText(4, f"{mi.frame_count}fr")
+                item.setText(4, str(mi.frame_count))
             else:
-                item.setText(4, "movie")
+                item.setText(4, "1") # Single file
 
             # Resolution
             mi = plan.media_info

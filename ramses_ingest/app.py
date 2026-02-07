@@ -38,6 +38,7 @@ class IngestEngine:
         self._existing_shots: list[str] = []
         self._shot_objects: dict[str, object] = {}
         self._steps: list[str] = []
+        self._operator_name: str = "Unknown"
 
         self._rules, self.studio_name = load_rules()
 
@@ -120,6 +121,12 @@ class IngestEngine:
             self._project_id = project.shortName()
             self._project_name = project.name()
             self._project_path = project.folderPath()
+
+            # Cache User/Operator
+            self._operator_name = "Unknown"
+            user = ram.user()
+            if user:
+                self._operator_name = user.name()
 
             # Cache sequences
             self._existing_sequences = []
@@ -357,10 +364,11 @@ class IngestEngine:
         # Phase 4: Generate Report (Feature 4)
         _log(f"Phase 4: Generating ingest manifest for {len(results)} items...")
         from ramses_ingest.reporting import generate_html_report
+        
         report_name = f"Ingest_Report_{self.project_id}_{int(time.time())}.html"
         report_path = os.path.join(self.project_path, "_ingest_reports", report_name) if self.project_path else report_name
         
-        if generate_html_report(results, report_path, studio_name=self.studio_name):
+        if generate_html_report(results, report_path, studio_name=self.studio_name, operator=self._operator_name):
             _log(f"  Manifest created: {report_path}")
         else:
             _log(f"  ERROR: Failed to write manifest to {report_path}")

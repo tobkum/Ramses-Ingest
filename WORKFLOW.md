@@ -1,4 +1,4 @@
-# Workflow Guide: Ingesting New Footage
+shou# Workflow Guide: Ingesting New Footage
 
 This guide walks you through the process of using Ramses-Ingest when you receive a new delivery of footage from a client, specifically for a **completely new project**.
 
