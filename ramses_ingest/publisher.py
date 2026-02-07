@@ -643,7 +643,10 @@ def update_ramses_status(
                             status.setUser() 
                         except Exception as exc:
                             # If we see "Unknown query", stop trying for this session
-                            if "Unknown query" in str(exc):
+                            # The API might log this to stdout before we catch it,
+                            # but this flag prevents subsequent attempts.
+                            err_msg = str(exc).lower()
+                            if "unknown query" in err_msg or "not reply" in err_msg:
                                 _USER_ASSIGNMENT_SUPPORTED = False
                         
                     return True

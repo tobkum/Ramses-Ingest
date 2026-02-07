@@ -16,7 +16,7 @@ Before running the Ingest tool, perform these steps in the **Ramses Client** app
     *   **CRITICAL**: Ingestion is disabled if the tool is not connected to the Ramses Daemon. Check the status indicator in the top right.
 
 ## 2. Scanning the Delivery
-
+what
 1.  **Launch the Tool**: `python -m ramses_ingest`
 2.  **Select Source**: 
     *   Click **"Select Source Directory"** to choose a single folder.
