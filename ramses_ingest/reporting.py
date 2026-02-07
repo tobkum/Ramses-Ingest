@@ -106,48 +106,71 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     """Generate a clean, professional HTML manifest with exact analytics and technical flagging."""
     
     css = """
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #f5f5f5; color: #333; padding: 30px; margin: 0; }
-    .report { max-width: 1400px; margin: 0 auto; background: white; padding: 40px; border: 1px solid #ddd; border-radius: 4px; }
-    
-    header { border-bottom: 2px solid #005a9e; padding-bottom: 20px; margin-bottom: 25px; }
-    .studio-header { font-size: 12px; font-weight: bold; color: #005a9e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
-    h1 { margin: 0; font-size: 26px; color: #222; }
-    
-    .meta-grid { display: flex; gap: 2px; background: #eee; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; margin-bottom: 30px; }
-    .meta-item { flex: 1; background: white; padding: 15px; border-right: 1px solid #eee; min-width: 0; }
-    .meta-item:last-child { border-right: none; }
-    .meta-label { font-size: 10px; font-weight: bold; color: #888; text-transform: uppercase; margin-bottom: 5px; display: block; white-space: nowrap; }
-    .meta-value { font-size: 13px; color: #222; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+    :root {
+        --bg: #121212;
+        --card-bg: #1e1e1e;
+        --border: #333;
+        --text-main: #e0e0e0;
+        --text-muted: #888;
+        --accent: #00bff3;
+        --success: #27ae60;
+        --warning: #f39c12;
+        --error: #f44747;
+    }
 
-    .attention-box { background: #fffaf0; border: 1px solid #fbd38d; color: #9c4221; padding: 15px 20px; border-radius: 4px; margin-bottom: 30px; font-size: 14px; font-weight: 600; display: flex; align-items: center; }
-    .attention-box:before { content: "⚠️"; margin-right: 12px; font-size: 18px; }
-
-    .error-summary { background: #fff5f5; border: 1px solid #fc8181; border-radius: 4px; padding: 20px; margin-bottom: 30px; }
-    .error-summary-title { font-size: 16px; font-weight: bold; color: #c53030; margin-bottom: 15px; display: flex; align-items: center; }
-    .error-summary-title:before { content: "🔴"; margin-right: 10px; font-size: 20px; }
-    .error-list { list-style: none; padding: 0; margin: 0; }
-    .error-list li { padding: 8px 12px; background: white; margin-bottom: 6px; border-radius: 3px; border-left: 3px solid #fc8181; font-size: 13px; }
-    .error-count { font-weight: bold; color: #c53030; }
-
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    thead th { position: sticky; top: 0; background: #f9f9f9; z-index: 10; box-shadow: inset 0 -1px 0 #eee; }
-    th { text-align: left; padding: 12px 10px; border-bottom: 2px solid #eee; color: #666; font-size: 12px; text-transform: uppercase; }
-    td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: middle; }
+    body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: var(--bg); color: var(--text-main); padding: 30px; margin: 0; }
+    .report { max-width: 1400px; margin: 0 auto; background: var(--card-bg); padding: 40px; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }
     
-    .thumb { width: 120px; height: 68px; background: #eee; border-radius: 2px; object-fit: cover; display: block; border: 1px solid #ccc; }
+    header { border-bottom: 2px solid var(--accent); padding-bottom: 20px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: flex-end; }
+    .studio-header { font-size: 12px; font-weight: bold; color: var(--accent); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 5px; }
+    h1 { margin: 0; font-size: 28px; color: #fff; }
     
-    .status-ok { color: #27ae60; font-weight: bold; }
-    .status-fail { color: #c0392b; font-weight: bold; }
-    .status-warn { color: #f39c12; font-weight: bold; }
+    /* Executive Health Dashboard */
+    .health-dashboard { display: flex; gap: 20px; margin-bottom: 30px; }
+    .health-badge { flex: 0 0 240px; padding: 20px; border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid rgba(255,255,255,0.1); }
+    .health-score { font-size: 42px; font-weight: 900; line-height: 1; margin-bottom: 5px; }
+    .health-label { font-size: 12px; font-weight: bold; text-transform: uppercase; letter-spacing: 1px; }
     
-    .deviation { background-color: #fffaf0 !important; color: #9c4221 !important; border: 1px solid #fbd38d; border-radius: 3px; padding: 2px 4px; font-weight: bold; display: inline-block; }
-    .code { font-family: 'Consolas', 'Courier New', monospace; background: #f4f4f4; padding: 2px 5px; border-radius: 3px; font-size: 12px; color: #444; }
-    .tech { color: #777; font-size: 11px; line-height: 1.4; }
-    .color-audit { color: #005a9e; font-weight: 600; font-size: 10px; margin-top: 4px; text-transform: uppercase; }
-    .missing-frames { color: #c0392b; font-weight: bold; font-size: 11px; }
-    .frame-gap-warn { background-color: #ffebee; border-left: 3px solid #c0392b; padding: 2px 6px; border-radius: 2px; }
+    .health-green { background: linear-gradient(135deg, #1e3a2a 0%, #27ae60 100%); color: #afffcf; border-color: #27ae60; }
+    .health-yellow { background: linear-gradient(135deg, #3d2b10 0%, #f39c12 100%); color: #ffe4b5; border-color: #f39c12; }
+    .health-red { background: linear-gradient(135deg, #3d1414 0%, #f44747 100%); color: #ffcaca; border-color: #f44747; }
 
-    .footer { margin-top: 50px; font-size: 11px; color: #bbb; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
+    .meta-grid { display: flex; flex-wrap: wrap; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex-grow: 1; }
+    .meta-item { flex: 1; background: var(--card-bg); padding: 15px; min-width: 120px; }
+    .meta-label { font-size: 10px; font-weight: bold; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; display: block; }
+    .meta-value { font-size: 13px; color: #fff; font-weight: 600; display: block; }
+
+    .attention-box { background: rgba(243, 156, 18, 0.1); border: 1px solid var(--warning); color: var(--warning); padding: 12px 20px; border-radius: 4px; margin-bottom: 10px; font-size: 13px; }
+
+    .error-summary { background: rgba(244, 71, 71, 0.1); border: 1px solid var(--error); border-radius: 4px; padding: 20px; margin-bottom: 30px; }
+    .error-summary-title { font-size: 15px; font-weight: bold; color: var(--error); margin-bottom: 12px; }
+    .error-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .error-list li { padding: 8px 12px; background: rgba(0,0,0,0.2); border-radius: 3px; border-left: 3px solid var(--error); font-size: 12px; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; background: rgba(0,0,0,0.1); border-radius: 6px; overflow: hidden; }
+    thead th { background: #252526; color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 15px 10px; text-align: left; }
+    td { padding: 15px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    
+    .thumb { width: 140px; height: 78px; background: #000; border-radius: 4px; object-fit: cover; display: block; border: 1px solid var(--border); }
+    
+    .status-ok { color: var(--success); font-weight: bold; }
+    .status-fail { color: var(--error); font-weight: bold; }
+    .status-warn { color: var(--warning); font-weight: bold; }
+    
+    .xray-wrap { display: flex; flex-direction: column; gap: 4px; }
+    .xray-target { color: #fff; font-weight: bold; font-size: 14px; }
+    .xray-source { color: var(--text-muted); font-size: 10px; font-family: 'Consolas', monospace; }
+    .xray-arrow { color: var(--accent); margin: 0 4px; font-size: 10px; }
+
+    .deviation { background-color: rgba(243, 156, 18, 0.2); color: var(--warning); border: 1px solid var(--warning); border-radius: 3px; padding: 1px 4px; font-size: 11px; }
+    .code { font-family: 'Consolas', monospace; background: rgba(255,255,255,0.05); padding: 2px 6px; border-radius: 3px; font-size: 11px; color: var(--accent); }
+    .tech { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
+    .color-audit { color: var(--accent); font-weight: 600; font-size: 9px; margin-top: 6px; text-transform: uppercase; opacity: 0.8; }
+    
+    .missing-frames { color: var(--error); font-weight: bold; font-size: 11px; background: rgba(244, 71, 71, 0.1); padding: 2px 6px; border-radius: 2px; }
+
+    .footer { margin-top: 50px; font-size: 11px; color: #555; text-align: center; border-top: 1px solid var(--border); padding-top: 20px; }
     """
 
     # 1. Analyze Batch for Deviations and Totals
@@ -309,7 +332,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         row_html = f"""
         <tr>
             <td>{img_tag}</td>
-            <td><strong>{res.plan.shot_id}</strong><br><small style="color:#888">{res.plan.sequence_id or ""}</small></td>
+            <td class="xray-wrap">
+                <div class="xray-target">{res.plan.shot_id}</div>
+                <div class="xray-source"><span class="xray-arrow">←</span> {res.plan.match.clip.base_name}.{res.plan.match.clip.extension}</div>
+                <div class="xray-source" style="margin-top:2px;">{res.plan.sequence_id or ""}</div>
+            </td>
             <td><span class="code">v{res.plan.version:03d}</span></td>
             <td class="{status_cls}">{status_text}</td>
             <td>{res.frames_copied}</td>
@@ -333,16 +360,32 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     else:
         size_display = f"{total_size_bytes / (1024**2):.1f} MB"
 
+    # 3. Calculate Executive Health Score (Idea #1)
+    critical_colorspace_issues = [idx for idx, issue in colorspace_issues.items() if issue.severity == "critical"]
+    
+    health_cls = "health-green"
+    health_score = "STABLE"
+    health_label = "Production Ready"
+
+    if failed > 0:
+        health_cls = "health-red"
+        health_score = "CRITICAL"
+        health_label = f"{failed} Clips Failed"
+    elif sequences_with_gaps > 0 or critical_colorspace_issues:
+        health_cls = "health-yellow"
+        health_score = "WARNING"
+        health_label = "Gaps / Mismatches"
+
     # Build error summary section
     error_summary_html = ""
     if failed > 0:
         error_items = []
         for category, count in error_categories.most_common():
-            error_items.append(f'<li><span class="error-count">{count}</span> clip(s): {category}</li>')
+            error_items.append(f'<li><span style="font-weight:bold; color:var(--error);">{count}</span> clip(s): {category}</li>')
 
         error_summary_html = f"""
         <div class="error-summary">
-            <div class="error-summary-title">Ingest Failures: {failed} of {len(results)} clips failed</div>
+            <div class="error-summary-title">Batch Failures</div>
             <ul class="error-list">
                 {"".join(error_items)}
             </ul>
@@ -350,22 +393,16 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         """
 
     # Build attention boxes for deviations and missing frames
-    attention_boxes = []
+    attention_box = ""
+    attention_items = []
     if has_deviations:
-        attention_boxes.append('<div class="attention-box">Technical Attention Required: Inconsistent technical specs detected in this batch. Review highlighted values below.</div>')
+        attention_items.append('<div class="attention-box">⚠ Technical Attention Required: Inconsistent resolution or framerate detected in this batch.</div>')
     if sequences_with_gaps > 0:
-        attention_boxes.append(f'<div class="attention-box">Frame Gaps Detected: {sequences_with_gaps} sequence(s) have missing frames ({total_missing_frames} total). Incomplete deliveries flagged below.</div>')
-
-    # Colorspace consistency warning (Enhancement #3)
-    critical_colorspace_issues = [idx for idx, issue in colorspace_issues.items() if issue.severity == "critical"]
+        attention_items.append(f'<div class="attention-box">⚠ Frame Gaps: {sequences_with_gaps} sequence(s) are short {total_missing_frames} frames from their detected range.</div>')
     if critical_colorspace_issues:
-        issue_count = len(critical_colorspace_issues)
-        attention_boxes.append(
-            f'<div class="attention-box">Colorspace Warning: {issue_count} clip(s) have colorspace '
-            f'inconsistencies that may cause rendering issues. Review clips marked with ⚠ below.</div>'
-        )
-
-    attention_box = "\n".join(attention_boxes)
+        attention_items.append('<div class="attention-box">⚠ Colorspace Conflict: Incompatible gamut profiles detected. Refer to color audit below.</div>')
+    
+    attention_box = "\n".join(attention_items)
 
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     project = getattr(results[0].plan, 'project_name', "") or results[0].plan.project_id if results and results[0].plan else "Unknown"
@@ -381,17 +418,25 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "<body>",
         '    <div class="report">',
         '        <header>',
-        f'            <div class="studio-header">{studio_name}</div>',
-        "            <h1>Ingest Manifest</h1>",
+        '            <div>',
+        f'                <div class="studio-header">{studio_name}</div>',
+        "                <h1>Ingest Manifest</h1>",
+        '            </div>',
+        f'            <div style="font-size: 11px; color: var(--text-muted); text-align: right;">Batch ID: {int(time.time())}<br>{timestamp}</div>',
         '        </header>',
-        '        <div class="meta-grid">',
-        '            <div class="meta-item"><span class="meta-label">Project</span><span class="meta-value">' + project + '</span></div>',
-        '            <div class="meta-item"><span class="meta-label">Operator</span><span class="meta-value">' + operator + '</span></div>',
-        '            <div class="meta-item"><span class="meta-label">Step</span><span class="meta-value">' + step_id + '</span></div>',
-        '            <div class="meta-item"><span class="meta-label">Timestamp</span><span class="meta-value">' + timestamp + '</span></div>',
-        '            <div class="meta-item"><span class="meta-label">Clips</span><span class="meta-value">' + f'{succeeded} succeeded / {len(results)} total' + '</span></div>',
-        '            <div class="meta-item"><span class="meta-label">Ingested Size</span><span class="meta-value">' + size_display + '</span></div>',
-        '            <div class="meta-item"><span class="meta-label">Verified Frames</span><span class="meta-value">' + str(total_frames) + '</span></div>',
+        '        <div class="health-dashboard">',
+        f'            <div class="health-badge {health_cls}">',
+        f'                <div class="health-score">{health_score}</div>',
+        f'                <div class="health-label">{health_label}</div>',
+        '            </div>',
+        '            <div class="meta-grid">',
+        '                <div class="meta-item"><span class="meta-label">Project</span><span class="meta-value">' + project + '</span></div>',
+        '                <div class="meta-item"><span class="meta-label">Operator</span><span class="meta-value">' + operator + '</span></div>',
+        '                <div class="meta-item"><span class="meta-label">Step</span><span class="meta-value">' + step_id + '</span></div>',
+        '                <div class="meta-item"><span class="meta-label">Total Volume</span><span class="meta-value">' + size_display + '</span></div>',
+        '                <div class="meta-item"><span class="meta-label">Clips</span><span class="meta-value">' + f'{succeeded} of {len(results)} ok' + '</span></div>',
+        '                <div class="meta-item"><span class="meta-label">Frames</span><span class="meta-value">' + str(total_frames) + '</span></div>',
+        '            </div>',
         '        </div>',
         error_summary_html,
         attention_box,
