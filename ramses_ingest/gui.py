@@ -462,7 +462,7 @@ class IngestWindow(QMainWindow):
         self._scan_worker: ScanWorker | None = None
         self._ingest_worker: IngestWorker | None = None
         self._current_filter_status = "all"  # For filter sidebar
-        self._selected_plan_idx = -1  # For detail panel
+        self._selected_plan: IngestPlan | None = None  # For detail panel
 
         self._build_ui()
         self._try_connect()
@@ -887,8 +887,9 @@ class IngestWindow(QMainWindow):
             # Type filter
             if show:
                 # Check if it's a sequence or movie
-                if row < len(self._plans):
-                    is_sequence = self._plans[row].match.clip.is_sequence
+                plan = self._get_plan_from_row(row)
+                if plan:
+                    is_sequence = plan.match.clip.is_sequence
                     if is_sequence and not self._chk_sequences.isChecked():
                         show = False
                     elif not is_sequence and not self._chk_movies.isChecked():
@@ -923,16 +924,16 @@ class IngestWindow(QMainWindow):
             self._override_shot.setEnabled(False)
             self._override_seq.clear()
             self._override_seq.setEnabled(False)
-            self._selected_plan_idx = -1
+            self._selected_plan = None
             return
 
-        # Get the first selected row
+        # Get plan from the first selected row item data (anchored)
         row = self._table.currentRow()
-        if row < 0 or row >= len(self._plans):
+        plan = self._get_plan_from_row(row)
+        if not plan:
             return
 
-        self._selected_plan_idx = row
-        plan = self._plans[row]
+        self._selected_plan = plan
 
         # Update detail panel
         details = []
@@ -1005,35 +1006,38 @@ class IngestWindow(QMainWindow):
 
     def _on_override_changed(self, text: str) -> None:
         """Apply shot ID override to selected plan"""
-        if self._selected_plan_idx >= 0 and self._selected_plan_idx < len(self._plans):
-            plan = self._plans[self._selected_plan_idx]
+        if self._selected_plan:
+            plan = self._selected_plan
             plan.shot_id = text
-
+            
             # Re-resolve paths for this plan to update versioning
             self._resolve_all_paths()
-
+            
+            # Find visually where this plan is currently located
+            row = self._table.currentRow()
             # Update table with signals blocked to prevent race condition
-            item = self._table.item(self._selected_plan_idx, 2)
+            item = self._table.item(row, 2)
             if item:
                 blocked = self._table.blockSignals(True)
                 item.setText(text)
-
+                
                 # Update Version column too
-                ver_item = self._table.item(self._selected_plan_idx, 3)
+                ver_item = self._table.item(row, 3)
                 if ver_item:
                     ver_item.setText(f"v{plan.version:03d}")
-
+                
                 self._table.blockSignals(blocked)
             self._update_summary()
 
     def _on_override_seq_changed(self, text: str) -> None:
         """Apply sequence ID override to selected plan"""
-        if self._selected_plan_idx >= 0 and self._selected_plan_idx < len(self._plans):
-            plan = self._plans[self._selected_plan_idx]
+        if self._selected_plan:
+            plan = self._selected_plan
             plan.sequence_id = text
 
             # Update table
-            item = self._table.item(self._selected_plan_idx, 4)  # Seq column
+            row = self._table.currentRow()
+            item = self._table.item(row, 4)  # Seq column
             if item:
                 blocked = self._table.blockSignals(True)
                 item.setText(text or "—")
@@ -1044,8 +1048,9 @@ class IngestWindow(QMainWindow):
         """Handle inline edits in table"""
         if item.column() == 2:  # Shot column
             row = item.row()
-            if row < len(self._plans):
-                self._plans[row].shot_id = item.text()
+            plan = self._get_plan_from_row(row)
+            if plan:
+                plan.shot_id = item.text()
 
                 # Re-resolve paths to update versioning
                 self._resolve_all_paths()
@@ -1054,7 +1059,7 @@ class IngestWindow(QMainWindow):
                 ver_item = self._table.item(row, 3)
                 if ver_item:
                     blocked = self._table.blockSignals(True)
-                    ver_item.setText(f"v{self._plans[row].version:03d}")
+                    ver_item.setText(f"v{plan.version:03d}")
                     self._table.blockSignals(blocked)
 
                 self._update_summary()
@@ -1065,8 +1070,9 @@ class IngestWindow(QMainWindow):
             set(item.row() for item in self._table.selectedItems()), reverse=True
         )
         for row in selected_rows:
-            if row < len(self._plans):
-                del self._plans[row]
+            plan = self._get_plan_from_row(row)
+            if plan and plan in self._plans:
+                self._plans.remove(plan)
             self._table.removeRow(row)
 
         self._update_summary()
@@ -1249,6 +1255,9 @@ class IngestWindow(QMainWindow):
             file_item = QTableWidgetItem(filename)
             file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             
+            # Anchor: Store the actual plan object in the item data
+            file_item.setData(Qt.ItemDataRole.UserRole, plan)
+            
             # Highlight Filename if there's a collision
             if "COLLISION" in (plan.error or ""):
                 file_item.setBackground(QColor(180, 50, 50, 150)) # Muted Red
@@ -1373,8 +1382,9 @@ class IngestWindow(QMainWindow):
         for row in range(self._table.rowCount()):
             chk_widget = self._table.cellWidget(row, 0)
             if chk_widget and chk_widget.findChild(QCheckBox) == sender:
-                if row < len(self._plans):
-                    self._plans[row].enabled = state == Qt.CheckState.Checked.value
+                plan = self._get_plan_from_row(row)
+                if plan:
+                    plan.enabled = state == Qt.CheckState.Checked.value
                 break
 
         self._update_summary()
@@ -1393,8 +1403,9 @@ class IngestWindow(QMainWindow):
 
         if ok and shot_id:
             for row in selected_rows:
-                if row < len(self._plans):
-                    self._plans[row].shot_id = shot_id
+                plan = self._get_plan_from_row(row)
+                if plan:
+                    plan.shot_id = shot_id
                     item = self._table.item(row, 2)
                     if item:
                         item.setText(shot_id)
@@ -1417,8 +1428,9 @@ class IngestWindow(QMainWindow):
 
         if ok:
             for row in selected_rows:
-                if row < len(self._plans):
-                    self._plans[row].sequence_id = seq_id
+                plan = self._get_plan_from_row(row)
+                if plan:
+                    plan.sequence_id = seq_id
                     item = self._table.item(row, 4)  # Seq column
                     if item:
                         item.setText(seq_id or "—")
@@ -1429,8 +1441,9 @@ class IngestWindow(QMainWindow):
         """Skip selected clips (uncheck them)"""
         selected_rows = list(set(item.row() for item in self._table.selectedItems()))
         for row in selected_rows:
-            if row < len(self._plans):
-                self._plans[row].enabled = False
+            plan = self._get_plan_from_row(row)
+            if plan:
+                plan.enabled = False
                 chk_widget = self._table.cellWidget(row, 0)
                 if chk_widget:
                     chk = chk_widget.findChild(QCheckBox)
@@ -1445,6 +1458,15 @@ class IngestWindow(QMainWindow):
         self._log_edit.append(msg)
         sb = self._log_edit.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def _get_plan_from_row(self, row: int) -> IngestPlan | None:
+        """Fetch the anchored IngestPlan object from a specific table row."""
+        if row < 0:
+            return None
+        item = self._table.item(row, 1) # Filename column has the data
+        if item:
+            return item.data(Qt.ItemDataRole.UserRole)
+        return None
 
     def _resolve_all_paths(self) -> None:
         """Update target paths and version numbers for all plans."""
