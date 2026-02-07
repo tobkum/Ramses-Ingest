@@ -102,7 +102,14 @@ class IngestEngine:
         self._connected = False
         try:
             from ramses import Ramses
+            from ramses.constants import LogLevel
             ram = Ramses.instance()
+            
+            # --- ENABLE DEBUGGING ---
+            ram.settings().debugMode = True
+            ram.settings().logLevel = LogLevel.Debug
+            # ------------------------
+
             if not ram.online():
                 return False
 

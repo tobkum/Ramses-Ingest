@@ -168,6 +168,23 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
     return copied
 
 
+def _get_next_version(publish_root: str) -> int:
+    """Find the next available version number by scanning vNNN folders."""
+    if not os.path.isdir(publish_root):
+        return 1
+    
+    max_v = 0
+    try:
+        for item in os.listdir(publish_root):
+            if item.startswith("v") and len(item) == 4 and item[1:].isdigit():
+                v = int(item[1:])
+                if v > max_v:
+                    max_v = v
+    except Exception:
+        pass
+    return max_v + 1
+
+
 def resolve_paths(
     plans: list[IngestPlan],
     project_root: str,
@@ -203,10 +220,15 @@ def resolve_paths(
         step_folder_name = nm.fileName()
 
         step_folder = os.path.join(shot_root, step_folder_name)
+        
+        # VERSION-UP LOGIC
+        publish_root = os.path.join(step_folder, "_published")
+        plan.version = _get_next_version(publish_root)
+        
         version_str = f"v{plan.version:03d}"
 
         plan.target_publish_dir = os.path.join(
-            step_folder, "_published", version_str,
+            publish_root, version_str,
         )
         plan.target_preview_dir = os.path.join(
             step_folder, "_preview",
@@ -217,26 +239,43 @@ def resolve_paths_from_daemon(
     plans: list[IngestPlan],
     shot_objects: dict[str, object],
 ) -> None:
-    """Fill in target dirs using Ramses API ``publishFolderPath`` / ``previewFolderPath``.
+    """Calculate target paths for the UI without creating folders on disk (Dry Resolve)."""
+    from ramses.daemon_interface import RamDaemonInterface
+    daemon = RamDaemonInterface.instance()
 
-    Args:
-        plans: Plans to resolve.
-        shot_objects: Mapping of shot short-name (upper) to RamShot instance.
-    """
     for plan in plans:
         if not plan.can_execute:
             continue
         shot_obj = shot_objects.get(plan.shot_id.upper())
         if shot_obj is None:
             continue
+        
         try:
-            pub = shot_obj.publishFolderPath(plan.step_id)
-            if pub:
-                version_str = f"v{plan.version:03d}"
-                plan.target_publish_dir = os.path.join(pub, version_str)
-            prev = shot_obj.previewFolderPath(plan.step_id)
-            if prev:
-                plan.target_preview_dir = prev
+            # We bypass high-level API methods to avoid os.makedirs side-effects.
+            # Get the raw path from daemon without triggering the API's internal folder creation.
+            base_path = daemon.getPath(shot_obj.uuid(), "RamShot").replace("\\", "/")
+            if not base_path:
+                continue
+
+            # Build step folder name using API convention
+            nm = RamFileInfo()
+            nm.project = plan.project_id
+            nm.ramType = ItemType.SHOT
+            nm.shortName = plan.shot_id
+            nm.step = plan.step_id
+            step_folder_name = nm.fileName()
+
+            # Construct paths manually (Dry)
+            step_root = f"{base_path}/{step_folder_name}"
+            
+            # Find next version (Dry scan of existing folders)
+            publish_root = f"{step_root}/_published"
+            plan.version = _get_next_version(publish_root)
+            
+            version_str = f"v{plan.version:03d}"
+            plan.target_publish_dir = f"{publish_root}/{version_str}"
+            plan.target_preview_dir = f"{step_root}/_preview"
+
         except Exception:
             pass
 
@@ -566,10 +605,20 @@ def update_ramses_status(
                     break
             
             if target_state:
-                status.setState(target_state)
-                status.setUser() # Assign to current user
-                status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
-                return True
+                try:
+                    status.setState(target_state)
+                    status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
+                    
+                    # setUser calls setStatusModifiedBy which fails on some Daemon versions
+                    try:
+                        status.setUser() 
+                    except Exception:
+                        # Non-fatal: Some daemons don't support setStatusModifiedBy
+                        pass
+                        
+                    return True
+                except Exception:
+                    return False
                 
         return False
     except Exception:
