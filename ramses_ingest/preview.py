@@ -150,9 +150,19 @@ def _thumbnail_from_movie(
     ocio_config: str | None = None,
     ocio_in: str = "sRGB",
 ) -> bool:
-    # Seek to ~40% of the file to avoid leader/slate
-    seek_seconds = "0"
-    if frame_index is not None:
+    # Seek to ~40% of the file to avoid leader/slate (VFX best practice)
+    if frame_index is None:
+        # Calculate 40% offset from file duration to skip slates/leaders
+        from ramses_ingest.prober import probe_file
+        try:
+            info = probe_file(clip.first_file)
+            if info.duration_seconds > 0:
+                seek_seconds = str(info.duration_seconds * 0.4)
+            else:
+                seek_seconds = "0"
+        except Exception:
+            seek_seconds = "0"
+    else:
         seek_seconds = str(frame_index)
 
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]

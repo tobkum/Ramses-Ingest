@@ -742,6 +742,11 @@ class IngestWindow(QMainWindow):
     def _on_ocio_out_changed(self, text: str) -> None:
         self._engine.ocio_out = text
 
+    def _on_studio_changed(self, text: str) -> None:
+        """Update engine and persist studio name to config."""
+        self._engine.studio_name = text
+        save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text)
+
     def _on_view_report(self) -> None:
         """Open the last generated HTML report in the system browser."""
         if self._engine.last_report_path and os.path.exists(self._engine.last_report_path):

@@ -12,12 +12,14 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import threading
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
 # Cache Settings
 CACHE_PATH = os.path.join(os.path.expanduser("~"), ".ramses_ingest_cache.json")
 _METADATA_CACHE: dict[str, dict] = {}
+_CACHE_LOCK = threading.Lock()  # Thread-safe cache access
 
 def _load_cache():
     global _METADATA_CACHE
@@ -70,12 +72,13 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     if not os.path.isfile(file_path):
         return MediaInfo()
 
-    # 1. Check Cache
+    # 1. Check Cache (thread-safe)
     try:
         mtime = os.path.getmtime(file_path)
         cache_key = f"{file_path}|{mtime}"
-        if cache_key in _METADATA_CACHE:
-            return MediaInfo(**_METADATA_CACHE[cache_key])
+        with _CACHE_LOCK:
+            if cache_key in _METADATA_CACHE:
+                return MediaInfo(**_METADATA_CACHE[cache_key])
     except Exception:
         pass
 
@@ -148,9 +151,10 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         start_timecode=tc,
     )
 
-    # 3. Update Cache
+    # 3. Update Cache (thread-safe)
     if info.is_valid:
-        _METADATA_CACHE[cache_key] = asdict(info)
-        _save_cache()
+        with _CACHE_LOCK:
+            _METADATA_CACHE[cache_key] = asdict(info)
+            _save_cache()
 
     return info

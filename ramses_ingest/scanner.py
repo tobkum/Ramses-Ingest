@@ -49,6 +49,9 @@ class Clip:
     first_file: str = ""
     """Absolute path to the first (or only) file — useful for probing."""
 
+    _padding: int = 4
+    """Detected zero-padding width from original filename (e.g. '0001' = 4)."""
+
     @property
     def frame_count(self) -> int:
         return len(self.frames) if self.is_sequence else 0
@@ -64,9 +67,7 @@ class Clip:
     @property
     def padding(self) -> int:
         """Detected zero-padding width from the first frame number."""
-        if not self.frames:
-            return 4
-        return max(len(str(self.frames[0])), 4)
+        return self._padding
 
     @property
     def missing_frames(self) -> list[int]:
@@ -87,8 +88,8 @@ def scan_directory(root: str | Path) -> list[Clip]:
     if not root.is_dir():
         raise FileNotFoundError(f"Not a directory: {root}")
 
-    # Collect sequence candidates: (dir, base, ext) -> [(frame_number, full_path)]
-    seq_buckets: dict[tuple[str, str, str], list[tuple[int, str]]] = {}
+    # Collect sequence candidates: (dir, base, ext) -> [(frame_number, full_path, padding)]
+    seq_buckets: dict[tuple[str, str, str], list[tuple[int, str, int]]] = {}
     movies: list[Clip] = []
 
     def _scan_recursive(path: Path) -> None:
@@ -107,11 +108,13 @@ def scan_directory(root: str | Path) -> list[Clip]:
                         m = RE_FRAME_PADDING.match(fname)
 
                         if m:
-                            # Image sequence frame
+                            # Image sequence frame - capture padding from original string
                             base = m.group("base")
-                            frame = int(m.group("frame"))
+                            frame_str = m.group("frame")
+                            frame = int(frame_str)
+                            padding = len(frame_str)  # Preserve original padding (e.g., "0001" = 4)
                             key = (str(path), base, ext)
-                            seq_buckets.setdefault(key, []).append((frame, full_path))
+                            seq_buckets.setdefault(key, []).append((frame, full_path, padding))
                         else:
                             # Single movie or standalone image
                             stem = fname.rsplit(".", 1)[0] if "." in fname else fname
@@ -132,8 +135,9 @@ def scan_directory(root: str | Path) -> list[Clip]:
     clips: list[Clip] = []
     for (dirpath, base, ext), frame_tuples in seq_buckets.items():
         frame_tuples.sort(key=lambda t: t[0])
-        frames = [f for f, _ in frame_tuples]
+        frames = [f for f, _, _ in frame_tuples]
         first_file = frame_tuples[0][1]
+        detected_padding = frame_tuples[0][2]  # Use padding from first frame
         clips.append(Clip(
             base_name=base,
             extension=ext,
@@ -141,6 +145,7 @@ def scan_directory(root: str | Path) -> list[Clip]:
             is_sequence=True,
             frames=frames,
             first_file=first_file,
+            _padding=detected_padding,
         ))
 
     clips.extend(movies)

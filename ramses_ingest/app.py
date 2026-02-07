@@ -27,16 +27,18 @@ from ramses_ingest.config import load_rules
 class IngestEngine:
     """Orchestrates the full ingest pipeline."""
 
-    def __init__(self) -> None:
+    def __init__(self, debug_mode: bool = False) -> None:
         self._project_id: str = ""
         self._project_name: str = ""
         self._project_path: str = ""
         self._step_id: str = "PLATE"
         self._connected: bool = False
+        self._debug_mode: bool = debug_mode
 
         self._existing_sequences: list[str] = []
         self._existing_shots: list[str] = []
         self._shot_objects: dict[str, object] = {}
+        self._sequence_uuids: dict[str, str] = {}  # Cache sequence UUIDs for execute phase
         self._steps: list[str] = []
         self._operator_name: str = "Unknown"
 
@@ -93,6 +95,14 @@ class IngestEngine:
     def rules(self, value: list[NamingRule]) -> None:
         self._rules = list(value)
 
+    @property
+    def debug_mode(self) -> bool:
+        return self._debug_mode
+
+    @debug_mode.setter
+    def debug_mode(self, value: bool) -> None:
+        self._debug_mode = value
+
     # -- Daemon connection ---------------------------------------------------
 
     def connect_ramses(self) -> bool:
@@ -105,11 +115,14 @@ class IngestEngine:
             from ramses import Ramses
             from ramses.constants import LogLevel
             ram = Ramses.instance()
-            
-            # --- ENABLE DEBUGGING ---
-            ram.settings().debugMode = True
-            ram.settings().logLevel = LogLevel.Debug
-            # ------------------------
+
+            # Configure logging based on debug mode setting
+            if self._debug_mode:
+                ram.settings().debugMode = True
+                ram.settings().logLevel = LogLevel.Debug
+            else:
+                ram.settings().debugMode = False
+                ram.settings().logLevel = LogLevel.Info
 
             if not ram.online():
                 return False
@@ -134,13 +147,15 @@ class IngestEngine:
             daemon = RamDaemonInterface.instance()
             project_uuid = project.uuid()
 
-            # Cache sequences
+            # Cache sequences with UUIDs
             self._existing_sequences = []
+            self._sequence_uuids = {}
             all_seqs = daemon.getObjects("RamSequence")
             for seq in all_seqs:
                 if seq.get("project") == project_uuid:
                     sn = seq.shortName()
                     self._existing_sequences.append(sn)
+                    self._sequence_uuids[sn.upper()] = seq.uuid()
 
             # Cache shots
             self._existing_shots = []
@@ -218,7 +233,8 @@ class IngestEngine:
                         base_name=os.path.splitext(name)[0],
                         extension=os.path.splitext(name)[1].lstrip(".").lower(),
                         directory=Path(os.path.dirname(p)),
-                        first_file=str(p)
+                        first_file=str(p),
+                        _padding=4,
                     ))
             else:
                 # Directory scan
@@ -284,6 +300,7 @@ class IngestEngine:
         generate_proxies: bool = False,
         progress_callback: Callable[[str], None] | None = None,
         update_status: bool = False,
+        export_json_audit: bool = False,
     ) -> list[IngestResult]:
         """Execute all approved (can_execute) plans.
 
@@ -301,12 +318,9 @@ class IngestEngine:
         total = len(executable)
         _log(f"Starting ingest for {total} clips...")
 
-        # Pre-fetch caches for speed
-        _log("Fetching project metadata...")
-        from ramses.daemon_interface import RamDaemonInterface
-        daemon = RamDaemonInterface.instance()
-        seq_cache = {s.shortName().upper(): s.uuid() for s in daemon.getObjects("RamSequence")}
-        shot_cache = self._shot_objects # Already cached in connect_ramses
+        # Reuse cached metadata from connect_ramses (no redundant daemon queries)
+        seq_cache = self._sequence_uuids  # Already fetched in connect phase
+        shot_cache = self._shot_objects   # Already cached in connect_ramses
 
         # Phase 1: Register Ramses Objects (Sequential, Thread-Safe)
         _log("Phase 1: Registering shots in Ramses database...")
@@ -371,18 +385,32 @@ class IngestEngine:
                     except Exception:
                         pass
 
-        # Phase 4: Generate Report (Feature 4)
+        # Phase 4: Generate Reports (HTML + JSON Audit Trail)
         _log(f"Phase 4: Generating ingest manifest for {len(results)} items...")
-        from ramses_ingest.reporting import generate_html_report
-        
-        report_name = f"Ingest_Report_{self.project_id}_{int(time.time())}.html"
-        report_path = os.path.join(self.project_path, "_ingest_reports", report_name) if self.project_path else report_name
-        self.last_report_path = report_path
-        
-        if generate_html_report(results, report_path, studio_name=self.studio_name, operator=self._operator_name):
-            _log(f"  Manifest created: {report_path}")
+        from ramses_ingest.reporting import generate_html_report, generate_json_audit_trail
+
+        timestamp = int(time.time())
+        report_dir = os.path.join(self.project_path, "_ingest_reports") if self.project_path else "."
+
+        # Generate client-facing HTML report
+        html_name = f"Ingest_Report_{self.project_id}_{timestamp}.html"
+        html_path = os.path.join(report_dir, html_name)
+        self.last_report_path = html_path
+
+        if generate_html_report(results, html_path, studio_name=self.studio_name, operator=self._operator_name):
+            _log(f"  HTML manifest created: {html_path}")
         else:
-            _log(f"  ERROR: Failed to write manifest to {report_path}")
+            _log(f"  ERROR: Failed to write HTML manifest to {html_path}")
+
+        # Generate machine-readable JSON audit trail (optional, for database integration)
+        if export_json_audit:
+            json_name = f"Ingest_Audit_{self.project_id}_{timestamp}.json"
+            json_path = os.path.join(report_dir, json_name)
+
+            if generate_json_audit_trail(results, json_path, project_id=self.project_id, operator=self._operator_name):
+                _log(f"  JSON audit trail created: {json_path}")
+            else:
+                _log(f"  WARNING: Failed to write JSON audit trail to {json_path}")
 
         succeeded = sum(1 for r in results if r.success)
         _log(f"Done: {succeeded}/{len(plans)} succeeded.")

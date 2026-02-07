@@ -15,6 +15,7 @@ import json
 import os
 import shutil
 import time
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Callable
@@ -25,6 +26,9 @@ from ramses_ingest.prober import MediaInfo
 
 from ramses.file_info import RamFileInfo
 from ramses.constants import ItemType
+
+# Thread-safe cache lock for Ramses object registration
+_RAMSES_CACHE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -69,6 +73,7 @@ class IngestResult:
     frames_copied: int = 0
     bytes_copied: int = 0 # Exact byte count
     checksum: str = "" # MD5 of the first frame/file
+    missing_frames: list[int] = field(default_factory=list) # Frame gaps in sequences
     error: str = ""
 
 
@@ -133,16 +138,17 @@ def _calculate_md5(file_path: str) -> str:
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> tuple[int, str, int]:
+def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> tuple[int, str, int, str]:
     """Copy clip frames into *dest_dir* and verify bit-for-bit using MD5.
 
-    Returns (number of files copied, MD5 checksum of the first file, total bytes moved).
+    Returns (number of files copied, MD5 checksum of the first file, total bytes moved, first filename).
     Raises OSError if verification or checksum fails.
     """
     os.makedirs(dest_dir, exist_ok=True)
     copied = 0
     total_bytes = 0
     first_checksum = ""
+    first_filename = ""
 
     def _copy_and_verify(src: str, dst: str) -> tuple[str, int]:
         shutil.copy2(src, dst)
@@ -159,41 +165,37 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
 
     if clip.is_sequence:
         padding = clip.padding
-        
-        # We'll copy the first frame separately to get its checksum safely
-        f1 = clip.frames[0]
-        s1 = os.path.join(str(clip.directory), f"{clip.base_name}.{str(f1).zfill(padding)}.{clip.extension}")
-        d1_name = f"{project_id}_S_{shot_id}_{step_id}.{str(f1).zfill(padding)}.{clip.extension}"
-        d1 = os.path.join(dest_dir, d1_name)
-        first_checksum, sz = _copy_and_verify(s1, d1)
-        total_bytes += sz
-        copied = 1
 
-        if len(clip.frames) > 1:
-            for frame in clip.frames[1:]:
-                src = os.path.join(
-                    str(clip.directory),
-                    f"{clip.base_name}.{str(frame).zfill(padding)}.{clip.extension}",
-                )
-                dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
-                dst = os.path.join(dest_dir, dst_name)
-                # Ensure each copy finishes and closes its handle before moving on
-                shutil.copy2(src, dst)
-                sz = os.path.getsize(src)
-                if sz != os.path.getsize(dst):
-                    raise OSError(f"Size mismatch: {dst}")
-                total_bytes += sz
-                copied += 1
+        # Copy and verify ALL frames with MD5 checksums for data integrity
+        for i, frame in enumerate(clip.frames):
+            src = os.path.join(
+                str(clip.directory),
+                f"{clip.base_name}.{str(frame).zfill(padding)}.{clip.extension}",
+            )
+            dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
+            dst = os.path.join(dest_dir, dst_name)
+
+            # Full MD5 verification for every frame (VFX data integrity requirement)
+            checksum, sz = _copy_and_verify(src, dst)
+
+            # Store first frame info for reporting
+            if i == 0:
+                first_checksum = checksum
+                first_filename = dst_name
+
+            total_bytes += sz
+            copied += 1
 
     else:
         src = clip.first_file
         dst_name = f"{project_id}_S_{shot_id}_{step_id}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
         first_checksum, sz = _copy_and_verify(src, dst)
+        first_filename = dst_name
         total_bytes += sz
         copied = 1
 
-    return copied, first_checksum, total_bytes
+    return copied, first_checksum, total_bytes, first_filename
 
 
 def _get_next_version(publish_root: str) -> int:
@@ -371,7 +373,7 @@ def execute_plan(
         if progress_callback:
             progress_callback(msg)
 
-    result = IngestResult(plan=plan)
+    result = IngestResult(plan=plan, missing_frames=plan.match.clip.missing_frames)
 
     if not plan.can_execute:
         result.error = plan.error or "Plan cannot be executed."
@@ -393,7 +395,7 @@ def execute_plan(
     # --- Copy frames ---
     try:
         _log(f"  Copying {clip.frame_count or 1} file(s)...")
-        copied_count, checksum, total_bytes = copy_frames(
+        copied_count, checksum, total_bytes, first_filename = copy_frames(
             clip, plan.target_publish_dir,
             plan.project_id, plan.shot_id, plan.step_id,
         )
@@ -412,10 +414,10 @@ def execute_plan(
 
     # --- Write metadata ---
     try:
-        first_name = os.listdir(plan.target_publish_dir)[0] if os.listdir(plan.target_publish_dir) else ""
+        # Use tracked filename instead of expensive listdir() call
         _write_ramses_metadata(
             plan.target_publish_dir,
-            first_name,
+            first_filename,
             plan.version,
             comment="Ingested via Ramses-Ingest",
             timecode=plan.media_info.start_timecode,
@@ -519,7 +521,8 @@ def register_ramses_objects(
             try:
                 seq_obj = RamSequence(data=seq_data, create=True)
                 if sequence_cache is not None:
-                    sequence_cache[seq_upper] = seq_obj.uuid()
+                    with _RAMSES_CACHE_LOCK:
+                        sequence_cache[seq_upper] = seq_obj.uuid()
             except Exception as exc:
                 log(f"  Sequence creation failed: {exc}")
         else:
@@ -571,7 +574,8 @@ def register_ramses_objects(
             try:
                 shot_obj = RamShot(data=shot_data, create=True)
                 if shot_cache is not None:
-                    shot_cache[shot_upper] = shot_obj
+                    with _RAMSES_CACHE_LOCK:
+                        shot_cache[shot_upper] = shot_obj
             except Exception as exc:
                 log(f"  Shot creation failed: {exc}")
         else:
