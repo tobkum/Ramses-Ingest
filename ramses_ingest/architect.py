@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QPushButton, QLineEdit, QScrollArea, QDialog,
     QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMenu, QCheckBox, QSpinBox, QTextEdit
+    QMenu, QCheckBox, QSpinBox, QTextEdit, QApplication
 )
 
 if TYPE_CHECKING:
@@ -193,26 +193,38 @@ class VisualTokenWidget(QFrame):
         super().__init__(parent)
         self.token = token
         self._setup_layout()
-        self.apply_base_style()
+        self.update_visuals()
 
     def _setup_layout(self) -> None:
         """Create the layout and internal widgets once."""
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         
+        # Stabilize size to prevent jumping
+        self.setFixedHeight(32)
+        self.setMinimumWidth(80)
+        
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 4, 10, 4)
+        layout.setContentsMargins(12, 0, 12, 0)
+        layout.setSpacing(0)
         
-        label_text = self.token.type.name.capitalize()
-        if self.token.type == TokenType.SEPARATOR:
-            label_text = f"'{self.token.value}'"
-        
-        self.label = QLabel(label_text)
+        self.label = QLabel()
         self.label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.label)
 
-    def apply_base_style(self, border_color: str = "rgba(255,255,255,0.1)") -> None:
-        """Apply the visual theme without re-creating layout."""
+    def update_visuals(self, has_collision: bool = False) -> None:
+        """Update label text and theme based on current token state."""
+        # 1. Update Text
+        text = self.token.type.name.capitalize()
+        if self.token.type == TokenType.SEPARATOR:
+            text = f"'{self.token.value or ' '}'"
+        elif self.token.type == TokenType.VERSION and self.token.prefix:
+            text = f"{self.token.prefix}Ver"
+        
+        self.label.setText(text)
+
+        # 2. Update Style
         colors = {
             TokenType.SEQUENCE: "#27ae60",
             TokenType.SHOT: "#2980b9",
@@ -222,16 +234,18 @@ class VisualTokenWidget(QFrame):
             TokenType.IGNORE: "#34495e",
         }
         bg = colors.get(self.token.type, "#333")
+        border = "#f44747" if has_collision else "rgba(255,255,255,0.1)"
+        border_width = "2px" if has_collision else "1px"
         
         self.setStyleSheet(f"""
             VisualTokenWidget {{
                 background-color: {bg};
-                border-radius: 12px;
-                border: 1px solid {border_color};
+                border-radius: 16px;
+                border: {border_width} solid {border};
                 color: white;
             }}
             VisualTokenWidget:hover {{
-                border: 1px solid white;
+                border: {border_width} solid white;
             }}
         """)
 
@@ -323,12 +337,10 @@ class TokenDropZone(QFrame):
                     w2.token.type not in [TokenType.SEPARATOR, TokenType.IGNORE]):
                     clash = True
             
+            w1.update_visuals(has_collision=clash)
             if clash:
-                w1.setStyleSheet(w1.styleSheet() + "VisualTokenWidget { border: 2px solid #f44747; }")
                 w1.setToolTip("Collision Risk: Add a separator to prevent greedy matching.")
             else:
-                # Reset to normal using the new styling method
-                w1.apply_base_style() 
                 w1.setToolTip("")
 
     def clear(self) -> None:
