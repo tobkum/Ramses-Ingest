@@ -145,9 +145,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
 
     /* Executive Health Dashboard */
     .health-dashboard { display: flex; gap: 24px; margin-bottom: 35px; }
-    .health-badge { flex: 0 0 260px; padding: 25px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid var(--border); box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
-    .health-score { font-size: 44px; font-weight: 900; line-height: 1; margin-bottom: 8px; letter-spacing: -1px; }
-    .health-label { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; opacity: 0.9; }
+    .health-badge { flex: 0 0 180px; padding: 16px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+    .health-score { font-size: 28px; font-weight: 800; line-height: 1; margin-bottom: 8px; letter-spacing: -0.5px; }
+    .health-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.9; }
     
     .health-green { background-color: var(--success); color: #fff; border-color: var(--success); }
     .health-yellow { background-color: var(--warning); color: #fff; border-color: var(--warning); }
@@ -171,7 +171,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
 
     table { width: 100%; border-collapse: collapse; margin-top: 20px; background: rgba(0,0,0,0.02); border-radius: 6px; overflow: hidden; }
     thead th { background: var(--table-header); color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 15px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+    thead th:nth-child(2) { min-width: 180px; } /* Shot ID column */
     td { padding: 15px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+    td:nth-child(2) { min-width: 180px; } /* Shot ID column */
     tr:hover td { background: rgba(0,0,0,0.02); }
     
     .thumb { width: 140px; height: 78px; background: #000; border-radius: 4px; object-fit: cover; display: block; border: 1px solid var(--border); }
@@ -180,9 +182,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     .status-fail { color: var(--error); font-weight: bold; }
     .status-warn { color: var(--warning); font-weight: bold; }
     
-    .xray-wrap { display: flex; flex-direction: column; gap: 4px; }
-    .xray-target { color: var(--text-main); font-weight: bold; font-size: 14px; }
-    .xray-source { color: var(--text-muted); font-size: 10px; font-family: 'Consolas', monospace; }
+    .xray-wrap { display: flex; flex-direction: column; gap: 6px; }
+    .xray-target { color: var(--text-main); font-weight: bold; font-size: 14px; line-height: 1.4; }
+    .xray-source { color: var(--text-muted); font-size: 10px; font-family: 'Consolas', monospace; line-height: 1.5; }
     .xray-arrow { color: var(--accent); margin: 0 4px; font-size: 10px; }
 
     .deviation { background-color: rgba(243, 156, 18, 0.1); color: var(--warning); border: 1px solid var(--warning); border-radius: 3px; padding: 1px 4px; font-size: 11px; }
