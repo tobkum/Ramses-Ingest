@@ -27,26 +27,34 @@ from ramses_ingest.config import load_rules, save_rules, DEFAULT_RULES_PATH
 
 STYLESHEET = """
 QMainWindow {
-    background-color: #1e1e1e;
+    background-color: #121212;
 }
 
 QWidget {
-    background-color: #1e1e1e;
-    color: #d4d4d4;
+    background-color: #121212;
+    color: #e0e0e0;
 }
 
 /* --- Labels --- */
 QLabel {
-    color: #d4d4d4;
+    color: #cccccc;
 }
 
 QLabel#headerLabel {
+    font-size: 14px;
     font-weight: bold;
     color: #ffffff;
+    letter-spacing: 1px;
+}
+
+QLabel#projectLabel {
+    font-size: 12px;
+    font-weight: bold;
+    color: #4ec9b0;
 }
 
 QLabel#mutedLabel {
-    color: #808080;
+    color: #666666;
 }
 
 QLabel#statusConnected {
@@ -58,31 +66,38 @@ QLabel#statusDisconnected {
     color: #f44747;
 }
 
+/* --- Status Orb --- */
+QFrame#statusOrb {
+    border-radius: 6px;
+    max-width: 12px;
+    max-height: 12px;
+    min-width: 12px;
+    min-height: 12px;
+}
+
 /* --- Inputs --- */
 QLineEdit {
-    background-color: #2d2d2d;
-    border: 1px solid #3e3e42;
+    background-color: #1e1e1e;
+    border: 1px solid #333333;
     border-radius: 4px;
-    padding: 2px 8px;
-    color: #d4d4d4;
-    min-height: 24px;
+    padding: 4px 10px;
+    color: #ffffff;
 }
 
 QLineEdit:focus {
     border-color: #007acc;
+    background-color: #252526;
 }
 
 QComboBox {
-    background-color: #2d2d2d;
-    border: 1px solid #3e3e42;
+    background-color: #1e1e1e;
+    border: 1px solid #333333;
     border-radius: 4px;
-    padding: 2px 8px;
-    color: #d4d4d4;
-    min-height: 24px;
+    padding: 4px 10px;
 }
 
 QComboBox:hover {
-    border-color: #007acc;
+    border-color: #444444;
 }
 
 QComboBox::drop-down {
@@ -90,25 +105,17 @@ QComboBox::drop-down {
     width: 20px;
 }
 
-QComboBox QAbstractItemView {
-    background-color: #252526;
-    border: 1px solid #3e3e42;
-    color: #d4d4d4;
-    selection-background-color: #094771;
-}
-
 QPushButton {
-    background-color: #333333;
-    border: 1px solid #454545;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #333333, stop:1 #2d2d2d);
+    border: 1px solid #444444;
     border-radius: 4px;
-    padding: 4px 12px;
-    color: #cccccc;
-    min-height: 24px;
-    text-align: center;
+    padding: 5px 15px;
+    color: #e0e0e0;
+    font-weight: 500;
 }
 
 QPushButton:hover {
-    background-color: #3c3c3c;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3d3d3d, stop:1 #333333);
     border-color: #007acc;
 }
 
@@ -117,41 +124,35 @@ QPushButton:pressed {
     color: white;
 }
 
-QPushButton:disabled {
-    background-color: #252526;
-    color: #555555;
-    border-color: #333333;
-}
-
 QPushButton#ingestButton {
-    background-color: #0e639c;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0e639c, stop:1 #0a4d7a);
     border: none;
     color: #ffffff;
     font-weight: bold;
-    padding: 6px 20px;
+    padding: 8px 25px;
 }
 
 QPushButton#ingestButton:hover {
-    background-color: #1177bb;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1177bb, stop:1 #0e639c);
 }
 
 QPushButton#ingestButton:disabled {
-    background-color: #333333;
-    color: #666666;
+    background: #252526;
+    color: #555555;
 }
 
-/* --- Tree --- */
+/* --- Production Grid --- */
 QTreeWidget {
-    background-color: #1a1a1a;
-    border: 1px solid #333333;
-    alternate-background-color: #222222;
-    color: #cccccc;
+    background-color: #181818;
+    border: 1px solid #2d2d2d;
+    alternate-background-color: #1e1e1e;
+    color: #d4d4d4;
     outline: none;
 }
 
 QTreeWidget::item {
-    padding: 6px;
-    border-bottom: 1px solid #2d2d2d;
+    height: 32px;
+    border-bottom: 1px solid #252526;
 }
 
 QTreeWidget::item:hover {
@@ -161,51 +162,41 @@ QTreeWidget::item:hover {
 QTreeWidget::item:selected {
     background-color: #094771;
     color: #ffffff;
-    border-left: 2px solid #007acc;
 }
 
 QHeaderView::section {
     background-color: #252526;
     border: none;
-    border-right: 1px solid #333333;
-    padding: 4px;
+    border-right: 1px solid #121212;
+    padding: 6px;
     color: #888888;
     font-weight: bold;
+    font-size: 10px;
+    text-transform: uppercase;
 }
 
-/* --- Other --- */
-QTextEdit {
-    background-color: #1a1a1a;
-    border: 1px solid #333333;
-    color: #85c46c;
-}
-
+/* --- Progress --- */
 QProgressBar {
-    background-color: #252526;
+    background-color: #1e1e1e;
     border: 1px solid #333333;
-    border-radius: 2px;
+    border-radius: 3px;
     text-align: center;
-    color: transparent;
-    height: 4px;
+    height: 6px;
 }
 
 QProgressBar::chunk {
     background-color: #007acc;
 }
 
-QCheckBox {
-    color: #cccccc;
-}
-
 QFrame#dropZone {
-    background-color: #252526;
-    border: 2px dashed #3e3e42;
-    border-radius: 8px;
+    background-color: #1e1e1e;
+    border: 2px dashed #333333;
+    border-radius: 10px;
 }
 
 QFrame#dropZone[dragOver="true"] {
     border-color: #007acc;
-    background-color: #1c2b3a;
+    background-color: #162633;
 }
 """
 
@@ -406,39 +397,63 @@ class IngestWindow(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(12, 10, 12, 10)
-        root.setSpacing(8)
+        root.setContentsMargins(15, 15, 15, 15)
+        root.setSpacing(12)
 
-        # --- Header ---------------------------------------------------------
+        # --- Header (Command Center) ----------------------------------------
         header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 10)
+        
+        # Connection Badge
+        status_cont = QHBoxLayout()
+        status_cont.setSpacing(8)
+        self._status_orb = QFrame()
+        self._status_orb.setObjectName("statusOrb")
+        self._status_orb.setStyleSheet("background-color: #f44747; border: 1px solid rgba(255,255,255,0.1);")
+        status_cont.addWidget(self._status_orb)
+        
+        self._status_label = QLabel("DISCONNECTED")
+        self._status_label.setObjectName("statusDisconnected")
+        self._status_label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
+        status_cont.addWidget(self._status_label)
+        header.addLayout(status_cont)
+        
+        header.addStretch()
+        
         title = QLabel("RAMSES INGEST")
         title.setObjectName("headerLabel")
         header.addWidget(title)
-        header.addStretch()
-        self._status_label = QLabel("Disconnected")
-        self._status_label.setObjectName("statusDisconnected")
-        header.addWidget(self._status_label)
         root.addLayout(header)
 
-        # --- Project / Step -------------------------------------------------
-        proj_row = QHBoxLayout()
-        self._project_label = QLabel("Project: —")
-        proj_row.addWidget(self._project_label)
-        proj_row.addStretch()
+        # --- Project Context ------------------------------------------------
+        proj_panel = QFrame()
+        proj_panel.setStyleSheet("background-color: #1e1e1e; border-radius: 6px; padding: 5px;")
+        proj_lay = QHBoxLayout(proj_panel)
         
-        proj_row.addWidget(QLabel("Studio:"))
+        self._project_label = QLabel("PROJECT: —")
+        self._project_label.setObjectName("projectLabel")
+        proj_lay.addWidget(self._project_label)
+        
+        self._standards_label = QLabel("")
+        self._standards_label.setObjectName("mutedLabel")
+        self._standards_label.setFont(QFont("Segoe UI", 8))
+        proj_lay.addWidget(self._standards_label)
+        
+        proj_lay.addStretch()
+        
+        proj_lay.addWidget(QLabel("Studio:"))
         self._studio_edit = QLineEdit(self._engine.studio_name)
-        self._studio_edit.setMinimumWidth(120)
+        self._studio_edit.setMinimumWidth(140)
         self._studio_edit.textChanged.connect(self._on_studio_changed)
-        proj_row.addWidget(self._studio_edit)
+        proj_lay.addWidget(self._studio_edit)
 
-        proj_row.addWidget(QLabel("Step:"))
+        proj_lay.addWidget(QLabel("Step:"))
         self._step_combo = QComboBox()
-        self._step_combo.setMinimumWidth(100)
+        self._step_combo.setMinimumWidth(120)
         self._step_combo.addItem("PLATE")
         self._step_combo.currentTextChanged.connect(self._on_step_changed)
-        proj_row.addWidget(self._step_combo)
-        root.addLayout(proj_row)
+        proj_lay.addWidget(self._step_combo)
+        root.addWidget(proj_panel)
 
         # --- Drop zone ------------------------------------------------------
         self._drop_zone = DropZone()
@@ -582,11 +597,31 @@ class IngestWindow(QMainWindow):
     def _try_connect(self) -> None:
         ok = self._engine.connect_ramses()
         if ok:
-            self._status_label.setText("Connected")
+            self._status_orb.setStyleSheet("""
+                background-color: #4ec9b0; 
+                border: 1px solid rgba(255,255,255,0.2);
+                border-radius: 6px;
+            """)
+            # Apply glowing shadow for "Live" feel
+            from PySide6.QtWidgets import QGraphicsDropShadowEffect
+            glow = QGraphicsDropShadowEffect()
+            glow.setBlurRadius(15)
+            glow.setColor(QColor("#4ec9b0"))
+            glow.setOffset(0)
+            self._status_orb.setGraphicsEffect(glow)
+
+            self._status_label.setText("DAEMON ONLINE")
             self._status_label.setObjectName("statusConnected")
             pid = self._engine.project_id
             pname = self._engine.project_name
-            self._project_label.setText(f"Project: {pid} | {pname}")
+            self._project_label.setText(f"PROJECT: {pid} | {pname}")
+            
+            # Update Standards Display
+            fps = self._engine._project_fps
+            w = self._engine._project_width
+            h = self._engine._project_height
+            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.2f} FPS")
+
             # Populate steps
             self._step_combo.clear()
             for s in self._engine.steps:
@@ -594,9 +629,11 @@ class IngestWindow(QMainWindow):
             if "PLATE" in self._engine.steps:
                 self._step_combo.setCurrentText("PLATE")
         else:
-            self._status_label.setText("Disconnected")
+            self._status_orb.setStyleSheet("background-color: #f44747; border-radius: 6px;")
+            self._status_orb.setGraphicsEffect(None)
+            self._status_label.setText("DAEMON OFFLINE")
             self._status_label.setObjectName("statusDisconnected")
-            self._project_label.setText("Project: — (daemon offline)")
+            self._project_label.setText("PROJECT: — (CONNECTION REQUIRED)")
             self._btn_ingest.setToolTip("Ramses connection required to ingest.")
 
         # Re-polish to apply dynamic objectName change
@@ -675,16 +712,31 @@ class IngestWindow(QMainWindow):
                 item.setCheckState(0, Qt.CheckState.Unchecked)
                 item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
 
-            # Status
+            # Status Badge (Tier 1 High-Fidelity)
+            status_widget = QWidget()
+            status_lay = QHBoxLayout(status_widget)
+            status_lay.setContentsMargins(4, 4, 4, 4)
+            status_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            
+            lbl_badge = QLabel()
+            lbl_badge.setFixedWidth(42)
+            lbl_badge.setFixedHeight(18)
+            lbl_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_badge.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+            
             if not plan.match.matched:
-                item.setText(1, " ? ")
-                item.setForeground(1, QColor("#B2B24C"))
+                lbl_badge.setText(" ? ")
+                lbl_badge.setStyleSheet("background-color: #444; color: #888; border-radius: 4px;")
             elif plan.is_new_shot:
-                item.setText(1, " NEW ")
-                item.setForeground(1, QColor("#4CB24C"))
+                lbl_badge.setText(" NEW ")
+                lbl_badge.setStyleSheet("background-color: #27ae60; color: white; border-radius: 4px; font-weight: bold;")
             else:
-                item.setText(1, " UPD ")
-                item.setForeground(1, QColor("#4C8CB2"))
+                lbl_badge.setText(" UPD ")
+                lbl_badge.setStyleSheet("background-color: #2980b9; color: white; border-radius: 4px; font-weight: bold;")
+            
+            status_lay.addWidget(lbl_badge)
+            self._tree.addTopLevelItem(item)
+            self._tree.setItemWidget(item, 1, status_widget)
 
             # Sequence / Shot
             item.setText(2, plan.sequence_id or "???")
@@ -700,18 +752,45 @@ class IngestWindow(QMainWindow):
             else:
                 item.setText(4, "1") # Single file
 
-            # Resolution
+            # --- Technical Validation (Tier 1 Heuristics) ---
             mi = plan.media_info
+            # Get effective standard (Sequence override or Project default)
+            target_fps, target_w, target_h = self._engine._project_fps, self._engine._project_width, self._engine._project_height
+            if plan.sequence_id and plan.sequence_id.upper() in self._engine._sequence_settings:
+                target_fps, target_w, target_h = self._engine._sequence_settings[plan.sequence_id.upper()]
+
+            # Resolution Check
             if mi.is_valid:
                 item.setText(5, f"{mi.width}x{mi.height}")
+                if mi.width != target_w or mi.height != target_h:
+                    item.setForeground(5, QColor("#f39c12")) # Amber warning
+                    item.setToolTip(5, f"Resolution mismatch: {mi.width}x{mi.height} vs Standard {target_w}x{target_h}")
             else:
                 item.setText(5, "—")
 
-            # FPS
-            if mi.fps > 0:
-                item.setText(6, f"{mi.fps:.3f}")
+            # FPS Check
+            display_fps = mi.fps
+            if not clip.is_sequence and mi.frame_count <= 1:
+                # Still image: assume target project FPS for consistency
+                display_fps = target_fps
+
+            if display_fps > 0:
+                item.setText(6, f"{display_fps:.3f}")
+                if round(display_fps, 3) != round(target_fps, 3):
+                    item.setForeground(6, QColor("#f39c12")) # Amber warning
+                    item.setToolTip(6, f"FPS mismatch: {display_fps:.3f} vs Standard {target_fps:.3f}")
             else:
                 item.setText(6, "—")
+
+            # Global Row Warning: if any technical spec is off, highlight the background subtly
+            has_mismatch = (mi.is_valid and (mi.width != target_w or mi.height != target_h)) or \
+                           (display_fps > 0 and round(display_fps, 3) != round(target_fps, 3))
+            
+            if has_mismatch:
+                # Subtly tint the row to draw attention
+                for col in range(self._tree.columnCount()):
+                    if col != 1: # Don't tint the status badge area
+                        item.setBackground(col, QColor(243, 156, 18, 20)) # 8% opacity Amber
 
             # Source
             item.setText(7, clip.base_name)

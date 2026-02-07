@@ -35,6 +35,14 @@ class IngestEngine:
         self._connected: bool = False
         self._debug_mode: bool = debug_mode
 
+        # Project Standards
+        self._project_fps: float = 24.0
+        self._project_width: int = 1920
+        self._project_height: int = 1080
+        
+        # Sequence Overrides: {SEQ_NAME: (fps, width, height)}
+        self._sequence_settings: dict[str, tuple[float, int, int]] = {}
+
         self._existing_sequences: list[str] = []
         self._existing_shots: list[str] = []
         self._shot_objects: dict[str, object] = {}
@@ -134,6 +142,11 @@ class IngestEngine:
             self._project_id = project.shortName()
             self._project_name = project.name()
             self._project_path = project.folderPath()
+            
+            # Retrieve Project Standards
+            self._project_fps = project.framerate()
+            self._project_width = project.width()
+            self._project_height = project.height()
 
             # Cache User/Operator
             self._operator_name = "Unknown"
@@ -147,15 +160,20 @@ class IngestEngine:
             daemon = RamDaemonInterface.instance()
             project_uuid = project.uuid()
 
-            # Cache sequences with UUIDs
+            # Cache sequences with UUIDs and Standards
             self._existing_sequences = []
             self._sequence_uuids = {}
+            self._sequence_settings = {}
             all_seqs = daemon.getObjects("RamSequence")
             for seq in all_seqs:
                 if seq.get("project") == project_uuid:
                     sn = seq.shortName()
                     self._existing_sequences.append(sn)
                     self._sequence_uuids[sn.upper()] = seq.uuid()
+                    # Store sequence-specific overrides
+                    self._sequence_settings[sn.upper()] = (
+                        seq.framerate(), seq.width(), seq.height()
+                    )
 
             # Cache shots
             self._existing_shots = []
@@ -206,46 +224,61 @@ class IngestEngine:
         all_clips: list[Clip] = []
         seen_seq_keys: set[tuple[str, str, str]] = set() # (dir, base, ext)
 
-        for p in paths:
-            _log(f"Scanning {p}...")
-            if os.path.isfile(p):
-                # Specific file selection
-                from ramses_ingest.scanner import RE_FRAME_PADDING
+        # UX Magic: If user selects multiple files from same sequence, consolidate them instantly
+        # rather than performing N full-directory rescans.
+        file_paths = [p for p in paths if os.path.isfile(p)]
+        dir_paths = [p for p in paths if os.path.isdir(p)]
+
+        # 1. Process files with grouping
+        if file_paths:
+            if progress_callback: progress_callback(f"Consolidating {len(file_paths)} files...")
+            from ramses_ingest.scanner import RE_FRAME_PADDING
+            
+            temp_buckets: dict[tuple[str, str, str], list[tuple[int, str, int]]] = {}
+            standalone: list[Clip] = []
+
+            for p in file_paths:
                 name = os.path.basename(p)
                 m = RE_FRAME_PADDING.match(name)
                 if m:
-                    # It's part of a sequence, find the whole sequence in parent
-                    parent = os.path.dirname(p)
                     base = m.group("base")
                     ext = m.group("ext").lower()
-                    key = (parent, base, ext)
-                    if key in seen_seq_keys:
-                        continue
-                    
-                    clips = scan_directory(parent)
-                    # Filter to only the sequence this file belongs to
-                    seq_clips = [c for c in clips if c.base_name == base and c.extension == ext]
-                    all_clips.extend(seq_clips)
-                    seen_seq_keys.add(key)
+                    frame_str = m.group("frame")
+                    key = (os.path.dirname(p), base, ext)
+                    temp_buckets.setdefault(key, []).append((int(frame_str), p, len(frame_str)))
                 else:
-                    # Single movie or image
-                    all_clips.append(Clip(
+                    standalone.append(Clip(
                         base_name=os.path.splitext(name)[0],
                         extension=os.path.splitext(name)[1].lstrip(".").lower(),
                         directory=Path(os.path.dirname(p)),
-                        first_file=str(p),
-                        _padding=4,
+                        first_file=str(p)
                     ))
-            else:
-                # Directory scan
-                new_clips = scan_directory(p)
-                for c in new_clips:
-                    if c.is_sequence:
-                        key = (str(c.directory), c.base_name, c.extension.lower())
-                        if key in seen_seq_keys:
-                            continue
-                        seen_seq_keys.add(key)
-                    all_clips.append(c)
+            
+            # Convert buckets to sequence Clips
+            for (dir_path, base, ext), frames in temp_buckets.items():
+                frames.sort()
+                all_clips.append(Clip(
+                    base_name=base,
+                    extension=ext,
+                    directory=Path(dir_path),
+                    is_sequence=True,
+                    frames=[f[0] for f in frames],
+                    first_file=frames[0][1],
+                    _padding=frames[0][2]
+                ))
+                seen_seq_keys.add((dir_path, base, ext))
+            all_clips.extend(standalone)
+
+        # 2. Process directories
+        for p in dir_paths:
+            if progress_callback: progress_callback(f"Scanning directory: {os.path.basename(p)}...")
+            new_clips = scan_directory(p)
+            for c in new_clips:
+                if c.is_sequence:
+                    key = (str(c.directory), c.base_name, c.extension.lower())
+                    if key in seen_seq_keys: continue
+                    seen_seq_keys.add(key)
+                all_clips.append(c)
 
         _log(f"  Found {len(all_clips)} clip(s).")
 

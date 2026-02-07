@@ -184,7 +184,7 @@ class TokenEngine:
 # ---------------------------------------------------------------------------
 
 class VisualTokenWidget(QFrame):
-    """A pill-shaped interactive token in the rule builder."""
+    """A pill-shaped interactive token with high-fidelity styling."""
     
     clicked = Signal(ArchitectToken)
     deleted = Signal(object)
@@ -196,17 +196,13 @@ class VisualTokenWidget(QFrame):
         self.update_visuals()
 
     def _setup_layout(self) -> None:
-        """Create the layout and internal widgets once."""
-        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setFrameShape(QFrame.Shape.NoFrame)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        
-        # Stabilize size to prevent jumping
         self.setFixedHeight(32)
-        self.setMinimumWidth(80)
+        self.setMinimumWidth(90)
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 0, 12, 0)
-        layout.setSpacing(0)
+        layout.setContentsMargins(14, 0, 14, 0)
         
         self.label = QLabel()
         self.label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -214,40 +210,50 @@ class VisualTokenWidget(QFrame):
         layout.addWidget(self.label)
 
     def update_visuals(self, has_collision: bool = False) -> None:
-        """Update label text and theme based on current token state."""
-        # 1. Update Text
+        """Apply high-fidelity theme with gradients and reactive state."""
+        colors = {
+            TokenType.SEQUENCE: ("#2ecc71", "#27ae60"), # Emerald Gradient
+            TokenType.SHOT:     ("#3498db", "#2980b9"), # Blue Gradient
+            TokenType.VERSION:  ("#f1c40f", "#f39c12"), # Amber Gradient
+            TokenType.SEPARATOR:("#95a5a6", "#7f8c8d"), # Slate Gradient
+            TokenType.WILDCARD: ("#9b59b6", "#8e44ad"), # Purple Gradient
+            TokenType.IGNORE:   ("#34495e", "#2c3e50"), # Dark Slate
+        }
+        c1, c2 = colors.get(self.token.type, ("#444", "#333"))
+        
+        # Collision State
+        border = "#ff4757" if has_collision else "transparent"
+        glow = "0 0 10px rgba(255, 71, 87, 0.5)" if has_collision else "none"
+        
         text = self.token.type.name.capitalize()
         if self.token.type == TokenType.SEPARATOR:
             text = f"'{self.token.value or ' '}'"
         elif self.token.type == TokenType.VERSION and self.token.prefix:
             text = f"{self.token.prefix}Ver"
-        
         self.label.setText(text)
 
-        # 2. Update Style
-        colors = {
-            TokenType.SEQUENCE: "#27ae60",
-            TokenType.SHOT: "#2980b9",
-            TokenType.VERSION: "#f39c12",
-            TokenType.SEPARATOR: "#7f8c8d",
-            TokenType.WILDCARD: "#8e44ad",
-            TokenType.IGNORE: "#34495e",
-        }
-        bg = colors.get(self.token.type, "#333")
-        border = "#f44747" if has_collision else "rgba(255,255,255,0.1)"
-        border_width = "2px" if has_collision else "1px"
-        
         self.setStyleSheet(f"""
             VisualTokenWidget {{
-                background-color: {bg};
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {c1}, stop:1 {c2});
                 border-radius: 16px;
-                border: {border_width} solid {border};
+                border: 1px solid {border};
                 color: white;
             }}
             VisualTokenWidget:hover {{
-                border: {border_width} solid white;
+                border: 1px solid white;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 {c1}, stop:1 #555);
             }}
         """)
+
+    def enterEvent(self, event) -> None:
+        # Subtle hover lift
+        self.move(self.x(), self.y() - 2)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        # Reset hover lift
+        self.move(self.x(), self.y() + 2)
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
