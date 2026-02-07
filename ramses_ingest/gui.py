@@ -438,195 +438,283 @@ class IngestWindow(QMainWindow):
     # -- UI construction -----------------------------------------------------
 
     def _build_ui(self) -> None:
+        """Build professional 3-panel master-detail layout (ShotGrid-style)"""
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setContentsMargins(15, 15, 15, 15)
-        root.setSpacing(12)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
 
-        # --- Header (Command Center) ----------------------------------------
-        header = QHBoxLayout()
-        header.setContentsMargins(0, 0, 0, 10)
-        
-        # Connection Badge
-        status_cont = QHBoxLayout()
-        status_cont.setSpacing(8)
+        # ═══════════════════════════════════════════════════════════════════════
+        # HEADER BAR - Minimal (Project + Step + Studio + Status)
+        # ═══════════════════════════════════════════════════════════════════════
+        header = QFrame()
+        header.setStyleSheet("background-color: #1e1e1e; border-radius: 4px; padding: 6px;")
+        header_lay = QHBoxLayout(header)
+        header_lay.setContentsMargins(8, 4, 8, 4)
+        header_lay.setSpacing(12)
+
+        # Status orb
         self._status_orb = QFrame()
         self._status_orb.setObjectName("statusOrb")
         self._status_orb.setStyleSheet("background-color: #f44747; border: 1px solid rgba(255,255,255,0.1);")
-        status_cont.addWidget(self._status_orb)
-        
-        self._status_label = QLabel("DISCONNECTED")
+        header_lay.addWidget(self._status_orb)
+
+        self._status_label = QLabel("OFFLINE")
         self._status_label.setObjectName("statusDisconnected")
         self._status_label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
-        status_cont.addWidget(self._status_label)
-        header.addLayout(status_cont)
-        
-        header.addStretch()
-        
-        title = QLabel("RAMSES INGEST")
-        title.setObjectName("headerLabel")
-        header.addWidget(title)
-        root.addLayout(header)
+        header_lay.addWidget(self._status_label)
 
-        # --- Project Context ------------------------------------------------
-        proj_panel = QFrame()
-        proj_panel.setStyleSheet("background-color: #1e1e1e; border-radius: 6px; padding: 5px;")
-        proj_lay = QHBoxLayout(proj_panel)
-        
-        self._project_label = QLabel("PROJECT: —")
-        self._project_label.setObjectName("projectLabel")
-        proj_lay.addWidget(self._project_label)
-        
-        self._standards_label = QLabel("")
-        self._standards_label.setObjectName("mutedLabel")
-        self._standards_label.setFont(QFont("Segoe UI", 8))
-        proj_lay.addWidget(self._standards_label)
-        
-        proj_lay.addStretch()
-        
-        proj_lay.addWidget(QLabel("Studio:"))
-        self._studio_edit = QLineEdit(self._engine.studio_name)
-        self._studio_edit.setMinimumWidth(140)
-        self._studio_edit.textChanged.connect(self._on_studio_changed)
-        proj_lay.addWidget(self._studio_edit)
+        header_lay.addWidget(QLabel(" | "))
 
-        proj_lay.addWidget(QLabel("Step:"))
+        # Project
+        header_lay.addWidget(QLabel("Project:"))
+        self._project_combo = QComboBox()
+        self._project_combo.setMinimumWidth(120)
+        self._project_combo.addItem("—")
+        header_lay.addWidget(self._project_combo)
+
+        # Step
+        header_lay.addWidget(QLabel("Step:"))
         self._step_combo = QComboBox()
-        self._step_combo.setMinimumWidth(120)
+        self._step_combo.setMinimumWidth(100)
         self._step_combo.addItem("PLATE")
         self._step_combo.currentTextChanged.connect(self._on_step_changed)
-        proj_lay.addWidget(self._step_combo)
-        root.addWidget(proj_panel)
+        header_lay.addWidget(self._step_combo)
 
-        # --- Drop zone ------------------------------------------------------
-        self._drop_zone = DropZone()
-        self._drop_zone.paths_dropped.connect(self._on_drop)
-        root.addWidget(self._drop_zone)
+        header_lay.addStretch()
 
-        # --- Rule selector --------------------------------------------------
-        rule_row = QHBoxLayout()
-        rule_row.addWidget(QLabel("Naming Rule:"))
-        self._rule_combo = QComboBox()
-        self._rule_combo.setMinimumWidth(200)
-        self._rule_combo.addItem("Auto-detect")
-        self._populate_rule_combo()
-        rule_row.addWidget(self._rule_combo, 1)
-        
-        btn_architect = QPushButton("Architect...")
-        btn_architect.clicked.connect(self._on_launch_architect)
-        btn_architect.setStyleSheet("font-weight: bold; color: #00bff3;")
-        rule_row.addWidget(btn_architect)
+        # Studio
+        header_lay.addWidget(QLabel("Studio:"))
+        self._studio_edit = QLineEdit(self._engine.studio_name)
+        self._studio_edit.setMaximumWidth(140)
+        self._studio_edit.textChanged.connect(self._on_studio_changed)
+        header_lay.addWidget(self._studio_edit)
 
-        self._btn_edl = QPushButton("Load EDL...")
-        self._btn_edl.clicked.connect(self._on_load_edl)
-        rule_row.addWidget(self._btn_edl)
+        root.addWidget(header)
 
-        btn_edit_rules = QPushButton("Edit Rules...")
-        btn_edit_rules.clicked.connect(self._on_edit_rules)
-        rule_row.addWidget(btn_edit_rules)
-        root.addLayout(rule_row)
+        # ═══════════════════════════════════════════════════════════════════════
+        # MAIN CONTENT - 3-Panel Splitter Layout
+        # ═══════════════════════════════════════════════════════════════════════
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setChildrenCollapsible(False)
 
-        # --- Filter bar -----------------------------------------------------
-        filter_row = QHBoxLayout()
+        # ───────────────────────────────────────────────────────────────────────
+        # LEFT PANEL: Filter Sidebar (20%)
+        # ───────────────────────────────────────────────────────────────────────
+        left_panel = QFrame()
+        left_panel.setStyleSheet("background-color: #1a1a1a; border-radius: 4px;")
+        left_panel.setMinimumWidth(160)
+        left_panel.setMaximumWidth(220)
+        left_lay = QVBoxLayout(left_panel)
+        left_lay.setContentsMargins(10, 10, 10, 10)
+        left_lay.setSpacing(8)
+
+        # Search box
+        search_label = QLabel("QUICK FILTER")
+        search_label.setStyleSheet("color: #888; font-size: 9px; font-weight: bold;")
+        left_lay.addWidget(search_label)
+
         self._search_edit = QLineEdit()
-        self._search_edit.setPlaceholderText("Search by Shot or Sequence ID...")
+        self._search_edit.setPlaceholderText("🔍 Search...")
         self._search_edit.textChanged.connect(self._on_search_changed)
-        filter_row.addWidget(self._search_edit)
-        root.addLayout(filter_row)
+        left_lay.addWidget(self._search_edit)
 
-        # --- Shot table -----------------------------------------------------
-        self._tree = QTreeWidget()
-        self._tree.itemChanged.connect(self._on_item_changed)
-        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._tree.customContextMenuRequested.connect(self._on_context_menu)
-        self._tree.setRootIsDecorated(False)
-        self._tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
-        self._tree.setHeaderLabels([
-            "", "Status", "Sequence", "Shot", "Frames", "Res", "FPS", "Source", "Destination",
+        left_lay.addSpacing(8)
+
+        # Status filters
+        status_label = QLabel("STATUS")
+        status_label.setStyleSheet("color: #888; font-size: 9px; font-weight: bold;")
+        left_lay.addWidget(status_label)
+
+        self._filter_all = QPushButton("● All (0)")
+        self._filter_all.setCheckable(True)
+        self._filter_all.setChecked(True)
+        self._filter_all.clicked.connect(lambda: self._apply_filter("all"))
+        left_lay.addWidget(self._filter_all)
+
+        self._filter_ready = QPushButton("● Ready (0)")
+        self._filter_ready.setCheckable(True)
+        self._filter_ready.setStyleSheet("QPushButton { text-align: left; color: #4ec9b0; }")
+        self._filter_ready.clicked.connect(lambda: self._apply_filter("ready"))
+        left_lay.addWidget(self._filter_ready)
+
+        self._filter_warning = QPushButton("● Warnings (0)")
+        self._filter_warning.setCheckable(True)
+        self._filter_warning.setStyleSheet("QPushButton { text-align: left; color: #f39c12; }")
+        self._filter_warning.clicked.connect(lambda: self._apply_filter("warning"))
+        left_lay.addWidget(self._filter_warning)
+
+        self._filter_error = QPushButton("● Errors (0)")
+        self._filter_error.setCheckable(True)
+        self._filter_error.setStyleSheet("QPushButton { text-align: left; color: #f44747; }")
+        self._filter_error.clicked.connect(lambda: self._apply_filter("error"))
+        left_lay.addWidget(self._filter_error)
+
+        left_lay.addSpacing(8)
+
+        # Type filters
+        type_label = QLabel("TYPE")
+        type_label.setStyleSheet("color: #888; font-size: 9px; font-weight: bold;")
+        left_lay.addWidget(type_label)
+
+        self._chk_sequences = QCheckBox("Sequences")
+        self._chk_sequences.setChecked(True)
+        self._chk_sequences.stateChanged.connect(self._on_type_filter_changed)
+        left_lay.addWidget(self._chk_sequences)
+
+        self._chk_movies = QCheckBox("Movies")
+        self._chk_movies.setChecked(True)
+        self._chk_movies.stateChanged.connect(self._on_type_filter_changed)
+        left_lay.addWidget(self._chk_movies)
+
+        left_lay.addStretch()
+
+        # Advanced options button (moved here)
+        btn_options = QPushButton("⚙ Options...")
+        btn_options.clicked.connect(self._show_advanced_options)
+        left_lay.addWidget(btn_options)
+
+        main_splitter.addWidget(left_panel)
+
+        # ───────────────────────────────────────────────────────────────────────
+        # CENTER PANEL: Clip Table (60%)
+        # ───────────────────────────────────────────────────────────────────────
+        center_panel = QWidget()
+        center_lay = QVBoxLayout(center_panel)
+        center_lay.setContentsMargins(0, 0, 0, 0)
+        center_lay.setSpacing(4)
+
+        # Drop zone (compact)
+        self._drop_zone = DropZone()
+        self._drop_zone.setMinimumHeight(60)
+        self._drop_zone.setMaximumHeight(80)
+        self._drop_zone.paths_dropped.connect(self._on_drop)
+        center_lay.addWidget(self._drop_zone)
+
+        # Table
+        self._table = QTableWidget()
+        self._table.setColumnCount(7)
+        self._table.setHorizontalHeaderLabels([
+            "", "Filename", "Shot", "Seq", "Frames", "Res", "Status"
         ])
-        hdr = self._tree.header()
-        hdr.setSectionsMovable(True)
-        hdr.setSectionsClickable(True)
-        
-        # Reset modes to allow manual resizing while keeping smart defaults
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed) # Checkbox
-        hdr.resizeSection(0, 28)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed) # Status
-        hdr.resizeSection(1, 55)
-        
-        # All data columns are interactive by default
-        for col in range(2, 8):
-            hdr.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            hdr.resizeSection(col, 80) # Default starting width
-            
-        hdr.setSectionResizeMode(8, QHeaderView.ResizeMode.Stretch) # Destination
-        
-        self._tree.setSortingEnabled(True) # Enable header sorting
-        self._tree.setMinimumHeight(180)
-        root.addWidget(self._tree, 1)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
+        self._table.setAlternatingRowColors(True)
+        self._table.setSortingEnabled(True)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._on_context_menu)
+        self._table.itemSelectionChanged.connect(self._on_selection_changed)
+        self._table.itemChanged.connect(self._on_table_item_changed)
 
-        # --- Options --------------------------------------------------------
-        opt_row1 = QHBoxLayout()
-        self._chk_thumb = QCheckBox("Generate thumbnails")
-        self._chk_thumb.setChecked(True)
-        opt_row1.addWidget(self._chk_thumb)
-        self._chk_proxy = QCheckBox("Generate video proxies")
-        self._chk_proxy.setChecked(False)
-        opt_row1.addWidget(self._chk_proxy)
-        opt_row1.addStretch()
-        root.addLayout(opt_row1)
+        # Set column widths
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(0, 28)  # Checkbox
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Filename
+        for col in [2, 3, 4, 5]:  # Shot, Seq, Frames, Res
+            header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
+            header.resizeSection(col, 80)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(6, 55)  # Status (dot)
 
-        opt_row2 = QHBoxLayout()
-        self._chk_status = QCheckBox("Set PLATE status to OK")
-        self._chk_status.setChecked(True)
-        opt_row2.addWidget(self._chk_status)
-        
-        opt_row2.addSpacing(20)
-        opt_row2.addWidget(QLabel("Colorspace:"))
-        self._ocio_in = QComboBox()
-        self._ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
-        self._ocio_in.currentTextChanged.connect(self._on_ocio_in_changed)
-        opt_row2.addWidget(self._ocio_in)
-        
-        opt_row2.addStretch()
-        root.addLayout(opt_row2)
+        # Set delegate for inline editing
+        self._table.setItemDelegateForColumn(2, EditableDelegate(self._table))  # Shot column
 
-        # --- Summary --------------------------------------------------------
-        self._summary_label = QLabel("No delivery loaded.")
-        self._summary_label.setObjectName("mutedLabel")
-        root.addWidget(self._summary_label)
+        center_lay.addWidget(self._table, 1)
 
-        # --- Action buttons -------------------------------------------------
-        btn_row = QHBoxLayout()
+        main_splitter.addWidget(center_panel)
+
+        # ───────────────────────────────────────────────────────────────────────
+        # RIGHT PANEL: Detail Panel (20%)
+        # ───────────────────────────────────────────────────────────────────────
+        right_panel = QFrame()
+        right_panel.setStyleSheet("background-color: #1a1a1a; border-radius: 4px;")
+        right_panel.setMinimumWidth(180)
+        right_panel.setMaximumWidth(260)
+        right_lay = QVBoxLayout(right_panel)
+        right_lay.setContentsMargins(10, 10, 10, 10)
+        right_lay.setSpacing(8)
+
+        detail_label = QLabel("SELECTION DETAILS")
+        detail_label.setStyleSheet("color: #888; font-size: 9px; font-weight: bold;")
+        right_lay.addWidget(detail_label)
+
+        self._detail_widget = QTextEdit()
+        self._detail_widget.setReadOnly(True)
+        self._detail_widget.setMaximumHeight(200)
+        self._detail_widget.setPlaceholderText("Select a clip to view details...")
+        right_lay.addWidget(self._detail_widget)
+
+        right_lay.addSpacing(8)
+
+        # Override controls
+        override_label = QLabel("OVERRIDE")
+        override_label.setStyleSheet("color: #888; font-size: 9px; font-weight: bold;")
+        right_lay.addWidget(override_label)
+
+        right_lay.addWidget(QLabel("Shot ID:"))
+        self._override_shot = QLineEdit()
+        self._override_shot.setPlaceholderText("Override shot ID...")
+        self._override_shot.setEnabled(False)
+        self._override_shot.textChanged.connect(self._on_override_changed)
+        right_lay.addWidget(self._override_shot)
+
+        right_lay.addStretch()
+
+        main_splitter.addWidget(right_panel)
+
+        # Set splitter proportions (20% | 60% | 20%)
+        main_splitter.setSizes([200, 600, 200])
+
+        root.addWidget(main_splitter, 1)
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # BOTTOM ACTION BAR
+        # ═══════════════════════════════════════════════════════════════════════
+        action_bar = QFrame()
+        action_bar.setStyleSheet("background-color: #1e1e1e; border-radius: 4px; padding: 6px;")
+        action_bar_lay = QHBoxLayout(action_bar)
+        action_bar_lay.setContentsMargins(8, 4, 8, 4)
+
         self._btn_clear = QPushButton("Clear")
         self._btn_clear.clicked.connect(self._on_clear)
-        btn_row.addWidget(self._btn_clear)
-        btn_row.addStretch()
-        
+        action_bar_lay.addWidget(self._btn_clear)
+
+        self._summary_label = QLabel("No delivery loaded.")
+        self._summary_label.setObjectName("mutedLabel")
+        action_bar_lay.addWidget(self._summary_label)
+
+        action_bar_lay.addStretch()
+
         self._btn_view_report = QPushButton("View Report")
         self._btn_view_report.clicked.connect(self._on_view_report)
         self._btn_view_report.setVisible(False)
         self._btn_view_report.setStyleSheet("color: #4ec9b0; font-weight: bold;")
-        btn_row.addWidget(self._btn_view_report)
+        action_bar_lay.addWidget(self._btn_view_report)
 
         self._btn_cancel = QPushButton("Cancel")
         self._btn_cancel.clicked.connect(self._on_cancel)
         self._btn_cancel.setVisible(False)
-        btn_row.addWidget(self._btn_cancel)
-        self._btn_ingest = QPushButton("Ingest 0/0")
+        action_bar_lay.addWidget(self._btn_cancel)
+
+        self._btn_ingest = QPushButton("Execute")
         self._btn_ingest.setObjectName("ingestButton")
         self._btn_ingest.setEnabled(False)
         self._btn_ingest.clicked.connect(self._on_ingest)
-        btn_row.addWidget(self._btn_ingest)
-        root.addLayout(btn_row)
+        self._btn_ingest.setMinimumWidth(120)
+        self._btn_ingest.setMinimumHeight(36)
+        action_bar_lay.addWidget(self._btn_ingest)
 
-        # --- Progress bar ---------------------------------------------------
+        root.addWidget(action_bar)
+
+        # Progress bar (hidden by default)
         self._progress = QProgressBar()
         self._progress.setVisible(False)
         root.addWidget(self._progress)
 
-        # --- Log panel (collapsible) ----------------------------------------
+        # Log panel (collapsible)
         self._log_toggle = QPushButton("[ + ] Log")
         self._log_toggle.setMaximumWidth(80)
         self._log_toggle.clicked.connect(self._toggle_log)
@@ -637,6 +725,420 @@ class IngestWindow(QMainWindow):
         self._log_edit.setMaximumHeight(160)
         self._log_edit.setVisible(False)
         root.addWidget(self._log_edit)
+
+        # Keyboard shortcuts
+        self._setup_shortcuts()
+
+        # Initialize naming rule combo
+        self._rule_combo = QComboBox()
+        self._rule_combo.addItem("Auto-detect")
+        self._populate_rule_combo()
+
+        # Initialize options checkboxes
+        self._chk_thumb = QCheckBox()
+        self._chk_thumb.setChecked(True)
+        self._chk_proxy = QCheckBox()
+        self._chk_proxy.setChecked(False)
+        self._chk_status = QCheckBox()
+        self._chk_status.setChecked(True)
+        self._ocio_in = QComboBox()
+        self._ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
+        self._btn_edl = QPushButton("Load EDL...")
+
+    # -- Professional UI Methods ---------------------------------------------
+
+    def _setup_shortcuts(self) -> None:
+        """Setup keyboard shortcuts for professional workflow"""
+        from PySide6.QtGui import QShortcut, QKeySequence
+
+        # Ctrl+F = Focus search
+        QShortcut(QKeySequence("Ctrl+F"), self, lambda: self._search_edit.setFocus())
+
+        # Enter = Execute (if enabled)
+        QShortcut(QKeySequence(Qt.Key.Key_Return), self, self._on_shortcut_execute)
+
+        # Escape = Clear selection
+        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, lambda: self._table.clearSelection())
+
+        # Delete = Remove selected clips
+        QShortcut(QKeySequence(Qt.Key.Key_Delete), self, self._on_remove_selected)
+
+    def _on_shortcut_execute(self) -> None:
+        """Execute ingest via keyboard shortcut"""
+        if self._btn_ingest.isEnabled():
+            self._on_ingest()
+
+    def _apply_filter(self, filter_type: str) -> None:
+        """Apply status filter (all/ready/warning/error)"""
+        self._current_filter_status = filter_type
+
+        # Update button states
+        self._filter_all.setChecked(filter_type == "all")
+        self._filter_ready.setChecked(filter_type == "ready")
+        self._filter_warning.setChecked(filter_type == "warning")
+        self._filter_error.setChecked(filter_type == "error")
+
+        # Apply filter to table
+        self._apply_table_filters()
+
+    def _on_type_filter_changed(self) -> None:
+        """Apply type filters (sequences/movies)"""
+        self._apply_table_filters()
+
+    def _on_search_changed(self, text: str) -> None:
+        """Filter table rows by search text"""
+        self._apply_table_filters()
+
+    def _apply_table_filters(self) -> None:
+        """Apply all active filters to table rows"""
+        for row in range(self._table.rowCount()):
+            show = True
+
+            # Status filter
+            if self._current_filter_status != "all":
+                # Check status column
+                status_item = self._table.cellWidget(row, 6)  # Status column
+                if status_item and hasattr(status_item, 'toolTip'):
+                    status = status_item.toolTip().lower()
+                    if self._current_filter_status not in status:
+                        show = False
+
+            # Type filter
+            if show:
+                # Check if it's a sequence or movie
+                frames_item = self._table.item(row, 4)  # Frames column
+                if frames_item:
+                    frames_text = frames_item.text()
+                    is_sequence = "f" in frames_text and int(frames_text.replace("f", "")) > 1
+
+                    if is_sequence and not self._chk_sequences.isChecked():
+                        show = False
+                    elif not is_sequence and not self._chk_movies.isChecked():
+                        show = False
+
+            # Search filter
+            if show and self._search_edit.text():
+                search = self._search_edit.text().lower()
+                shot_item = self._table.item(row, 2)  # Shot column
+                seq_item = self._table.item(row, 3)   # Seq column
+                file_item = self._table.item(row, 1)  # Filename column
+
+                match = False
+                if shot_item and search in shot_item.text().lower():
+                    match = True
+                if seq_item and search in seq_item.text().lower():
+                    match = True
+                if file_item and search in file_item.text().lower():
+                    match = True
+
+                if not match:
+                    show = False
+
+            self._table.setRowHidden(row, not show)
+
+    def _on_selection_changed(self) -> None:
+        """Update detail panel when selection changes"""
+        selected = self._table.selectedItems()
+        if not selected:
+            self._detail_widget.clear()
+            self._override_shot.clear()
+            self._override_shot.setEnabled(False)
+            self._selected_plan_idx = -1
+            return
+
+        # Get the first selected row
+        row = self._table.currentRow()
+        if row < 0 or row >= len(self._plans):
+            return
+
+        self._selected_plan_idx = row
+        plan = self._plans[row]
+
+        # Update detail panel
+        details = []
+        details.append(f"<b>Clip:</b> {plan.match.clip.base_name}.{plan.match.clip.extension}")
+        details.append(f"<b>Shot:</b> {plan.shot_id or '—'}")
+        details.append(f"<b>Sequence:</b> {plan.sequence_id or '—'}")
+        details.append(f"<b>Frames:</b> {plan.match.clip.frame_count if plan.match.clip.is_sequence else 1}")
+
+        if plan.media_info.width and plan.media_info.height:
+            details.append(f"<b>Resolution:</b> {plan.media_info.width}x{plan.media_info.height}")
+        if plan.media_info.fps:
+            details.append(f"<b>FPS:</b> {plan.media_info.fps:.2f}")
+        if plan.media_info.codec:
+            details.append(f"<b>Codec:</b> {plan.media_info.codec}")
+        if plan.media_info.color_space:
+            details.append(f"<b>Colorspace:</b> {plan.media_info.color_space}")
+
+        if plan.error:
+            details.append(f"<br><b style='color:#f44747'>Error:</b> {plan.error}")
+
+        if plan.match.clip.missing_frames:
+            details.append(f"<br><b style='color:#f39c12'>Missing Frames:</b> {len(plan.match.clip.missing_frames)}")
+
+        self._detail_widget.setHtml("<br>".join(details))
+
+        # Enable override
+        self._override_shot.setEnabled(True)
+        if plan.shot_id:
+            self._override_shot.setText(plan.shot_id)
+
+    def _on_override_changed(self, text: str) -> None:
+        """Apply shot ID override to selected plan"""
+        if self._selected_plan_idx >= 0 and self._selected_plan_idx < len(self._plans):
+            plan = self._plans[self._selected_plan_idx]
+            plan.shot_id = text
+            # Update table
+            self._table.item(self._selected_plan_idx, 2).setText(text)
+            self._update_summary()
+
+    def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
+        """Handle inline edits in table"""
+        if item.column() == 2:  # Shot column
+            row = item.row()
+            if row < len(self._plans):
+                self._plans[row].shot_id = item.text()
+                self._update_summary()
+
+    def _on_remove_selected(self) -> None:
+        """Remove selected clips from table"""
+        selected_rows = sorted(set(item.row() for item in self._table.selectedItems()), reverse=True)
+        for row in selected_rows:
+            if row < len(self._plans):
+                del self._plans[row]
+            self._table.removeRow(row)
+
+        self._update_summary()
+        self._update_filter_counts()
+
+    def _show_advanced_options(self) -> None:
+        """Show advanced options dialog"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Advanced Options")
+        dialog.resize(400, 300)
+
+        lay = QVBoxLayout(dialog)
+
+        # Thumbnails
+        chk_thumb = QCheckBox("Generate thumbnails")
+        chk_thumb.setChecked(self._chk_thumb.isChecked())
+        lay.addWidget(chk_thumb)
+
+        # Proxies
+        chk_proxy = QCheckBox("Generate video proxies")
+        chk_proxy.setChecked(self._chk_proxy.isChecked())
+        lay.addWidget(chk_proxy)
+
+        # Status update
+        chk_status = QCheckBox("Set step status to OK on success")
+        chk_status.setChecked(self._chk_status.isChecked())
+        lay.addWidget(chk_status)
+
+        lay.addSpacing(10)
+
+        # OCIO
+        ocio_group = QGroupBox("Color Management (OCIO)")
+        ocio_lay = QVBoxLayout(ocio_group)
+
+        ocio_lay.addWidget(QLabel("Source Colorspace:"))
+        ocio_in = QComboBox()
+        ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
+        ocio_in.setCurrentText(self._ocio_in.currentText())
+        ocio_in.currentTextChanged.connect(self._on_ocio_in_changed)
+        ocio_lay.addWidget(ocio_in)
+
+        lay.addWidget(ocio_group)
+
+        lay.addSpacing(10)
+
+        # Naming rules
+        rule_group = QGroupBox("Naming Rules")
+        rule_lay = QVBoxLayout(rule_group)
+
+        rule_combo = QComboBox()
+        rule_combo.addItem("Auto-detect")
+        # Copy existing rules to dialog
+        for i in range(1, self._rule_combo.count()):
+            rule_combo.addItem(self._rule_combo.itemText(i))
+        rule_combo.setCurrentIndex(self._rule_combo.currentIndex())
+        rule_lay.addWidget(rule_combo)
+
+        rule_btns = QHBoxLayout()
+        btn_architect = QPushButton("Architect...")
+        btn_architect.clicked.connect(self._on_launch_architect)
+        rule_btns.addWidget(btn_architect)
+
+        btn_edl = QPushButton("Load EDL...")
+        btn_edl.clicked.connect(self._on_load_edl)
+        rule_btns.addWidget(btn_edl)
+
+        btn_edit = QPushButton("Edit Rules...")
+        btn_edit.clicked.connect(self._on_edit_rules)
+        rule_btns.addWidget(btn_edit)
+
+        rule_lay.addLayout(rule_btns)
+
+        lay.addWidget(rule_group)
+
+        lay.addStretch()
+
+        # Buttons
+        btn_row = QHBoxLayout()
+        btn_apply = QPushButton("Apply")
+        btn_apply.clicked.connect(lambda: self._apply_options(chk_thumb, chk_proxy, chk_status, ocio_in, rule_combo, dialog))
+        btn_row.addWidget(btn_apply)
+        btn_close = QPushButton("Close")
+        btn_close.clicked.connect(dialog.accept)
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+
+        dialog.exec()
+
+    def _apply_options(self, chk_thumb, chk_proxy, chk_status, ocio_in, rule_combo, dialog):
+        """Apply options from dialog"""
+        self._chk_thumb.setChecked(chk_thumb.isChecked())
+        self._chk_proxy.setChecked(chk_proxy.isChecked())
+        self._chk_status.setChecked(chk_status.isChecked())
+        self._ocio_in.setCurrentText(ocio_in.currentText())
+        self._rule_combo.setCurrentIndex(rule_combo.currentIndex())
+        dialog.accept()
+
+    def _update_filter_counts(self) -> None:
+        """Update the count badges on filter buttons"""
+        if not hasattr(self, '_plans'):
+            return
+
+        total = len(self._plans)
+        ready = sum(1 for p in self._plans if p.can_execute and not p.error)
+        warning = sum(1 for p in self._plans if p.can_execute and p.error and "warning" in p.error.lower())
+        error = sum(1 for p in self._plans if not p.can_execute or (p.error and "error" in p.error.lower()))
+
+        self._filter_all.setText(f"● All ({total})")
+        self._filter_ready.setText(f"● Ready ({ready})")
+        self._filter_warning.setText(f"● Warnings ({warning})")
+        self._filter_error.setText(f"● Errors ({error})")
+
+    def _populate_table(self) -> None:
+        """Populate the table with current plans (replaces _populate_tree)"""
+        self._table.setRowCount(0)
+        self._table.setRowCount(len(self._plans))
+
+        for idx, plan in enumerate(self._plans):
+            clip = plan.match.clip
+
+            # Column 0: Checkbox
+            chk = QCheckBox()
+            chk.setChecked(plan.can_execute)
+            chk.stateChanged.connect(self._on_checkbox_changed)
+            chk_widget = QWidget()
+            chk_lay = QHBoxLayout(chk_widget)
+            chk_lay.addWidget(chk)
+            chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            chk_lay.setContentsMargins(0, 0, 0, 0)
+            self._table.setCellWidget(idx, 0, chk_widget)
+
+            # Column 1: Filename
+            filename = f"{clip.base_name}.{clip.extension}"
+            if clip.is_sequence:
+                filename = f"{clip.base_name}.####.{clip.extension}"
+            file_item = QTableWidgetItem(filename)
+            file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(idx, 1, file_item)
+
+            # Column 2: Shot (editable)
+            shot_item = QTableWidgetItem(plan.shot_id or "")
+            if not plan.shot_id:
+                shot_item.setForeground(QColor("#f44747"))  # Red if missing
+            self._table.setItem(idx, 2, shot_item)
+
+            # Column 3: Sequence
+            seq_item = QTableWidgetItem(plan.sequence_id or "—")
+            seq_item.setFlags(seq_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(idx, 3, seq_item)
+
+            # Column 4: Frames
+            frames_text = f"{clip.frame_count}f" if clip.is_sequence else "1f"
+            frames_item = QTableWidgetItem(frames_text)
+            frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(idx, 4, frames_item)
+
+            # Column 5: Resolution
+            res_text = "—"
+            if plan.media_info.width and plan.media_info.height:
+                res_text = f"{plan.media_info.width}x{plan.media_info.height}"
+            res_item = QTableWidgetItem(res_text)
+            res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._table.setItem(idx, 5, res_item)
+
+            # Column 6: Status (color dot)
+            status = "pending"
+            if plan.can_execute and not plan.error:
+                status = "ready"
+            elif plan.error:
+                if "warning" in plan.error.lower():
+                    status = "warning"
+                else:
+                    status = "error"
+            elif plan.is_duplicate:
+                status = "duplicate"
+
+            status_indicator = StatusIndicator(status)
+            self._table.setCellWidget(idx, 6, status_indicator)
+
+            # Set row height for better readability
+            self._table.setRowHeight(idx, 28)
+
+        # Update filter counts
+        self._update_filter_counts()
+        self._update_summary()
+
+    def _on_checkbox_changed(self, state: int) -> None:
+        """Handle checkbox state changes"""
+        # Find which row changed
+        sender = self.sender()
+        for row in range(self._table.rowCount()):
+            chk_widget = self._table.cellWidget(row, 0)
+            if chk_widget and chk_widget.findChild(QCheckBox) == sender:
+                if row < len(self._plans):
+                    self._plans[row].can_execute = (state == Qt.CheckState.Checked.value)
+                break
+
+        self._update_summary()
+
+    def _on_context_override_shot(self) -> None:
+        """Override shot ID for selected clips"""
+        from PySide6.QtWidgets import QInputDialog
+
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        shot_id, ok = QInputDialog.getText(
+            self, "Override Shot ID",
+            f"Enter shot ID for {len(selected_rows)} clip(s):"
+        )
+
+        if ok and shot_id:
+            for row in selected_rows:
+                if row < len(self._plans):
+                    self._plans[row].shot_id = shot_id
+                    self._table.item(row, 2).setText(shot_id)
+
+            self._update_summary()
+
+    def _on_context_skip(self) -> None:
+        """Skip selected clips (uncheck them)"""
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        for row in selected_rows:
+            if row < len(self._plans):
+                self._plans[row].can_execute = False
+                chk_widget = self._table.cellWidget(row, 0)
+                if chk_widget:
+                    chk = chk_widget.findChild(QCheckBox)
+                    if chk:
+                        chk.setChecked(False)
+
+        self._update_summary()
 
     # -- Helpers -------------------------------------------------------------
 
@@ -665,13 +1167,14 @@ class IngestWindow(QMainWindow):
             self._status_label.setObjectName("statusConnected")
             pid = self._engine.project_id
             pname = self._engine.project_name
-            self._project_label.setText(f"PROJECT: {pid} | {pname}")
-            
-            # Update Standards Display
-            fps = self._engine._project_fps
-            w = self._engine._project_width
-            h = self._engine._project_height
-            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.2f} FPS")
+            self._project_combo.clear()
+            self._project_combo.addItem(f"{pid} - {pname}")
+            self._project_combo.setCurrentIndex(0)
+
+            # Note: Standards display removed from minimal header in professional UI
+            # fps = self._engine._project_fps
+            # w = self._engine._project_width
+            # h = self._engine._project_height
 
             # Populate steps
             self._step_combo.clear()
@@ -682,9 +1185,10 @@ class IngestWindow(QMainWindow):
         else:
             self._status_orb.setStyleSheet("background-color: #f44747; border-radius: 6px;")
             self._status_orb.setGraphicsEffect(None)
-            self._status_label.setText("DAEMON OFFLINE")
+            self._status_label.setText("OFFLINE")
             self._status_label.setObjectName("statusDisconnected")
-            self._project_label.setText("PROJECT: — (CONNECTION REQUIRED)")
+            self._project_combo.clear()
+            self._project_combo.addItem("— (Connection Required)")
             self._btn_ingest.setToolTip("Ramses connection required to ingest.")
 
         # Re-polish to apply dynamic objectName change
@@ -740,134 +1244,9 @@ class IngestWindow(QMainWindow):
             self._btn_ingest.setToolTip("")
 
     def _get_enabled_plans(self) -> list[IngestPlan]:
-        enabled = []
-        for i in range(self._tree.topLevelItemCount()):
-            item = self._tree.topLevelItem(i)
-            if item.checkState(0) == Qt.CheckState.Checked and i < len(self._plans):
-                plan = self._plans[i]
-                if plan.can_execute:
-                    enabled.append(plan)
-        return enabled
+        """Get list of plans that can be executed"""
+        return [p for p in self._plans if p.can_execute]
 
-    def _populate_tree(self) -> None:
-        self._tree.clear()
-        for plan in self._plans:
-            item = QTreeWidgetItem()
-            # Link the plan object to the tree item for robust retrieval during sorting
-            item.setData(0, Qt.ItemDataRole.UserRole, plan)
-
-            # Checkbox
-            if plan.can_execute:
-                item.setCheckState(0, Qt.CheckState.Checked)
-            else:
-                item.setCheckState(0, Qt.CheckState.Unchecked)
-                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
-
-            # Status Badge (Tier 1 High-Fidelity)
-            status_widget = QWidget()
-            status_lay = QHBoxLayout(status_widget)
-            status_lay.setContentsMargins(4, 4, 4, 4)
-            status_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            
-            lbl_badge = QLabel()
-            lbl_badge.setFixedWidth(42)
-            lbl_badge.setFixedHeight(18)
-            lbl_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_badge.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
-            
-            if not plan.match.matched:
-                lbl_badge.setText(" ? ")
-                lbl_badge.setStyleSheet("background-color: #444; color: #888; border-radius: 4px;")
-            elif plan.is_new_shot:
-                lbl_badge.setText(" NEW ")
-                lbl_badge.setStyleSheet("background-color: #27ae60; color: white; border-radius: 4px; font-weight: bold;")
-            else:
-                lbl_badge.setText(" UPD ")
-                lbl_badge.setStyleSheet("background-color: #2980b9; color: white; border-radius: 4px; font-weight: bold;")
-            
-            status_lay.addWidget(lbl_badge)
-            self._tree.addTopLevelItem(item)
-            self._tree.setItemWidget(item, 1, status_widget)
-
-            # Sequence / Shot
-            item.setText(2, plan.sequence_id or "???")
-            item.setText(3, plan.shot_id or "???")
-
-            # Frames
-            clip = plan.match.clip
-            mi = plan.media_info
-            if clip.is_sequence:
-                item.setText(4, str(clip.frame_count))
-            elif mi.frame_count > 0:
-                item.setText(4, str(mi.frame_count))
-            else:
-                item.setText(4, "1") # Single file
-
-            # --- Technical Validation (Tier 1 Heuristics) ---
-            mi = plan.media_info
-            # Get effective standard (Sequence override or Project default)
-            target_fps, target_w, target_h = self._engine._project_fps, self._engine._project_width, self._engine._project_height
-            if plan.sequence_id and plan.sequence_id.upper() in self._engine._sequence_settings:
-                target_fps, target_w, target_h = self._engine._sequence_settings[plan.sequence_id.upper()]
-
-            # Resolution Check
-            if mi.is_valid:
-                item.setText(5, f"{mi.width}x{mi.height}")
-                if mi.width != target_w or mi.height != target_h:
-                    item.setForeground(5, QColor("#f39c12")) # Amber warning
-                    item.setToolTip(5, f"Resolution mismatch: {mi.width}x{mi.height} vs Standard {target_w}x{target_h}")
-            else:
-                item.setText(5, "—")
-
-            # FPS Check
-            display_fps = mi.fps
-            if not clip.is_sequence and mi.frame_count <= 1:
-                # Still image: assume target project FPS for consistency
-                display_fps = target_fps
-
-            if display_fps > 0:
-                item.setText(6, f"{display_fps:.3f}")
-                if round(display_fps, 3) != round(target_fps, 3):
-                    item.setForeground(6, QColor("#f39c12")) # Amber warning
-                    item.setToolTip(6, f"FPS mismatch: {display_fps:.3f} vs Standard {target_fps:.3f}")
-            else:
-                item.setText(6, "—")
-
-            # Global Row Warning: if any technical spec is off, highlight the background subtly
-            has_mismatch = (mi.is_valid and (mi.width != target_w or mi.height != target_h)) or \
-                           (display_fps > 0 and round(display_fps, 3) != round(target_fps, 3))
-            
-            if has_mismatch:
-                # Subtly tint the row to draw attention
-                for col in range(self._tree.columnCount()):
-                    if col != 1: # Don't tint the status badge area
-                        item.setBackground(col, QColor(243, 156, 18, 20)) # 8% opacity Amber
-
-            # Source
-            item.setText(7, clip.base_name)
-            item.setToolTip(7, clip.first_file)
-
-            # Destination
-            if plan.target_publish_dir:
-                dest_base = os.path.basename(os.path.dirname(plan.target_publish_dir)) # _published
-                version = os.path.basename(plan.target_publish_dir) # v001
-                # Show a shortened version: SHOT/STEP/_published/v001
-                display_path = f"{plan.shot_id}/{plan.step_id}/{dest_base}/{version}"
-                item.setText(8, display_path)
-                item.setToolTip(8, plan.target_publish_dir)
-            else:
-                item.setText(8, "—")
-
-            # Editable seq/shot for unmatched
-            if not plan.match.matched:
-                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
-                # Subtle red background for issues
-                for col in range(self._tree.columnCount()):
-                    item.setBackground(col, QColor("#3d1c1c"))
-
-            self._tree.addTopLevelItem(item)
-
-        self._update_summary()
 
     # -- Slots ---------------------------------------------------------------
 
@@ -905,7 +1284,7 @@ class IngestWindow(QMainWindow):
                 if self._engine.connected:
                     from ramses_ingest.publisher import resolve_paths_from_daemon
                     resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
-                self._populate_tree()
+                self._populate_table()
         else:
             self._engine.step_id = ""
             self._chk_status.setText("Set status to OK")
@@ -917,72 +1296,56 @@ class IngestWindow(QMainWindow):
         if column == 0:
             self._update_summary()
 
-    def _on_search_changed(self, text: str) -> None:
-        """Filter the shot table based on sequence or shot ID."""
-        search = text.lower()
-        for i in range(self._tree.topLevelItemCount()):
-            item = self._tree.topLevelItem(i)
-            seq = item.text(2).lower()
-            shot = item.text(3).lower()
-            item.setHidden(search not in seq and search not in shot)
-
     def _on_context_menu(self, pos) -> None:
-        """Show a right-click menu for the selected items."""
+        """Show context menu for selected clips"""
         from PySide6.QtWidgets import QMenu
         from PySide6.QtGui import QAction
-        
-        selected = self._tree.selectedItems()
-        if not selected:
+
+        # Get selected rows
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
             return
 
         menu = QMenu(self)
-        
-        if len(selected) == 1:
-            item = selected[0]
-            idx = self._tree.indexOfTopLevelItem(item)
-            plan = self._plans[idx]
-            
-            act_src = QAction("Open Source Folder", self)
-            act_src.triggered.connect(lambda: os.startfile(plan.match.clip.directory))
-            menu.addAction(act_src)
 
-            if plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
-                act_dst = QAction("Open Destination Folder", self)
-                act_dst.triggered.connect(lambda: os.startfile(plan.target_publish_dir))
-                menu.addAction(act_dst)
-            
-            menu.addSeparator()
-        
-        label = f"Remove {len(selected)} item(s) from List"
-        act_remove = QAction(label, self)
-        act_remove.triggered.connect(self._remove_selected_plans)
+        # Actions
+        act_override = QAction("Override Shot ID...", self)
+        act_override.triggered.connect(self._on_context_override_shot)
+        menu.addAction(act_override)
+
+        act_skip = QAction("Skip Selected", self)
+        act_skip.triggered.connect(self._on_context_skip)
+        menu.addAction(act_skip)
+
+        menu.addSeparator()
+
+        # Single selection actions
+        if len(selected_rows) == 1:
+            row = selected_rows[0]
+            if row < len(self._plans):
+                plan = self._plans[row]
+
+                act_src = QAction("Open Source Folder", self)
+                act_src.triggered.connect(lambda: os.startfile(plan.match.clip.directory))
+                menu.addAction(act_src)
+
+                if plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
+                    act_dst = QAction("Open Destination Folder", self)
+                    act_dst.triggered.connect(lambda: os.startfile(plan.target_publish_dir))
+                    menu.addAction(act_dst)
+
+                menu.addSeparator()
+
+        act_remove = QAction("Remove from List", self)
+        act_remove.triggered.connect(self._on_remove_selected)
         menu.addAction(act_remove)
 
-        menu.exec(self._tree.viewport().mapToGlobal(pos))
+        menu.exec(self._table.viewport().mapToGlobal(pos))
 
-    def _remove_selected_plans(self) -> None:
-        """Batch remove all selected items robustly using plan object linkage."""
-        selected = self._tree.selectedItems()
-        if not selected:
-            return
-            
-        # Get the actual plan objects from the selected items
-        plans_to_remove = []
-        for item in selected:
-            plan = item.data(0, Qt.ItemDataRole.UserRole)
-            if plan:
-                plans_to_remove.append(plan)
-        
-        # Remove from internal list
-        for plan in plans_to_remove:
-            if plan in self._plans:
-                self._plans.remove(plan)
-        
-        self._populate_tree()
 
     def _remove_plan_at(self, index: int) -> None:
         self._plans.pop(index)
-        self._populate_tree()
+        self._populate_table()
 
     def _on_drop(self, paths: list[str]) -> None:
         if self._scan_worker and self._scan_worker.isRunning():
@@ -1001,7 +1364,7 @@ class IngestWindow(QMainWindow):
 
     def _on_scan_done(self, plans: list[IngestPlan]) -> None:
         self._plans.extend(plans)
-        self._populate_tree()
+        self._populate_table()
         self._drop_zone._label.setText("Drop Footage Here\nAccepts folders and files")
         self._log(f"Scan complete: {len(plans)} new clip(s) detected.")
 
@@ -1011,7 +1374,7 @@ class IngestWindow(QMainWindow):
 
     def _on_clear(self) -> None:
         self._plans.clear()
-        self._tree.clear()
+        self._table.setRowCount(0)
         self._update_summary()
         self._log_edit.clear()
         self._progress.setVisible(False)
@@ -1128,7 +1491,7 @@ class IngestWindow(QMainWindow):
         
         if updated:
             self._log(f"  Mapped {updated} shot(s) from EDL.")
-            self._populate_tree()
+            self._populate_table()
         else:
             self._log("  No matches found in EDL.")
 
