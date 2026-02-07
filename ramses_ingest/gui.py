@@ -505,10 +505,11 @@ class IngestWindow(QMainWindow):
 
         # Project
         header_lay.addWidget(QLabel("Project:"))
-        self._project_combo = QComboBox()
-        self._project_combo.setMinimumWidth(120)
-        self._project_combo.addItem("—")
-        header_lay.addWidget(self._project_combo)
+        self._project_edit = QLineEdit("—")
+        self._project_edit.setReadOnly(True)
+        self._project_edit.setMinimumWidth(180)
+        self._project_edit.setStyleSheet("background-color: #252526; color: #00bff3; font-weight: bold;")
+        header_lay.addWidget(self._project_edit)
 
         # Step
         header_lay.addWidget(QLabel("Step:"))
@@ -751,6 +752,15 @@ class IngestWindow(QMainWindow):
         self._btn_cancel.setVisible(False)
         action_bar_lay.addWidget(self._btn_cancel)
 
+        # Dry Run Toggle (Moved to main window for visibility)
+        self._chk_dry_run = QCheckBox("Dry Run")
+        self._chk_dry_run.setToolTip("Simulation mode: skips actual file copying.")
+        self._chk_dry_run.setChecked(False)
+        self._chk_dry_run.stateChanged.connect(self._update_summary)
+        action_bar_lay.addWidget(self._chk_dry_run)
+
+        action_bar_lay.addSpacing(10)
+
         self._btn_ingest = QPushButton("Execute")
         self._btn_ingest.setObjectName("ingestButton")
         self._btn_ingest.setEnabled(False)
@@ -795,8 +805,6 @@ class IngestWindow(QMainWindow):
         self._chk_status.setChecked(True)
         self._chk_fast_verify = QCheckBox()
         self._chk_fast_verify.setChecked(False)
-        self._chk_dry_run = QCheckBox()
-        self._chk_dry_run.setChecked(False)
         self._ocio_in = QComboBox()
         self._ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
         self._btn_edl = QPushButton("Load EDL...")
@@ -945,29 +953,28 @@ class IngestWindow(QMainWindow):
 
         details.append(f"<b>Frames:</b> {fc}")
 
-                if plan.media_info.width and plan.media_info.height:
+        if plan.media_info.width and plan.media_info.height:
+            res_val = f"{plan.media_info.width}x{plan.media_info.height}"
 
-                    res_val = f"{plan.media_info.width}x{plan.media_info.height}"
+            if self._engine._project_width > 0 and (
+                plan.media_info.width != self._engine._project_width
+                or plan.media_info.height != self._engine._project_height
+            ):
+                res_val = f"<b style='color:#f44747'>{res_val} (Project: {self._engine._project_width}x{self._engine._project_height})</b>"
 
-                    if self._engine._project_width > 0 and (plan.media_info.width != self._engine._project_width or plan.media_info.height != self._engine._project_height):
+            details.append(f"<b>Resolution:</b> {res_val}")
 
-                        res_val = f"<b style='color:#f44747'>{res_val} (Project: {self._engine._project_width}x{self._engine._project_height})</b>"
+        if plan.media_info.fps:
+            fps_val = f"{plan.media_info.fps:.2f}"
 
-                    details.append(f"<b>Resolution:</b> {res_val}")
+            if (
+                self._engine._project_fps > 0
+                and abs(plan.media_info.fps - self._engine._project_fps) > 0.001
+            ):
+                fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps:.2f})</b>"
 
-                    
+            details.append(f"<b>FPS:</b> {fps_val}")
 
-                if plan.media_info.fps:
-
-                    fps_val = f"{plan.media_info.fps:.2f}"
-
-                    if self._engine._project_fps > 0 and abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
-
-                        fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps:.2f})</b>"
-
-                    details.append(f"<b>FPS:</b> {fps_val}")
-
-        
         if plan.media_info.codec:
             details.append(f"<b>Codec:</b> {plan.media_info.codec}")
         if plan.media_info.color_space:
@@ -1089,18 +1096,16 @@ class IngestWindow(QMainWindow):
         lay.addWidget(chk_status)
 
         # Fast Verify
+
         chk_fast = QCheckBox("Fast Verify (MD5 first/mid/last only)")
+
         chk_fast.setToolTip(
             "Speeds up ingest by only verifying 3 frames per sequence instead of all."
         )
-        chk_fast.setChecked(self._chk_fast_verify.isChecked())
-        lay.addWidget(chk_fast)
 
-        # Dry Run
-        chk_dry = QCheckBox("Dry Run (Simulation mode)")
-        chk_dry.setToolTip("Runs the entire process but skips actual file copying.")
-        chk_dry.setChecked(self._chk_dry_run.isChecked())
-        lay.addWidget(chk_dry)
+        chk_fast.setChecked(self._chk_fast_verify.isChecked())
+
+        lay.addWidget(chk_fast)
 
         lay.addSpacing(10)
 
@@ -1159,7 +1164,6 @@ class IngestWindow(QMainWindow):
                 chk_proxy,
                 chk_status,
                 chk_fast,
-                chk_dry,
                 ocio_in,
                 rule_combo,
                 dialog,
@@ -1179,7 +1183,6 @@ class IngestWindow(QMainWindow):
         chk_proxy,
         chk_status,
         chk_fast,
-        chk_dry,
         ocio_in,
         rule_combo,
         dialog,
@@ -1189,7 +1192,6 @@ class IngestWindow(QMainWindow):
         self._chk_proxy.setChecked(chk_proxy.isChecked())
         self._chk_status.setChecked(chk_status.isChecked())
         self._chk_fast_verify.setChecked(chk_fast.isChecked())
-        self._chk_dry_run.setChecked(chk_dry.isChecked())
         self._ocio_in.setCurrentText(ocio_in.currentText())
         self._rule_combo.setCurrentIndex(rule_combo.currentIndex())
         self._update_summary()
@@ -1246,6 +1248,12 @@ class IngestWindow(QMainWindow):
                 filename = f"{clip.base_name}.####.{clip.extension}"
             file_item = QTableWidgetItem(filename)
             file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            
+            # Highlight Filename if there's a collision
+            if "COLLISION" in (plan.error or ""):
+                file_item.setBackground(QColor(180, 50, 50, 150)) # Muted Red
+                file_item.setToolTip(plan.error)
+                
             self._table.setItem(idx, 1, file_item)
 
             # Column 2: Shot (editable)
@@ -1260,8 +1268,10 @@ class IngestWindow(QMainWindow):
             ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             # Check if filename version matches Ramses version
             if plan.match.version and plan.match.version != plan.version:
-                ver_item.setBackground(QColor(120, 100, 0, 100)) # Muted Yellow
-                ver_item.setToolTip(f"Version Mismatch: Filename is v{plan.match.version:03d}, Ramses next is v{plan.version:03d}")
+                ver_item.setBackground(QColor(120, 100, 0, 100))  # Muted Yellow
+                ver_item.setToolTip(
+                    f"Version Mismatch: Filename is v{plan.match.version:03d}, Ramses next is v{plan.version:03d}"
+                )
             self._table.setItem(idx, 3, ver_item)
 
             # Column 4: Sequence
@@ -1282,41 +1292,52 @@ class IngestWindow(QMainWindow):
             frames_item = QTableWidgetItem(str(fc))
             frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if clip.missing_frames:
-                frames_item.setBackground(QColor(150, 50, 0, 150)) # Muted Orange
-                frames_item.setToolTip(f"Gaps detected: {len(clip.missing_frames)} missing frames")
+                frames_item.setBackground(QColor(150, 50, 0, 150))  # Muted Orange
+                frames_item.setToolTip(
+                    f"Gaps detected: {len(clip.missing_frames)} missing frames"
+                )
             self._table.setItem(idx, 5, frames_item)
 
             # Column 6: Resolution
             res_text = "—"
             is_tech_mismatch = False
             mismatch_msg = ""
-            
+
             if plan.media_info.width and plan.media_info.height:
                 res_text = f"{plan.media_info.width}x{plan.media_info.height}"
                 # Check Resolution
-                if self._engine._project_width > 0 and (plan.media_info.width != self._engine._project_width or plan.media_info.height != self._engine._project_height):
+                if self._engine._project_width > 0 and (
+                    plan.media_info.width != self._engine._project_width
+                    or plan.media_info.height != self._engine._project_height
+                ):
                     is_tech_mismatch = True
                     mismatch_msg = f"Resolution mismatch: Project is {self._engine._project_width}x{self._engine._project_height}"
-                
+
                 # Check FPS
-                if not is_tech_mismatch and self._engine._project_fps > 0 and abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+                if (
+                    not is_tech_mismatch
+                    and self._engine._project_fps > 0
+                    and abs(plan.media_info.fps - self._engine._project_fps) > 0.001
+                ):
                     is_tech_mismatch = True
                     mismatch_msg = f"FPS mismatch: Project is {self._engine._project_fps:.2f} (Clip: {plan.media_info.fps:.2f})"
-            
+
             res_item = QTableWidgetItem(res_text)
             res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if is_tech_mismatch:
-                res_item.setBackground(QColor(120, 100, 0, 100)) # Muted Yellow
+                res_item.setBackground(QColor(120, 100, 0, 100))  # Muted Yellow
                 res_item.setToolTip(mismatch_msg)
             self._table.setItem(idx, 6, res_item)
 
             # Column 7: Status (color dot)
             status = "pending"
             status_msg = ""
-            
+
             if plan.match.clip.missing_frames:
                 status = "warning"
-                status_msg = f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
+                status_msg = (
+                    f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
+                )
             elif is_tech_mismatch:
                 status = "warning"
                 status_msg = "Technical mismatch (Res/FPS)"
@@ -1425,31 +1446,36 @@ class IngestWindow(QMainWindow):
         sb = self._log_edit.verticalScrollBar()
         sb.setValue(sb.maximum())
 
-        def _resolve_all_paths(self) -> None:
-            """Update target paths and version numbers for all plans."""
-            if not self._plans:
-                return
-                
-            from ramses_ingest.publisher import resolve_paths, resolve_paths_from_daemon, check_for_path_collisions
-            
-            # Reset errors before re-calculating (clears old collisions)
-            for p in self._plans:
-                if "COLLISION" in (p.error or ""):
-                    p.error = "" 
-    
-            # 1. Try resolving via daemon if connected
-            if self._engine.connected and self._engine._shot_objects:
-                resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
-                
-            # 2. Use project path as fallback for any unresolved plans
-            if self._engine.project_path:
-                unresolved = [p for p in self._plans if not p.target_publish_dir]
-                if unresolved:
-                    resolve_paths(unresolved, self._engine.project_path)
-    
-            # 3. Check for collisions in the new state
-            check_for_path_collisions(self._plans)
-        def _try_connect(self) -> None:
+    def _resolve_all_paths(self) -> None:
+        """Update target paths and version numbers for all plans."""
+        if not self._plans:
+            return
+
+        from ramses_ingest.publisher import (
+            resolve_paths,
+            resolve_paths_from_daemon,
+            check_for_path_collisions,
+        )
+
+        # Reset errors before re-calculating (clears old collisions)
+        for p in self._plans:
+            if "COLLISION" in (p.error or ""):
+                p.error = ""
+
+        # 1. Try resolving via daemon if connected
+        if self._engine.connected and self._engine._shot_objects:
+            resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
+
+        # 2. Use project path as fallback for any unresolved plans
+        if self._engine.project_path:
+            unresolved = [p for p in self._plans if not p.target_publish_dir]
+            if unresolved:
+                resolve_paths(unresolved, self._engine.project_path)
+
+        # 3. Check for collisions in the new state
+        check_for_path_collisions(self._plans)
+
+    def _try_connect(self) -> None:
         ok = self._engine.connect_ramses()
         if ok:
             self._status_orb.setStyleSheet("""
@@ -1470,9 +1496,7 @@ class IngestWindow(QMainWindow):
             self._status_label.setObjectName("statusConnected")
             pid = self._engine.project_id
             pname = self._engine.project_name
-            self._project_combo.clear()
-            self._project_combo.addItem(f"{pid} - {pname}")
-            self._project_combo.setCurrentIndex(0)
+            self._project_edit.setText(f"{pid} - {pname}")
 
             # Note: Standards display removed from minimal header in professional UI
             # fps = self._engine._project_fps
@@ -1485,18 +1509,16 @@ class IngestWindow(QMainWindow):
                 self._step_combo.addItem(s)
             if "PLATE" in self._engine.steps:
                 self._step_combo.setCurrentText("PLATE")
-        else:
-            self._status_orb.setStyleSheet(
-                "background-color: #f44747; border-radius: 6px;"
-            )
-            self._status_orb.setGraphicsEffect(None)
-            self._status_label.setText("OFFLINE")
-            self._status_label.setObjectName("statusDisconnected")
-            self._project_combo.clear()
-            self._project_combo.addItem("— (Connection Required)")
-            self._btn_ingest.setToolTip("Ramses connection required to ingest.")
-
-        # Re-polish to apply dynamic objectName change
+                    else:
+                        self._status_orb.setStyleSheet(
+                            "background-color: #f44747; border-radius: 6px;"
+                        )
+                        self._status_orb.setGraphicsEffect(None)
+                        self._status_label.setText("OFFLINE")
+                        self._status_label.setObjectName("statusDisconnected")
+                        self._project_edit.setText("— (Connection Required)")
+                        self._btn_ingest.setToolTip("Ramses connection required to ingest.")
+                # Re-polish to apply dynamic objectName change
         self._status_label.style().unpolish(self._status_label)
         self._status_label.style().polish(self._status_label)
         self._update_summary()
@@ -1539,18 +1561,41 @@ class IngestWindow(QMainWindow):
         self._summary_label.setText(f"Summary: {', '.join(parts)}")
 
         is_dry = self._chk_dry_run.isChecked()
+
         btn_text = "Simulate" if is_dry else "Ingest"
+
         self._btn_ingest.setText(f"{btn_text} {n_enabled}/{total}")
 
-        # UI Polish: Change button style if simulating
+        # UI Polish: Apply specific colors for different states
+
         if is_dry:
+            # Orange for Simulation
+
             self._btn_ingest.setStyleSheet(
-                "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f39c12, stop:1 #d35400); color: white;"
+                "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f39c12, stop:1 #d35400); color: white; border: none; font-weight: bold;"
             )
+
         else:
-            self._btn_ingest.setStyleSheet("")  # Reset to STYLESHEET default
+            # Standard Blue for Ingest (matching Ramses-Fusion accent)
+
+            # We apply this specifically when enabled so it doesn't override the disabled look
+
+            if (
+                n_enabled > 0
+                and self._engine.connected
+                and bool(self._step_combo.currentText())
+            ):
+                self._btn_ingest.setStyleSheet(
+                    "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #00bff3, stop:1 #0095c2); color: white; border: none; font-weight: bold;"
+                )
+
+            else:
+                self._btn_ingest.setStyleSheet(
+                    ""
+                )  # Revert to stylesheet default (muted)
 
         # Strict enforcement: Connection AND valid plans AND a defined pipeline step
+
         has_step = bool(self._step_combo.currentText())
         self._btn_ingest.setEnabled(
             n_enabled > 0 and self._engine.connected and has_step
