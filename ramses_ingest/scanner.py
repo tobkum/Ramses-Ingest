@@ -14,19 +14,22 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import pyseq
 
 # Matches a frame number between two dots: name.0001.exr
+# OR frame number after underscore: name_0001.exr
 # Uses non-greedy .+? to prevent catastrophic backtracking on long complex filenames
 # Minimum 2 digits for frame numbers to support legacy deliveries (01-99)
-RE_FRAME_PADDING = re.compile(r"^(?P<base>.+?)\.(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
+RE_FRAME_PADDING = re.compile(r"^(?P<base>.+?)(?P<sep>[\._])(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
 
 # Common media extensions (lowercase)
-MEDIA_EXTENSIONS = frozenset({
-    # Image sequences
-    "exr", "dpx", "tif", "tiff", "png", "tga", "jpg", "jpeg", "hdr",
-    # Movie containers
-    "mov", "mp4", "mxf", "avi", "mkv",
-})
+IMAGE_EXTENSIONS = {
+    "exr", "dpx", "tif", "tiff", "png", "tga", "jpg", "jpeg", "hdr"
+}
+MOVIE_EXTENSIONS = {
+    "mov", "mp4", "mxf", "avi", "mkv"
+}
+MEDIA_EXTENSIONS = frozenset(IMAGE_EXTENSIONS | MOVIE_EXTENSIONS)
 
 
 @dataclass
@@ -81,75 +84,137 @@ class Clip:
 
 
 def scan_directory(root: str | Path) -> list[Clip]:
-    """Scan *root* for media files and return detected clips.
+    """Scan *root* for media files and return detected clips using pyseq.
 
-    Uses os.scandir for high-performance traversal, grouping frames
-    into sequences and identifying movie files.
+    Uses ``pyseq`` for sequence detection, with a fallback for single-frame
+    sequences that pyseq might treat as standalone items.
     """
     root = Path(root)
     if not root.is_dir():
         raise FileNotFoundError(f"Not a directory: {root}")
 
-    # Collect sequence candidates: (dir, base, ext) -> [(frame_number, full_path, padding)]
-    seq_buckets: dict[tuple[str, str, str], list[tuple[int, str, int]]] = {}
-    movies: list[Clip] = []
-
-    def _scan_recursive(path: Path) -> None:
-        try:
-            with os.scandir(path) as it:
-                for entry in it:
-                    if entry.is_dir():
-                        _scan_recursive(Path(entry.path))
-                    elif entry.is_file():
-                        fname = entry.name
-                        ext = fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-                        if ext not in MEDIA_EXTENSIONS:
-                            continue
-
-                        full_path = entry.path
-                        m = RE_FRAME_PADDING.match(fname)
-
-                        if m:
-                            # Image sequence frame - capture padding from original string
-                            base = m.group("base")
-                            frame_str = m.group("frame")
-                            frame = int(frame_str)
-                            padding = len(frame_str)  # Preserve original padding (e.g., "0001" = 4)
-                            key = (str(path), base, ext)
-                            seq_buckets.setdefault(key, []).append((frame, full_path, padding))
-                        else:
-                            # Single movie or standalone image
-                            stem = fname.rsplit(".", 1)[0] if "." in fname else fname
-                            movies.append(Clip(
-                                base_name=stem,
-                                extension=ext,
-                                directory=path,
-                                is_sequence=False,
-                                frames=[],
-                                first_file=full_path,
-                            ))
-        except PermissionError:
-            pass # Skip folders we can't read
-
-    _scan_recursive(root)
-
-    # Convert sequence buckets to Clip objects
     clips: list[Clip] = []
-    for (dirpath, base, ext), frame_tuples in seq_buckets.items():
-        frame_tuples.sort(key=lambda t: t[0])
-        frames = [f for f, _, _ in frame_tuples]
-        first_file = frame_tuples[0][1]
-        detected_padding = frame_tuples[0][2]  # Use padding from first frame
-        clips.append(Clip(
-            base_name=base,
-            extension=ext,
-            directory=Path(dirpath),
-            is_sequence=True,
-            frames=frames,
-            first_file=first_file,
-            _padding=detected_padding,
-        ))
 
-    clips.extend(movies)
-    clips.sort(key=lambda c: (str(c.directory), c.base_name))
+    # Get all potential sequences/files from pyseq
+    # pyseq.get_sequences returns a list of pyseq.Sequence objects
+    try:
+        # We walk manually to control recursion and allow filtering if needed,
+        # but pyseq.get_sequences can also walk.
+        # To match previous behavior (recursive), we can walk ourselves or let pyseq do it.
+        # pyseq.get_sequences(path) is not recursive by default?
+        # Checking docs/behavior: usually it scans the level.
+        # Assuming we want to maintain recursive scan:
+        
+        # Helper to process a single directory
+        def _process_dir(dir_path: Path):
+            # pyseq.get_sequences expects a string path
+            try:
+                seqs = pyseq.get_sequences(str(dir_path))
+            except OSError:
+                return
+
+            for s in seqs:
+                # pyseq Sequence attributes:
+                # s.name (filename of first item?) No, usually condensed.
+                # s.head(), s.tail()
+                # s.custom_format('%h') -> head
+                
+                # Determine if it's a sequence or single file
+                # Pyseq treats single files as Sequence(len=1) with frame detected or None.
+                
+                is_seq = len(s) > 1
+                frames = []
+                padding = 4
+                
+                # Check for single-frame sequences (e.g. plate.1001.exr alone)
+                # If len=1, pyseq might not have parsed the frame.
+                if len(s) == 1:
+                    item_name = s[0].name
+                    item_path = str(s[0])
+                    
+                    # Check our regex to see if it *should* be a sequence
+                    m = RE_FRAME_PADDING.match(item_name)
+                    if m:
+                        ext = m.group("ext").lower()
+                        # Exclude movies from being sequences
+                        if ext not in MOVIE_EXTENSIONS:
+                            is_seq = True
+                            frame_str = m.group("frame")
+                            frames = [int(frame_str)]
+                            padding = len(frame_str)
+                            base = m.group("base")
+                            ext = ext
+                        else:
+                            # Movie file matching padding pattern (shot_001.mov) -> Movie
+                            is_seq = False
+                            base = m.group("base") + m.group("sep") + m.group("frame")
+                            ext = ext
+                    else:
+                        # No pattern match -> Movie or simple image
+                        is_seq = False
+                        if "." in item_name:
+                            base, ext_raw = item_name.rsplit(".", 1)
+                            ext = ext_raw.lower()
+                        else:
+                            base = item_name
+                            ext = ""
+                
+                else:
+                    # Multi-frame sequence detected by pyseq
+                    is_seq = True
+                    frames = [f.frame for f in s]
+                    
+                    # Fix: Ensure frames are sorted (pyseq usually does, but good to be safe)
+                    frames.sort()
+
+                    # Extract metadata from the first item
+                    # Pyseq head() includes separator often
+                    head = s.head()
+                    tail = s.tail()
+                    
+                    # Base name: trip head separator if present
+                    # s.head() -> "plate."
+                    base = head.rstrip("._")
+                    
+                    # Extension: s.tail() -> ".exr"
+                    ext = tail.strip(".")
+                    
+                    # Padding: deduce from first item
+                    # We can use regex on the first file to be precise
+                    first_name = s[0].name
+                    m = RE_FRAME_PADDING.match(first_name)
+                    if m:
+                        padding = len(m.group("frame"))
+                    else:
+                        padding = 4 # Fallback
+                
+                # Filter by allowed extensions
+                if ext not in MEDIA_EXTENSIONS:
+                    continue
+
+                full_path = str(s[0]) if is_seq and len(s) > 0 else str(s[0]) # s[0] is Item, str(Item) is path
+                
+                # Create Clip
+                clip = Clip(
+                    base_name=base,
+                    extension=ext,
+                    directory=dir_path,
+                    is_sequence=is_seq,
+                    frames=frames if is_seq else [],
+                    first_file=full_path,
+                    _padding=padding
+                )
+                clips.append(clip)
+
+        # Recursive walk
+        for root_dir, dirs, _ in os.walk(root):
+            _process_dir(Path(root_dir))
+            
+    except PermissionError:
+        print(f"Warning: Permission denied accessing {root}")
+    except OSError as e:
+        print(f"Warning: Error accessing {root}: {e}")
+
     return clips
+
+

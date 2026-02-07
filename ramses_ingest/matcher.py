@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import logging
 from dataclasses import dataclass
 from typing import Optional
 
@@ -21,6 +22,8 @@ from ramses_ingest.scanner import Clip
 # Validation patterns for extracted IDs (security: prevent path traversal and injection)
 _VALID_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 _VALID_STEP_PATTERN = re.compile(r'^[A-Z0-9_]{1,20}$')
+
+logger = logging.getLogger(__name__)
 
 
 def _validate_id(value: str, field_name: str, pattern: re.Pattern = _VALID_ID_PATTERN) -> str:
@@ -42,13 +45,15 @@ def _validate_id(value: str, field_name: str, pattern: re.Pattern = _VALID_ID_PA
     # Remove whitespace
     value = value.strip()
 
-    # Check against pattern
-    if not pattern.match(value):
-        return ""  # Silently reject invalid IDs
-
     # Explicit path traversal check
     if ".." in value or "/" in value or "\\" in value:
+        logger.warning(f"Potential path traversal in {field_name}: '{value}'")
         return ""
+
+    # Check against pattern
+    if not pattern.match(value):
+        logger.warning(f"Invalid {field_name} format: '{value}'. Must match {pattern.pattern}")
+        return ""  # Reject invalid IDs, but log it
 
     return value
 
@@ -96,27 +101,25 @@ class EDLMapper:
 
     def _parse(self, path: str) -> None:
         if not os.path.isfile(path):
-            return
+            raise FileNotFoundError(f"EDL file not found: {path}")
         
         # Simple CMX 3600 Parser
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                last_clip = ""
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("* FROM CLIP NAME:"):
-                        last_clip = line.split(":")[-1].strip().upper()
-                        # Default: map clip to itself if no comment found later
-                        self.mappings[last_clip] = last_clip
-                    elif line.startswith("* COMMENT:"):
-                        comment = line.split(":")[-1].strip()
-                        if last_clip:
-                            # If we have a comment like '* COMMENT: SH010', map the clip to it
-                            # Shot IDs are usually short alphanumeric strings
-                            if re.match(r"^[A-Za-z0-9_-]+$", comment):
-                                self.mappings[last_clip] = comment
-        except Exception:
-            pass
+        with open(path, "r", encoding="utf-8") as f:
+            last_clip = ""
+            for line in f:
+                line = line.strip()
+                if line.startswith("* FROM CLIP NAME:"):
+                    last_clip = line.split(":")[-1].strip().upper()
+                    # Default: map clip to itself if no comment found later
+                    self.mappings[last_clip] = last_clip
+                elif line.startswith("* COMMENT:"):
+                    comment = line.split(":")[-1].strip()
+                    if last_clip:
+                        # If we have a comment like '* COMMENT: SH010', map the clip to it
+                        # Shot IDs are usually short alphanumeric strings
+                        if re.match(r"^[A-Za-z0-9_-]+$", comment):
+                            self.mappings[last_clip] = comment
+
 
     def get_shot_id(self, clip_name: str) -> str | None:
         return self.mappings.get(clip_name.upper())
@@ -187,9 +190,16 @@ def _try_rule(clip: Clip, rule: NamingRule) -> MatchResult:
     version = None
     if ver_raw:
         # Strip prefixes (like 'v') if they were caught in the group
-        digits = re.search(r"(\d+)", ver_raw)
-        if digits:
-            version = int(digits.group(1))
+        try:
+            digits = re.search(r"(\d+)", ver_raw)
+            if digits:
+                version = int(digits.group(1))
+            else:
+                # Log warning if version group captured something but no digits found (e.g. "vBad")
+                logger.warning(f"Could not parse version from '{ver_raw}'")
+        except (ValueError, IndexError):
+            # Log warning but don't fail the entire match just for version
+            logger.warning(f"Could not parse version from '{ver_raw}'")
 
     # Validate additional fields
     step_raw = _validate_id(groups.get("step", ""), "step", _VALID_STEP_PATTERN)

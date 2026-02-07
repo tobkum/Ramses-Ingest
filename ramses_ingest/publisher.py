@@ -28,6 +28,7 @@ from ramses_ingest.prober import MediaInfo
 from ramses_ingest.path_utils import normalize_path, join_normalized
 
 from ramses.file_info import RamFileInfo
+from ramses.constants import FolderNames
 from ramses.constants import ItemType
 
 
@@ -188,13 +189,11 @@ import hashlib
 def _calculate_md5(file_path: str) -> str:
     """Calculate MD5 hash of a file in large chunks (1MB) for performance."""
     hash_md5 = hashlib.md5()
-    try:
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(1048576), b""):  # 1MB chunks
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-    except (OSError, IOError):
-        return ""
+    # Let OSError propagate so copy failures are not silent
+    with open(file_path, "rb") as f:
+        for chunk in iter(lambda: f.read(1048576), b""):  # 1MB chunks
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
 
 def copy_frames(
@@ -327,6 +326,8 @@ def _get_next_version(publish_root: str) -> int:
         for item in os.listdir(publish_root):
             if item.startswith("v") and len(item) == 4 and item[1:].isdigit():
                 v_path = os.path.join(publish_root, item)
+                
+                # Default assume invalid unless proven otherwise
                 is_valid_version = False
 
                 # Strategy 1: Check for completion marker (Strongest)
@@ -461,7 +462,7 @@ def check_for_path_collisions(plans: list[IngestPlan]) -> None:
 def resolve_paths(
     plans: list[IngestPlan],
     project_root: str,
-    shots_folder: str = "05-SHOTS",
+    shots_folder: str = FolderNames.shots,
 ) -> None:
     """Fill in ``target_publish_dir`` and ``target_preview_dir`` on each plan.
 
@@ -654,8 +655,9 @@ def execute_plan(
         except Exception as exc:
             _log(f"  Ramses API (non-fatal): {exc}")
 
-    # --- Copy frames ---
+    # --- Transactional Execution (Copy + Metadata) ---
     try:
+        # 1. Copy frames
         action_verb = "Simulating" if dry_run else "Copying"
         _log(f"  {action_verb} {clip.frame_count or 1} file(s)...")
         copied_count, checksum, total_bytes, first_filename = copy_frames(
@@ -664,11 +666,12 @@ def execute_plan(
             plan.project_id,
             plan.shot_id,
             plan.step_id,
-            progress_callback=progress_callback,  # Enhancement #5: MD5 progress reporting
-            dry_run=dry_run,  # Enhancement #8: Dry-run mode
+            progress_callback=progress_callback,
+            dry_run=dry_run,
             fast_verify=fast_verify,
         )
-        # Use technical frame count for movies, or files copied for sequences
+        
+        # Update result stats
         if not clip.is_sequence and plan.media_info.frame_count > 0:
             result.frames_copied = plan.media_info.frame_count
         else:
@@ -677,14 +680,9 @@ def execute_plan(
         result.checksum = checksum
         result.bytes_copied = total_bytes
         result.published_path = plan.target_publish_dir
-    except Exception as exc:
-        result.error = f"Copy failed: {exc}"
-        return result
 
-    # --- Write metadata ---
-    if not dry_run:
-        try:
-            # Use tracked filename instead of expensive listdir() call
+        # 2. Write metadata (Critical Step - Failure triggers rollback)
+        if not dry_run:
             _write_ramses_metadata(
                 plan.target_publish_dir,
                 first_filename,
@@ -692,10 +690,22 @@ def execute_plan(
                 comment="Ingested via Ramses-Ingest",
                 timecode=plan.media_info.start_timecode,
             )
-        except Exception as exc:
-            _log(f"  Metadata write (non-fatal): {exc}")
 
-    # --- Generate thumbnail ---
+    except Exception as exc:
+        error_msg = str(exc)
+        # Rollback: Delete the partially created version folder
+        if not dry_run and plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
+            try:
+                _log(f"  CRITICAL ERROR: {error_msg}. Rolling back...")
+                shutil.rmtree(plan.target_publish_dir)
+                _log("  Rollback successful: Cleaned up partial files.")
+            except Exception as rollback_exc:
+                _log(f"  ROLLBACK FAILED: Could not delete {plan.target_publish_dir}: {rollback_exc}")
+        
+        result.error = f"Ingest failed (Rolled back): {error_msg}"
+        return result
+
+    # --- Generate thumbnail (Non-fatal) ---
     if generate_thumbnail and plan.target_preview_dir and not dry_run:
         try:
             from ramses_ingest.preview import generate_thumbnail as gen_thumb
@@ -715,7 +725,7 @@ def execute_plan(
         except Exception as exc:
             _log(f"  Thumbnail (non-fatal): {exc}")
 
-    # --- Generate video proxy ---
+    # --- Generate video proxy (Non-fatal) ---
     if generate_proxy and plan.target_preview_dir and not dry_run:
         try:
             from ramses_ingest.preview import generate_proxy as gen_proxy

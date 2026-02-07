@@ -410,6 +410,22 @@ class ScanWorker(QThread):
             self.error.emit(str(exc))
 
 
+class ConnectionWorker(QThread):
+    """Connects to Ramses daemon in a background thread."""
+
+    finished = Signal(bool)
+
+    def __init__(self, engine: IngestEngine, parent=None) -> None:
+        super().__init__(parent)
+        self._engine = engine
+
+    def run(self) -> None:
+        # No try/except needed as connect_ramses handles its own exceptions internally
+        # and returns False on failure.
+        ok = self._engine.connect_ramses()
+        self.finished.emit(ok)
+
+
 class IngestWorker(QThread):
     """Executes ingest plans in a background thread."""
 
@@ -568,6 +584,7 @@ class IngestWindow(QMainWindow):
         self._plans: list[IngestPlan] = []
         self._scan_worker: ScanWorker | None = None
         self._ingest_worker: IngestWorker | None = None
+        self._connection_worker: ConnectionWorker | None = None
         self._current_filter_status = "all"  # For filter sidebar
         self._selected_plan: IngestPlan | None = None  # For detail panel
 
@@ -575,8 +592,20 @@ class IngestWindow(QMainWindow):
         self._reconnect_timer.setInterval(5000) # Check every 5 seconds
         self._reconnect_timer.timeout.connect(self._try_connect)
 
+        # Debounce timer for expensive path resolution (e.g. while typing overrides)
+        self._resolve_timer = QTimer(self)
+        self._resolve_timer.setSingleShot(True)
+        self._resolve_timer.setInterval(300)  # 300ms debounce
+        self._resolve_timer.timeout.connect(self._on_resolve_timeout)
+
         self._build_ui()
-        self._try_connect()
+        # Connect asynchronously on startup
+        QTimer.singleShot(100, self._try_connect)
+
+    def _on_resolve_timeout(self) -> None:
+        """Called after debounce period to resolve paths and update UI."""
+        self._resolve_all_paths()
+        self._populate_table()
 
     # -- UI construction -----------------------------------------------------
 
@@ -612,6 +641,13 @@ class IngestWindow(QMainWindow):
         self._btn_reconnect.setVisible(False)
         header_lay.addWidget(self._btn_reconnect)
 
+        self._btn_refresh = QPushButton("↻ Refresh")
+        self._btn_refresh.setFixedWidth(70)
+        self._btn_refresh.setFixedHeight(22)
+        self._btn_refresh.setStyleSheet("font-size: 9px; padding: 2px;")
+        self._btn_refresh.clicked.connect(self._try_connect)
+        self._btn_refresh.setVisible(False)  # Hidden until connected
+        header_lay.addWidget(self._btn_refresh)
         header_lay.addWidget(QLabel(" | "))
 
         # Project
@@ -1180,27 +1216,12 @@ class IngestWindow(QMainWindow):
     def _on_override_changed(self, text: str) -> None:
         """Apply shot ID override to selected plan"""
         if self._selected_plan:
+            # Update the data model immediately
             plan = self._selected_plan
             plan.shot_id = text
-
-            # Re-resolve paths for this plan to update versioning
-            self._resolve_all_paths()
-
-            # Find visually where this plan is currently located
-            row = self._table.currentRow()
-            # Update table with signals blocked to prevent race condition
-            item = self._table.item(row, 3)  # Shot column (index 3)
-            if item:
-                blocked = self._table.blockSignals(True)
-                item.setText(text)
-
-                # Update Version column (index 2)
-                ver_item = self._table.item(row, 2)
-                if ver_item:
-                    ver_item.setText(f"v{plan.version:03d}")
-
-                self._table.blockSignals(blocked)
-            self._update_summary()
+            
+            # Debounce the expensive resolution/update cycle
+            self._resolve_timer.start()
 
     def _on_override_seq_changed(self, text: str) -> None:
         """Apply sequence ID override to selected plan"""
@@ -1484,148 +1505,204 @@ class IngestWindow(QMainWindow):
         self._filter_error.setText(f"● Errors ({error})")
 
     def _populate_table(self) -> None:
-        """Populate the table with current plans (replaces _populate_tree)"""
+        """Populate or update the table with current plans."""
         # CRITICAL: Disable sorting while we modify items to prevent row-jumping
         self._table.setSortingEnabled(False)
         
-        # Block ALL signals to prevent triggering itemSelectionChanged or itemChanged during population
+        # Block signals to prevent triggering itemSelectionChanged or itemChanged
         self._table.blockSignals(True)
-        
-        # CRITICAL: Also block signals on override widgets to prevent "textChanged"
-        # from firing while we clear them, which causes data loss.
         self._override_shot.blockSignals(True)
         self._override_seq.blockSignals(True)
 
-        # Clear selection state to avoid stale references
-        self._selected_plan = None
-        self._override_shot.clear()
-        self._override_seq.clear()
-        self._override_shot.setEnabled(False)
-        self._override_seq.setEnabled(False)
+        current_row_count = self._table.rowCount()
+        target_row_count = len(self._plans)
 
-        self._table.setRowCount(0)
-        self._table.setRowCount(len(self._plans))
+        if current_row_count != target_row_count:
+            self._table.setRowCount(target_row_count)
+
+        # Clear selection only if we performed a structural change (add/remove)
+        # to avoid losing selection during simple updates (e.g. checkbox toggle)
+        if current_row_count != target_row_count:
+            self._selected_plan = None
+            self._override_shot.clear()
+            self._override_seq.clear()
+            self._override_shot.setEnabled(False)
+            self._override_seq.setEnabled(False)
 
         for idx, plan in enumerate(self._plans):
             clip = plan.match.clip
 
-            # Column 0: Checkbox
-            chk = QCheckBox()
-            chk.setChecked(plan.enabled)
-            chk.stateChanged.connect(self._on_checkbox_changed)
-            chk_widget = QWidget()
-            chk_widget.setStyleSheet("background: transparent;")
-            chk_lay = QHBoxLayout(chk_widget)
-            chk_lay.addWidget(chk)
-            chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            chk_lay.setContentsMargins(0, 0, 0, 0)
-            chk_lay.setSpacing(0)
-            self._table.setCellWidget(idx, 0, chk_widget)
+            # --- Column 0: Checkbox ---
+            chk_widget = self._table.cellWidget(idx, 0)
+            if not chk_widget:
+                # Create new
+                chk = QCheckBox()
+                chk.stateChanged.connect(self._on_checkbox_changed)
+                chk_widget = QWidget()
+                chk_widget.setStyleSheet("background: transparent;")
+                chk_lay = QHBoxLayout(chk_widget)
+                chk_lay.addWidget(chk)
+                chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                chk_lay.setContentsMargins(0, 0, 0, 0)
+                chk_lay.setSpacing(0)
+                self._table.setCellWidget(idx, 0, chk_widget)
+            else:
+                # Update existing
+                chk = chk_widget.findChild(QCheckBox)
+            
+            if chk:
+                chk.blockSignals(True)
+                chk.setChecked(plan.enabled)
+                chk.blockSignals(False)
 
-            # Column 1: Filename
+            # --- Column 1: Filename ---
             filename = f"{clip.base_name}.{clip.extension}"
             if clip.is_sequence:
                 filename = f"{clip.base_name}.####.{clip.extension}"
-            file_item = QTableWidgetItem(filename)
-            file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             
-            # Anchor: Store the actual plan object in the item data
+            file_item = self._table.item(idx, 1)
+            if not file_item:
+                file_item = QTableWidgetItem()
+                file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(idx, 1, file_item)
+            
+            if file_item.text() != filename:
+                file_item.setText(filename)
+            
+            # Update data/color
             file_item.setData(Qt.ItemDataRole.UserRole, plan)
-            
-            # Highlight Filename if there's a collision
             if "COLLISION" in (plan.error or ""):
-                file_item.setBackground(QColor(180, 50, 50, 150)) # Muted Red
+                file_item.setBackground(QColor(180, 50, 50, 150))
                 file_item.setToolTip(plan.error)
-                
-            self._table.setItem(idx, 1, file_item)
+            else:
+                file_item.setBackground(QColor(0, 0, 0, 0)) # Clear background
+                file_item.setToolTip(filename)
 
-            # Column 2: Version (swapped)
-            ver_item = QTableWidgetItem(f"v{plan.version:03d}")
-            ver_item.setFlags(ver_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            # Check if filename version matches Ramses version
+            # --- Column 2: Version ---
+            ver_text = f"v{plan.version:03d}"
+            ver_item = self._table.item(idx, 2)
+            if not ver_item:
+                ver_item = QTableWidgetItem()
+                ver_item.setFlags(ver_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._table.setItem(idx, 2, ver_item)
+            
+            if ver_item.text() != ver_text:
+                ver_item.setText(ver_text)
+
             if plan.match.version and plan.match.version != plan.version:
-                ver_item.setBackground(QColor(120, 100, 0, 100))  # Muted Yellow
-                ver_item.setToolTip(
-                    f"Version Mismatch: Filename is v{plan.match.version:03d}, Ramses next is v{plan.version:03d}"
-                )
-            self._table.setItem(idx, 2, ver_item)
+                ver_item.setBackground(QColor(120, 100, 0, 100))
+                ver_item.setToolTip(f"Mismatch: v{plan.match.version:03d} -> v{plan.version:03d}")
+            else:
+                ver_item.setBackground(QColor(0, 0, 0, 0))
+                ver_item.setToolTip("")
 
-            # Column 3: Shot (editable, swapped)
-            shot_item = QTableWidgetItem(plan.shot_id or "")
+            # --- Column 3: Shot ---
+            shot_text = plan.shot_id or ""
+            shot_item = self._table.item(idx, 3)
+            if not shot_item:
+                shot_item = QTableWidgetItem()
+                self._table.setItem(idx, 3, shot_item)
+            
+            if shot_item.text() != shot_text:
+                shot_item.setText(shot_text)
+            
             if not plan.shot_id:
-                shot_item.setForeground(QColor("#f44747"))  # Red if missing
-            self._table.setItem(idx, 3, shot_item)
+                shot_item.setForeground(QColor("#f44747"))
+            else:
+                shot_item.setForeground(QColor("#e0e0e0")) # Default text color
 
-            # Column 4: Sequence
-            seq_item = QTableWidgetItem(plan.sequence_id or "—")
-            seq_item.setFlags(seq_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(idx, 4, seq_item)
+            # --- Column 4: Sequence ---
+            seq_text = plan.sequence_id or "—"
+            seq_item = self._table.item(idx, 4)
+            if not seq_item:
+                seq_item = QTableWidgetItem()
+                seq_item.setFlags(seq_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(idx, 4, seq_item)
+            
+            if seq_item.text() != seq_text:
+                seq_item.setText(seq_text)
 
-            # Column 5: Frames
+            # --- Column 5: Frames ---
             if clip.is_sequence:
                 fc = clip.frame_count
             else:
-                fc = (
-                    plan.media_info.frame_count
-                    if plan.media_info.frame_count > 0
-                    else 1
-                )
+                fc = plan.media_info.frame_count if plan.media_info.frame_count > 0 else 1
+            
+            frames_text = str(fc)
+            frames_item = self._table.item(idx, 5)
+            if not frames_item:
+                frames_item = QTableWidgetItem()
+                frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(idx, 5, frames_item)
 
-            frames_item = QTableWidgetItem(str(fc))
-            frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            if frames_item.text() != frames_text:
+                frames_item.setText(frames_text)
+
             if clip.missing_frames:
-                frames_item.setBackground(QColor(150, 50, 0, 150))  # Muted Orange
-                frames_item.setToolTip(
-                    f"Gaps detected: {len(clip.missing_frames)} missing frames"
-                )
-            self._table.setItem(idx, 5, frames_item)
+                frames_item.setBackground(QColor(150, 50, 0, 150))
+                frames_item.setToolTip(f"Gaps detected: {len(clip.missing_frames)} frames")
+            else:
+                frames_item.setBackground(QColor(0, 0, 0, 0))
+                frames_item.setToolTip("")
 
-            # Column 6: Resolution
+            # --- Column 6: Resolution ---
             res_text = "—"
             is_res_mismatch = False
             if plan.media_info.width and plan.media_info.height:
                 res_text = f"{plan.media_info.width}x{plan.media_info.height}"
-                # Check Resolution
                 if self._engine._project_width > 0 and (
                     plan.media_info.width != self._engine._project_width
                     or plan.media_info.height != self._engine._project_height
                 ):
                     is_res_mismatch = True
 
-            res_item = QTableWidgetItem(res_text)
-            res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            res_item = self._table.item(idx, 6)
+            if not res_item:
+                res_item = QTableWidgetItem()
+                res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(idx, 6, res_item)
+
+            if res_item.text() != res_text:
+                res_item.setText(res_text)
+
             if is_res_mismatch:
                 res_item.setBackground(QColor(120, 100, 0, 100))
-                res_item.setToolTip(f"Resolution mismatch: Project is {self._engine._project_width}x{self._engine._project_height}")
-            self._table.setItem(idx, 6, res_item)
+                res_item.setToolTip(f"Mismatch: Project is {self._engine._project_width}x{self._engine._project_height}")
+            else:
+                res_item.setBackground(QColor(0, 0, 0, 0))
+                res_item.setToolTip("")
 
-            # Column 7: FPS (new)
+            # --- Column 7: FPS ---
             fps_text = f"{plan.media_info.fps:.3f}" if plan.media_info.fps > 0 else "—"
             is_fps_mismatch = False
             if self._engine._project_fps > 0 and plan.media_info.fps > 0:
-                # Use tolerance-based comparison to avoid floating-point precision issues
                 if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
                     is_fps_mismatch = True
 
-            fps_item = QTableWidgetItem(fps_text)
-            fps_item.setFlags(fps_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            fps_item = self._table.item(idx, 7)
+            if not fps_item:
+                fps_item = QTableWidgetItem()
+                fps_item.setFlags(fps_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(idx, 7, fps_item)
+            
+            if fps_item.text() != fps_text:
+                fps_item.setText(fps_text)
+
             if is_fps_mismatch:
                 fps_item.setBackground(QColor(120, 100, 0, 100))
-                fps_item.setToolTip(
-                    f"FPS mismatch: Project is {self._engine._project_fps:.3f}"
-                )
-            self._table.setItem(idx, 7, fps_item)
+                fps_item.setToolTip(f"Mismatch: Project is {self._engine._project_fps:.3f}")
+            else:
+                fps_item.setBackground(QColor(0, 0, 0, 0))
+                fps_item.setToolTip("")
 
-            # Column 8: Status (switched to 8)
+            # --- Column 8: Status ---
             status = "pending"
             status_msg = ""
 
             if plan.match.clip.missing_frames:
                 status = "warning"
-                status_msg = (
-                    f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
-                )
+                status_msg = f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
             elif is_res_mismatch or is_fps_mismatch:
                 status = "warning"
                 status_msg = "Technical mismatch (Res/FPS)"
@@ -1636,14 +1713,15 @@ class IngestWindow(QMainWindow):
                     status = "warning"
                 else:
                     status = "error"
+                    status_msg = plan.error
             elif plan.is_duplicate:
                 status = "duplicate"
 
+            # Always replace status widget as it's cheap and stateful logic is complex to update
             status_indicator = StatusIndicator(status)
             if status_msg:
                 status_indicator.setToolTip(status_msg)
 
-            # Wrap in centered container for proper alignment
             status_container = QWidget()
             status_container.setStyleSheet("background: transparent;")
             status_layout = QHBoxLayout(status_container)
@@ -1654,13 +1732,11 @@ class IngestWindow(QMainWindow):
 
             self._table.setCellWidget(idx, 8, status_container)
 
-        # Re-enable signals and sorting
         self._table.blockSignals(False)
         self._override_shot.blockSignals(False)
         self._override_seq.blockSignals(False)
         self._table.setSortingEnabled(True)
 
-        # Update filter counts
         self._update_filter_counts()
         self._update_summary()
 
@@ -1799,10 +1875,30 @@ class IngestWindow(QMainWindow):
         check_for_path_collisions(self._plans)
 
     def _try_connect(self) -> None:
-        ok = self._engine.connect_ramses()
+        """Start background connection attempt."""
+        if self._connection_worker and self._connection_worker.isRunning():
+            return
+
+        # UI Feedback: Connecting state
+        self._status_label.setText("CONNECTING...")
+        self._status_label.setStyleSheet("color: #f39c12; font-weight: bold;")
+        self._btn_reconnect.setVisible(False)
+        self._btn_refresh.setEnabled(False)  # Disable while connecting
+
+        # Start worker
+        self._connection_worker = ConnectionWorker(self._engine, parent=self)
+        self._connection_worker.finished.connect(self._on_connection_finished)
+        self._connection_worker.start()
+
+    def _on_connection_finished(self, ok: bool) -> None:
+        """Handle connection result from worker."""
+        # Re-enable refresh button regardless of outcome
+        self._btn_refresh.setEnabled(True)
+
         if ok:
             self._reconnect_timer.stop()
             self._btn_reconnect.setVisible(False)
+            self._btn_refresh.setVisible(True)
 
             self._status_label.setText("DAEMON ONLINE")
             self._status_label.setObjectName("statusConnected")
@@ -1844,6 +1940,8 @@ class IngestWindow(QMainWindow):
             self._btn_ingest.setToolTip("Ramses connection required to ingest.")
             
             self._btn_reconnect.setVisible(True)
+            self._btn_refresh.setVisible(False) # Only show Refresh when connected (manual reload)
+            
             if not self._reconnect_timer.isActive():
                 self._reconnect_timer.start()
 
@@ -2187,7 +2285,12 @@ class IngestWindow(QMainWindow):
         self._log(f"Applying EDL mapping: {os.path.basename(path)}")
         from ramses_ingest.matcher import EDLMapper
 
-        mapper = EDLMapper(path)
+        try:
+            mapper = EDLMapper(path)
+        except Exception as exc:
+            QMessageBox.critical(self, "EDL Error", f"Failed to parse EDL file:\n{exc}")
+            self._log(f"  ERROR: Failed to parse EDL: {exc}")
+            return
 
         updated = 0
         for plan in self._plans:

@@ -70,6 +70,20 @@ def flush_cache():
 # Initialize cache on module load
 _load_cache()
 
+# Startup Check: Warn if ffprobe is missing
+def _check_ffprobe():
+    try:
+        subprocess.run(
+            ["ffprobe", "-version"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        print("WARNING: 'ffprobe' not found in PATH. Media metadata extraction will fail.")
+
+_check_ffprobe()
+
 
 @dataclass
 class MediaInfo:
