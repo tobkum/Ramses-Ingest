@@ -745,6 +745,7 @@ class IngestWindow(QMainWindow):
 
         self._search_edit = QLineEdit()
         self._search_edit.setPlaceholderText("🔍 Search...")
+        self._search_edit.setClearButtonEnabled(True)
         self._search_edit.textChanged.connect(self._on_search_changed)
         left_lay.addWidget(self._search_edit)
 
@@ -895,6 +896,7 @@ class IngestWindow(QMainWindow):
         right_lay.addWidget(QLabel("Shot ID:"))
         self._override_shot = QLineEdit()
         self._override_shot.setPlaceholderText("Override shot ID...")
+        self._override_shot.setClearButtonEnabled(True)
         self._override_shot.setEnabled(False)
         self._override_shot.textChanged.connect(self._on_override_changed)
         right_lay.addWidget(self._override_shot)
@@ -902,6 +904,7 @@ class IngestWindow(QMainWindow):
         right_lay.addWidget(QLabel("Sequence ID:"))
         self._override_seq = QLineEdit()
         self._override_seq.setPlaceholderText("Override sequence ID...")
+        self._override_seq.setClearButtonEnabled(True)
         self._override_seq.setEnabled(False)
         self._override_seq.textChanged.connect(self._on_override_seq_changed)
         right_lay.addWidget(self._override_seq)
