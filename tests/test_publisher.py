@@ -136,13 +136,14 @@ class TestCopyFrames(unittest.TestCase):
 
     def test_copy_sequence(self):
         clip = _make_clip("plate", self.src_dir, frame_count=4)
-        copied = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
+        copied, checksum, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
         self.assertEqual(copied, 4)
+        self.assertGreater(len(checksum), 0)
 
         expected_files = [
             f"PROJ_S_SH010_PLATE.{i:04d}.exr" for i in range(1, 5)
         ]
-        actual = sorted(os.listdir(self.dst_dir))
+        actual = sorted([f for f in os.listdir(self.dst_dir) if not f.startswith(".")])
         self.assertEqual(actual, expected_files)
 
     def test_copy_movie(self):
@@ -156,13 +157,21 @@ class TestCopyFrames(unittest.TestCase):
             frames=[],
             first_file=movie_path,
         )
-        copied = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
+        copied, checksum, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
         self.assertEqual(copied, 1)
         self.assertIn("PROJ_S_SH010_PLATE.mov", os.listdir(self.dst_dir))
 
 
 class TestResolvePaths(unittest.TestCase):
     def test_resolve_paths_fills_directories(self):
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root)
+        
+        # Create a v001 to force v002
+        v1_path = os.path.join(root, "05-SHOTS", "SEQ010", "SH010", "PROJ_S_SH010_PLATE", "_published", "v001")
+        os.makedirs(v1_path, exist_ok=True)
+        Path(os.path.join(v1_path, ".ramses_complete")).touch()
+
         clip = Clip(
             base_name="SEQ010_SH010",
             extension="exr",
@@ -174,9 +183,9 @@ class TestResolvePaths(unittest.TestCase):
         match = MatchResult(clip=clip, sequence_id="SEQ010", shot_id="SH010", matched=True)
         info = MediaInfo(width=1920, height=1080, fps=24.0)
         plan = IngestPlan(match=match, media_info=info, sequence_id="SEQ010",
-                          shot_id="SH010", project_id="PROJ", version=2)
+                          shot_id="SH010", project_id="PROJ")
 
-        resolve_paths([plan], "/projects/PROJ")
+        resolve_paths([plan], root)
 
         self.assertIn("SH010", plan.target_publish_dir)
         self.assertIn("PROJ_S_SH010_PLATE", plan.target_publish_dir)
@@ -257,8 +266,7 @@ class TestExecutePlan(unittest.TestCase):
         mock_thumb.assert_called_with(
             clip, unittest.mock.ANY, 
             ocio_config="config.ocio", 
-            ocio_in="ACEScg", 
-            ocio_out="sRGB"
+            ocio_in="ACEScg"
         )
 
     def test_execute_copies_frames_parallel(self):
@@ -279,7 +287,8 @@ class TestExecutePlan(unittest.TestCase):
         result = execute_plan(plan, generate_thumbnail=False, generate_proxy=False)
         self.assertTrue(result.success)
         self.assertEqual(result.frames_copied, frame_count)
-        self.assertEqual(len(os.listdir(pub_dir)), frame_count + 1) # +1 for metadata json
+        # +1 for metadata json, +1 for .ramses_complete marker
+        self.assertEqual(len(os.listdir(pub_dir)), frame_count + 2) 
 
     def test_execute_fails_without_publish_dir(self):
         clip = Clip(base_name="x", extension="exr", directory=Path(self.src_dir),

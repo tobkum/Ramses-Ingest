@@ -295,6 +295,7 @@ class IngestWorker(QThread):
         thumbnails: bool,
         proxies: bool,
         update_status: bool = False,
+        fast_verify: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -303,6 +304,7 @@ class IngestWorker(QThread):
         self._thumbnails = thumbnails
         self._proxies = proxies
         self._update_status = update_status
+        self._fast_verify = fast_verify
         self._count = 0
 
     def run(self) -> None:
@@ -320,6 +322,7 @@ class IngestWorker(QThread):
                 generate_proxies=self._proxies,
                 progress_callback=_cb,
                 update_status=self._update_status,
+                fast_verify=self._fast_verify,
             )
             self.finished_results.emit(results)
         except Exception as exc:
@@ -741,6 +744,8 @@ class IngestWindow(QMainWindow):
         self._chk_proxy.setChecked(False)
         self._chk_status = QCheckBox()
         self._chk_status.setChecked(True)
+        self._chk_fast_verify = QCheckBox()
+        self._chk_fast_verify.setChecked(False)
         self._ocio_in = QComboBox()
         self._ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
         self._btn_edl = QPushButton("Load EDL...")
@@ -956,6 +961,12 @@ class IngestWindow(QMainWindow):
         chk_status.setChecked(self._chk_status.isChecked())
         lay.addWidget(chk_status)
 
+        # Fast Verify
+        chk_fast = QCheckBox("Fast Verify (MD5 first/mid/last only)")
+        chk_fast.setToolTip("Speeds up ingest by only verifying 3 frames per sequence instead of all.")
+        chk_fast.setChecked(self._chk_fast_verify.isChecked())
+        lay.addWidget(chk_fast)
+
         lay.addSpacing(10)
 
         # OCIO
@@ -1007,7 +1018,7 @@ class IngestWindow(QMainWindow):
         # Buttons
         btn_row = QHBoxLayout()
         btn_apply = QPushButton("Apply")
-        btn_apply.clicked.connect(lambda: self._apply_options(chk_thumb, chk_proxy, chk_status, ocio_in, rule_combo, dialog))
+        btn_apply.clicked.connect(lambda: self._apply_options(chk_thumb, chk_proxy, chk_status, chk_fast, ocio_in, rule_combo, dialog))
         btn_row.addWidget(btn_apply)
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(dialog.accept)
@@ -1016,11 +1027,12 @@ class IngestWindow(QMainWindow):
 
         dialog.exec()
 
-    def _apply_options(self, chk_thumb, chk_proxy, chk_status, ocio_in, rule_combo, dialog):
+    def _apply_options(self, chk_thumb, chk_proxy, chk_status, chk_fast, ocio_in, rule_combo, dialog):
         """Apply options from dialog"""
         self._chk_thumb.setChecked(chk_thumb.isChecked())
         self._chk_proxy.setChecked(chk_proxy.isChecked())
         self._chk_status.setChecked(chk_status.isChecked())
+        self._chk_fast_verify.setChecked(chk_fast.isChecked())
         self._ocio_in.setCurrentText(ocio_in.currentText())
         self._rule_combo.setCurrentIndex(rule_combo.currentIndex())
         dialog.accept()
@@ -1438,6 +1450,7 @@ class IngestWindow(QMainWindow):
             thumbnails=self._chk_thumb.isChecked(),
             proxies=self._chk_proxy.isChecked(),
             update_status=self._chk_status.isChecked(),
+            fast_verify=self._chk_fast_verify.isChecked(),
             parent=self,
         )
         self._ingest_worker.progress.connect(self._log)

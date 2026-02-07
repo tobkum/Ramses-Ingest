@@ -49,7 +49,7 @@ class TestReporting(unittest.TestCase):
         
         self.assertTrue(ok)
         self.assertTrue(os.path.isfile(report_path))
-        with open(report_path, "r") as f:
+        with open(report_path, "r", encoding="utf-8") as f:
             content = f.read()
             self.assertIn("SHOT", content)
             self.assertIn("PASSED", content)

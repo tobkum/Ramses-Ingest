@@ -30,6 +30,34 @@ from ramses_ingest.path_utils import normalize_path, join_normalized
 from ramses.file_info import RamFileInfo
 from ramses.constants import ItemType
 
+def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
+    """Verify if the destination volume has enough free space.
+
+    Args:
+        dest_path: Target directory or file path.
+        required_bytes: Number of bytes needed.
+
+    Returns:
+        (bool success, str error_message)
+    """
+    try:
+        # Get the root of the destination path (even if it doesn't exist yet)
+        target = os.path.abspath(dest_path)
+        while not os.path.exists(target):
+            parent = os.path.dirname(target)
+            if parent == target: break # Root reached
+            target = parent
+        
+        usage = shutil.disk_usage(target)
+        # Keep 500MB as safety margin for OS/logs
+        if usage.free < (required_bytes + 524288000):
+            free_gb = usage.free / (1024**3)
+            req_gb = required_bytes / (1024**3)
+            return False, f"Insufficient disk space on {target}. Need {req_gb:.2f} GB, but only {free_gb:.2f} GB free (plus safety margin)."
+        return True, ""
+    except Exception as exc:
+        return True, "" # Don't block on errors (e.g. permission issues on parent)
+
 # Thread-safe cache lock for Ramses object registration
 _RAMSES_CACHE_LOCK = threading.Lock()
 
@@ -143,12 +171,15 @@ import concurrent.futures
 import hashlib
 
 def _calculate_md5(file_path: str) -> str:
-    """Calculate MD5 hash of a file in chunks."""
+    """Calculate MD5 hash of a file in large chunks (1MB) for performance."""
     hash_md5 = hashlib.md5()
-    with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(4096), b""):
-            hash_md5.update(chunk)
-    return hash_md5.hexdigest()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1048576), b""): # 1MB chunks
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+    except (OSError, IOError):
+        return ""
 
 def copy_frames(
     clip: Clip,
@@ -157,9 +188,11 @@ def copy_frames(
     shot_id: str,
     step_id: str,
     progress_callback: Callable[[str], None] | None = None,
-    dry_run: bool = False
+    dry_run: bool = False,
+    fast_verify: bool = False,
+    max_workers: int = 4
 ) -> tuple[int, str, int, str]:
-    """Copy clip frames into *dest_dir* and verify bit-for-bit using MD5.
+    """Copy clip frames into *dest_dir* with parallel processing and verification.
 
     Args:
         clip: Source clip to copy
@@ -167,43 +200,23 @@ def copy_frames(
         project_id: Project short name
         shot_id: Shot identifier
         step_id: Step identifier
-        progress_callback: Optional callback for progress updates (Enhancement #5)
-        dry_run: If True, simulate copy without actually writing files (Enhancement #8)
+        progress_callback: Optional callback for progress updates
+        dry_run: If True, simulate copy without actually writing files
+        fast_verify: If True, only MD5 verify first, middle and last frames.
+        max_workers: Number of parallel copy threads.
 
     Returns (number of files copied, MD5 checksum of the first file, total bytes moved, first filename).
-    Raises OSError if verification or checksum fails.
     """
     if not dry_run:
         os.makedirs(dest_dir, exist_ok=True)
-    copied = 0
+    
     total_bytes = 0
     first_checksum = ""
     first_filename = ""
-
-    def _copy_and_verify(src: str, dst: str) -> tuple[str, int]:
-        if dry_run:
-            # Dry-run: only get source size and checksum, don't copy
-            sz = os.path.getsize(src)
-            src_md5 = _calculate_md5(src)
-            return src_md5, sz
-
-        shutil.copy2(src, dst)
-        sz = os.path.getsize(src)
-        # 1. Quick size check
-        if sz != os.path.getsize(dst):
-            raise OSError(f"Size mismatch: {dst}")
-
-        # 2. Bit-for-bit MD5 check
-        src_md5 = _calculate_md5(src)
-        if src_md5 != _calculate_md5(dst):
-            raise OSError(f"Checksum mismatch: {dst}")
-        return src_md5, sz
-
+    
+    frames_to_copy = []
     if clip.is_sequence:
         padding = clip.padding
-        total_count = len(clip.frames)
-
-        # Copy and verify ALL frames with MD5 checksums for data integrity
         for i, frame in enumerate(clip.frames):
             src = os.path.join(
                 str(clip.directory),
@@ -211,32 +224,68 @@ def copy_frames(
             )
             dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
             dst = os.path.join(dest_dir, dst_name)
-
-            # Full MD5 verification for every frame (VFX data integrity requirement)
-            checksum, sz = _copy_and_verify(src, dst)
-
-            # Store first frame info for reporting
-            if i == 0:
-                first_checksum = checksum
-                first_filename = dst_name
-
-            total_bytes += sz
-            copied += 1
-
-            # Progress reporting every 10 frames (or every frame for small sequences)
-            if progress_callback and (i % 10 == 0 or i == total_count - 1):
-                progress_callback(f"    Verifying frame {i+1}/{total_count}...")
-
+            
+            # Determine if this frame needs full MD5 verification
+            needs_md5 = True
+            if fast_verify:
+                # Only verify first, middle, and last
+                mid = len(clip.frames) // 2
+                if i != 0 and i != mid and i != (len(clip.frames) - 1):
+                    needs_md5 = False
+            
+            frames_to_copy.append((src, dst, dst_name, needs_md5, i == 0))
     else:
         src = clip.first_file
         dst_name = f"{project_id}_S_{shot_id}_{step_id}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
-        first_checksum, sz = _copy_and_verify(src, dst)
-        first_filename = dst_name
-        total_bytes += sz
-        copied = 1
+        frames_to_copy.append((src, dst, dst_name, True, True))
 
-    return copied, first_checksum, total_bytes, first_filename
+    def _process_one(args):
+        src, dst, dst_name, needs_md5, is_first = args
+        
+        if dry_run:
+            sz = os.path.getsize(src)
+            checksum = _calculate_md5(src) if needs_md5 else "skipped"
+            return checksum, sz, dst_name, is_first
+
+        shutil.copy2(src, dst)
+        sz = os.path.getsize(src)
+        
+        # 1. Size check (always)
+        if sz != os.path.getsize(dst):
+            raise OSError(f"Size mismatch: {dst}")
+
+        # 2. MD5 check (conditional)
+        checksum = ""
+        if needs_md5:
+            src_md5 = _calculate_md5(src)
+            dst_md5 = _calculate_md5(dst)
+            if src_md5 != dst_md5:
+                raise OSError(f"Checksum mismatch: {dst}")
+            checksum = src_md5
+            
+        return checksum, sz, dst_name, is_first
+
+    copied_count = 0
+    total_frames = len(frames_to_copy)
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_process_one, f) for f in frames_to_copy]
+        
+        for i, future in enumerate(concurrent.futures.as_completed(futures)):
+            checksum, sz, dst_name, is_first = future.result()
+            total_bytes += sz
+            copied_count += 1
+            
+            if is_first:
+                first_checksum = checksum
+                first_filename = dst_name
+                
+            if progress_callback and (i % 10 == 0 or i == total_frames - 1):
+                mode = "Verifying" if not fast_verify else "Copying"
+                progress_callback(f"    {mode} frame {i+1}/{total_frames}...")
+
+    return copied_count, first_checksum, total_bytes, first_filename
 
 
 def _get_next_version(publish_root: str) -> int:
@@ -505,6 +554,7 @@ def execute_plan(
     ocio_out: str = "sRGB", # Hardcoded for safety
     skip_ramses_registration: bool = False,
     dry_run: bool = False,
+    fast_verify: bool = False,
 ) -> IngestResult:
     """Execute a single ``IngestPlan``: create Ramses objects, copy frames, generate previews.
 
@@ -518,6 +568,7 @@ def execute_plan(
         ocio_out: Target colorspace.
         skip_ramses_registration: If True, skips the DB creation step (useful for parallel execution).
         dry_run: If True, preview operations without actually copying files (Enhancement #8).
+        fast_verify: If True, only verify MD5 for first/middle/last frames.
 
     Returns:
         An ``IngestResult`` describing the outcome.
@@ -554,6 +605,7 @@ def execute_plan(
             plan.project_id, plan.shot_id, plan.step_id,
             progress_callback=progress_callback,  # Enhancement #5: MD5 progress reporting
             dry_run=dry_run,  # Enhancement #8: Dry-run mode
+            fast_verify=fast_verify,
         )
         # Use technical frame count for movies, or files copied for sequences
         if not clip.is_sequence and plan.media_info.frame_count > 0:

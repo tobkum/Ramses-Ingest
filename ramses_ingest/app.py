@@ -350,6 +350,7 @@ class IngestEngine:
         update_status: bool = False,
         export_json_audit: bool = False,
         dry_run: bool = False,
+        fast_verify: bool = False,
     ) -> list[IngestResult]:
         """Execute all approved (can_execute) plans.
 
@@ -361,6 +362,7 @@ class IngestEngine:
             update_status: Update Ramses production status to "OK" on success
             export_json_audit: Generate machine-readable JSON audit trail
             dry_run: Preview operations without actually copying files (Enhancement #8)
+            fast_verify: If True, only verify MD5 for first/middle/last frames.
 
         Returns one ``IngestResult`` per plan.
         """
@@ -375,6 +377,31 @@ class IngestEngine:
         executable = [p for p in plans if p.can_execute]
         total = len(executable)
         _log(f"Starting ingest for {total} clips...")
+
+        # Enhancement: Disk Space Guard
+        if not dry_run and executable:
+            total_required = sum(p.match.clip.frame_count * 1024 * 1024 if p.match.clip.is_sequence else 10 * 1024 * 1024 for p in executable) # Rough estimate if media info missing
+            # More accurate if we have media info
+            total_required = 0
+            for p in executable:
+                if p.match.clip.is_sequence:
+                    # Estimate based on first file size * frame count
+                    try:
+                        sz = os.path.getsize(p.match.clip.first_file)
+                        total_required += sz * p.match.clip.frame_count
+                    except Exception:
+                        total_required += 10 * 1024 * 1024 * p.match.clip.frame_count # 10MB fallback
+                else:
+                    try:
+                        total_required += os.path.getsize(p.match.clip.first_file)
+                    except Exception:
+                        total_required += 500 * 1024 * 1024 # 500MB fallback
+
+            from ramses_ingest.publisher import check_disk_space
+            ok, err = check_disk_space(self.project_path or ".", total_required)
+            if not ok:
+                _log(f"CRITICAL: {err}")
+                return [IngestResult(plan=p, error=err) for p in plans]
 
         # Reuse cached metadata from connect_ramses (no redundant daemon queries)
         seq_cache = self._sequence_uuids  # Already fetched in connect phase
@@ -412,6 +439,7 @@ class IngestEngine:
                 ocio_out="sRGB",
                 skip_ramses_registration=True,
                 dry_run=dry_run,  # Enhancement #8: Dry-run mode
+                fast_verify=fast_verify,
             )
 
         if executable:

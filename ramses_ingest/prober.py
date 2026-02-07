@@ -102,6 +102,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         return MediaInfo()
 
     # 1. Check Cache (thread-safe)
+    cache_key = None
     try:
         import time
         mtime = os.path.getmtime(file_path)
@@ -184,7 +185,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     )
 
     # 3. Update Cache (thread-safe)
-    if info.is_valid:
+    if info.is_valid and cache_key:
         import time
         with _CACHE_LOCK:
             global _CACHE_DIRTY

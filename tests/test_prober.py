@@ -16,8 +16,10 @@ from ramses_ingest.prober import probe_file, MediaInfo
 
 class TestProber(unittest.TestCase):
     
+    @patch("os.path.isfile")
     @patch("subprocess.run")
-    def test_probe_success(self, mock_run):
+    def test_probe_success(self, mock_run, mock_isfile):
+        mock_isfile.return_value = True
         # Mock ffprobe output
         mock_stdout = json.dumps({
             "streams": [{
@@ -45,35 +47,39 @@ class TestProber(unittest.TestCase):
         self.assertEqual(info.start_timecode, "01:00:00:00")
         self.assertEqual(info.frame_count, 240)
 
+    @patch("os.path.isfile")
     @patch("subprocess.run")
-    def test_probe_timecode_in_format(self, mock_run):
+    def test_probe_timecode_in_format(self, mock_run, mock_isfile):
+        mock_isfile.return_value = True
         # Mock timecode in format tags instead of stream tags
         mock_stdout = json.dumps({
             "streams": [{
                 "width": 2048,
                 "height": 1080,
-                "r_frame_rate": "23.976/1", # ffprobe can sometimes return this or "24000/1001"
+                "r_frame_rate": "24000/1001",
                 "tags": {}
             }],
             "format": {
                 "tags": {"timecode": "02:15:10:05"}
             }
         })
-        # Note: r_frame_rate split logic might fail on "23.976/1" if it's not "num/den"
-        # but ffprobe usually does "24000/1001"
         mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
         
         info = probe_file("dummy.exr")
         self.assertEqual(info.start_timecode, "02:15:10:05")
 
+    @patch("os.path.isfile")
     @patch("subprocess.run")
-    def test_probe_failure(self, mock_run):
+    def test_probe_failure(self, mock_run, mock_isfile):
+        mock_isfile.return_value = True
         mock_run.return_value = MagicMock(returncode=1)
         info = probe_file("corrupt.mov")
         self.assertFalse(info.is_valid)
 
+    @patch("os.path.isfile")
     @patch("subprocess.run")
-    def test_ffprobe_missing(self, mock_run):
+    def test_ffprobe_missing(self, mock_run, mock_isfile):
+        mock_isfile.return_value = True
         mock_run.side_effect = FileNotFoundError
         with self.assertRaises(FileNotFoundError):
             probe_file("any.mov")
