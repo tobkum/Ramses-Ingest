@@ -389,8 +389,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     critical_colorspace_issues = [idx for idx, issue in colorspace_issues.items() if issue.severity == "critical"]
     
     health_cls = "health-green"
-    health_score = "STABLE"
-    health_label = "Production Ready"
+    health_score = "HEALTHY"
+    health_label = "Verified & Ready"
 
     if failed > 0:
         health_cls = "health-red"

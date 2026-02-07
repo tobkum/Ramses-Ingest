@@ -597,9 +597,9 @@ class IngestWindow(QMainWindow):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(7)
+        self._table.setColumnCount(8)
         self._table.setHorizontalHeaderLabels([
-            "", "Filename", "Shot", "Seq", "Frames", "Res", "Status"
+            "", "Filename", "Shot", "Ver", "Seq", "Frames", "Res", "Status"
         ])
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -616,11 +616,11 @@ class IngestWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(0, 28)  # Checkbox
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Filename
-        for col in [2, 3, 4, 5]:  # Shot, Seq, Frames, Res
+        for col in [2, 3, 4, 5, 6]:  # Shot, Ver, Seq, Frames, Res
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            header.resizeSection(col, 80)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(6, 55)  # Status (dot)
+            header.resizeSection(col, 60 if col == 3 else 80)
+        header.setSectionResizeMode(7, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(7, 55)  # Status (dot)
 
         # Set delegate for inline editing
         self._table.setItemDelegateForColumn(2, EditableDelegate(self._table))  # Shot column
@@ -817,7 +817,7 @@ class IngestWindow(QMainWindow):
             # Status filter
             if self._current_filter_status != "all":
                 # Check status column
-                status_item = self._table.cellWidget(row, 6)  # Status column
+                status_item = self._table.cellWidget(row, 7)  # Status column (was 6)
                 if status_item and hasattr(status_item, 'toolTip'):
                     status = status_item.toolTip().lower()
                     if self._current_filter_status not in status:
@@ -911,11 +911,21 @@ class IngestWindow(QMainWindow):
         if self._selected_plan_idx >= 0 and self._selected_plan_idx < len(self._plans):
             plan = self._plans[self._selected_plan_idx]
             plan.shot_id = text
+            
+            # Re-resolve paths for this plan to update versioning
+            self._resolve_all_paths()
+            
             # Update table with signals blocked to prevent race condition
             item = self._table.item(self._selected_plan_idx, 2)
             if item:
                 blocked = self._table.blockSignals(True)
                 item.setText(text)
+                
+                # Update Version column too
+                ver_item = self._table.item(self._selected_plan_idx, 3)
+                if ver_item:
+                    ver_item.setText(f"v{plan.version:03d}")
+                
                 self._table.blockSignals(blocked)
             self._update_summary()
 
@@ -925,6 +935,17 @@ class IngestWindow(QMainWindow):
             row = item.row()
             if row < len(self._plans):
                 self._plans[row].shot_id = item.text()
+                
+                # Re-resolve paths to update versioning
+                self._resolve_all_paths()
+                
+                # Update Version column
+                ver_item = self._table.item(row, 3)
+                if ver_item:
+                    blocked = self._table.blockSignals(True)
+                    ver_item.setText(f"v{self._plans[row].version:03d}")
+                    self._table.blockSignals(blocked)
+                    
                 self._update_summary()
 
     def _on_remove_selected(self) -> None:
@@ -1088,12 +1109,18 @@ class IngestWindow(QMainWindow):
                 shot_item.setForeground(QColor("#f44747"))  # Red if missing
             self._table.setItem(idx, 2, shot_item)
 
-            # Column 3: Sequence
+            # Column 3: Version (new)
+            ver_item = QTableWidgetItem(f"v{plan.version:03d}")
+            ver_item.setFlags(ver_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._table.setItem(idx, 3, ver_item)
+
+            # Column 4: Sequence
             seq_item = QTableWidgetItem(plan.sequence_id or "—")
             seq_item.setFlags(seq_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(idx, 3, seq_item)
+            self._table.setItem(idx, 4, seq_item)
 
-            # Column 4: Frames
+            # Column 5: Frames
             if clip.is_sequence:
                 fc = clip.frame_count
             else:
@@ -1101,17 +1128,17 @@ class IngestWindow(QMainWindow):
             
             frames_item = QTableWidgetItem(str(fc))
             frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(idx, 4, frames_item)
+            self._table.setItem(idx, 5, frames_item)
 
-            # Column 5: Resolution
+            # Column 6: Resolution
             res_text = "—"
             if plan.media_info.width and plan.media_info.height:
                 res_text = f"{plan.media_info.width}x{plan.media_info.height}"
             res_item = QTableWidgetItem(res_text)
             res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self._table.setItem(idx, 5, res_item)
+            self._table.setItem(idx, 6, res_item)
 
-            # Column 6: Status (color dot)
+            # Column 7: Status (color dot)
             status = "pending"
             if plan.can_execute and not plan.error:
                 status = "ready"
@@ -1124,7 +1151,7 @@ class IngestWindow(QMainWindow):
                 status = "duplicate"
 
             status_indicator = StatusIndicator(status)
-            self._table.setCellWidget(idx, 6, status_indicator)
+            self._table.setCellWidget(idx, 7, status_indicator)
 
             # Set row height for better readability
             self._table.setRowHeight(idx, 28)
@@ -1192,6 +1219,23 @@ class IngestWindow(QMainWindow):
         self._log_edit.append(msg)
         sb = self._log_edit.verticalScrollBar()
         sb.setValue(sb.maximum())
+
+    def _resolve_all_paths(self) -> None:
+        """Update target paths and version numbers for all plans."""
+        if not self._plans:
+            return
+            
+        from ramses_ingest.publisher import resolve_paths, resolve_paths_from_daemon
+        
+        # 1. Try resolving via daemon if connected
+        if self._engine.connected and self._engine._shot_objects:
+            resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
+            
+        # 2. Use project path as fallback for any unresolved plans
+        if self._engine.project_path:
+            unresolved = [p for p in self._plans if not p.target_publish_dir]
+            if unresolved:
+                resolve_paths(unresolved, self._engine.project_path)
 
     def _try_connect(self) -> None:
         ok = self._engine.connect_ramses()
@@ -1324,12 +1368,9 @@ class IngestWindow(QMainWindow):
         if text:
             self._engine.step_id = text
             self._chk_status.setText(f"Set {text} status to OK")
-            # Re-resolve paths when step changes so Destination column updates
+            # Re-resolve paths when step changes so Ver column updates
             if self._plans:
-                self._engine.step_id = text
-                if self._engine.connected:
-                    from ramses_ingest.publisher import resolve_paths_from_daemon
-                    resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
+                self._resolve_all_paths()
                 self._populate_table()
         else:
             self._engine.step_id = ""

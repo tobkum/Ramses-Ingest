@@ -52,7 +52,7 @@ class TestReporting(unittest.TestCase):
         with open(report_path, "r", encoding="utf-8") as f:
             content = f.read()
             self.assertIn("SHOT", content)
-            self.assertIn("STABLE", content)
+            self.assertIn("HEALTHY", content)
 
 if __name__ == "__main__":
     unittest.main()
