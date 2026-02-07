@@ -67,6 +67,7 @@ class IngestResult:
     published_path: str = ""
     preview_path: str = ""
     frames_copied: int = 0
+    bytes_copied: int = 0 # Exact byte count
     checksum: str = "" # MD5 of the first frame/file
     error: str = ""
 
@@ -132,38 +133,40 @@ def _calculate_md5(file_path: str) -> str:
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> tuple[int, str]:
+def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> tuple[int, str, int]:
     """Copy clip frames into *dest_dir* and verify bit-for-bit using MD5.
 
-    Returns (number of files copied, MD5 checksum of the first file).
+    Returns (number of files copied, MD5 checksum of the first file, total bytes moved).
     Raises OSError if verification or checksum fails.
     """
     os.makedirs(dest_dir, exist_ok=True)
     copied = 0
+    total_bytes = 0
     first_checksum = ""
 
-    def _copy_and_verify(src: str, dst: str) -> str:
+    def _copy_and_verify(src: str, dst: str) -> tuple[str, int]:
         shutil.copy2(src, dst)
+        sz = os.path.getsize(src)
         # 1. Quick size check
-        if os.path.getsize(src) != os.path.getsize(dst):
+        if sz != os.path.getsize(dst):
             raise OSError(f"Size mismatch: {dst}")
         
         # 2. Bit-for-bit MD5 check
         src_md5 = _calculate_md5(src)
         if src_md5 != _calculate_md5(dst):
             raise OSError(f"Checksum mismatch: {dst}")
-        return src_md5
+        return src_md5, sz
 
     if clip.is_sequence:
         padding = clip.padding
         
-        # Process frames sequentially to prevent Windows handle exhaustion (WinError 32)
-        # and disk thrashing. High-level shot parallelism already provides enough speed.
+        # We'll copy the first frame separately to get its checksum safely
         f1 = clip.frames[0]
         s1 = os.path.join(str(clip.directory), f"{clip.base_name}.{str(f1).zfill(padding)}.{clip.extension}")
         d1_name = f"{project_id}_S_{shot_id}_{step_id}.{str(f1).zfill(padding)}.{clip.extension}"
         d1 = os.path.join(dest_dir, d1_name)
-        first_checksum = _copy_and_verify(s1, d1)
+        first_checksum, sz = _copy_and_verify(s1, d1)
+        total_bytes += sz
         copied = 1
 
         if len(clip.frames) > 1:
@@ -176,18 +179,21 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
                 dst = os.path.join(dest_dir, dst_name)
                 # Ensure each copy finishes and closes its handle before moving on
                 shutil.copy2(src, dst)
-                if os.path.getsize(src) != os.path.getsize(dst):
+                sz = os.path.getsize(src)
+                if sz != os.path.getsize(dst):
                     raise OSError(f"Size mismatch: {dst}")
+                total_bytes += sz
                 copied += 1
 
     else:
         src = clip.first_file
         dst_name = f"{project_id}_S_{shot_id}_{step_id}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
-        first_checksum = _copy_and_verify(src, dst)
+        first_checksum, sz = _copy_and_verify(src, dst)
+        total_bytes += sz
         copied = 1
 
-    return copied, first_checksum
+    return copied, first_checksum, total_bytes
 
 
 def _get_next_version(publish_root: str) -> int:
@@ -387,7 +393,7 @@ def execute_plan(
     # --- Copy frames ---
     try:
         _log(f"  Copying {clip.frame_count or 1} file(s)...")
-        copied_count, checksum = copy_frames(
+        copied_count, checksum, total_bytes = copy_frames(
             clip, plan.target_publish_dir,
             plan.project_id, plan.shot_id, plan.step_id,
         )
@@ -398,6 +404,7 @@ def execute_plan(
             result.frames_copied = copied_count
 
         result.checksum = checksum
+        result.bytes_copied = total_bytes
         result.published_path = plan.target_publish_dir
     except Exception as exc:
         result.error = f"Copy failed: {exc}"

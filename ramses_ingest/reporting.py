@@ -26,7 +26,7 @@ def _get_base64_image(path: str) -> str:
 
 
 def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", operator: str = "Unknown") -> bool:
-    """Generate a clean, professional HTML manifest with accurate analytics and technical flagging."""
+    """Generate a clean, professional HTML manifest with exact analytics and technical flagging."""
     
     css = """
     body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #f5f5f5; color: #333; padding: 30px; margin: 0; }
@@ -76,26 +76,16 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     for res in results:
         if not res or not res.plan: continue
         step_id = res.plan.step_id
-        clip = res.plan.match.clip
         
         if res.success:
             succeeded += 1
             total_frames += res.frames_copied
+            total_size_bytes += res.bytes_copied # 100% Accurate count from copy loop
+            
             mi = res.plan.media_info
             if mi.width: resolutions.append(f"{mi.width}x{mi.height}")
             if mi.fps: framerates.append(mi.fps)
             if mi.codec: codecs.append(mi.codec.lower())
-            
-            # Correct Size Calculation
-            try:
-                if clip.first_file:
-                    fsize = os.path.getsize(clip.first_file)
-                    if clip.is_sequence:
-                        total_size_bytes += (fsize * res.frames_copied)
-                    else:
-                        # Single container (movie)
-                        total_size_bytes += fsize
-            except Exception: pass
 
     # Find "Common" values (Modes)
     def get_mode(data):
@@ -224,7 +214,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "            </tbody>",
         "        </table>",
         '        <div class="footer">',
-        f"            &copy; {time.strftime('%Y')} {studio_name}",
+        f"            With ε&gt; from {studio_name}",
         "        </div>",
         "    </div>",
         "</body>",
