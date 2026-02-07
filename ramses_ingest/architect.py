@@ -193,6 +193,7 @@ class VisualTokenWidget(QFrame):
     def __init__(self, token: ArchitectToken, parent=None) -> None:
         super().__init__(parent)
         self.token = token
+        self._drag_start_pos = None  # Initialize drag position
         self._setup_layout()
         self.update_visuals()
 
@@ -273,6 +274,8 @@ class VisualTokenWidget(QFrame):
 
     def mouseMoveEvent(self, event) -> None:
         if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        if self._drag_start_pos is None:  # Safety check
             return
         if (event.pos() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
             return
@@ -441,7 +444,6 @@ class SimulationTable(QTableWidget):
 
     def refresh(self, samples: list[str], tokens: list[ArchitectToken]) -> None:
         self.setRowCount(len(samples))
-        import os
         
         # Color mapping for X-Ray (matching Token colors)
         colors = {
@@ -979,12 +981,6 @@ class NamingArchitectDialog(QDialog):
                 self.drop_zone.add_token(ArchitectToken(type=item))
         self._on_rule_changed()
 
-    def _add_token(self, ttype: TokenType) -> None:
-        self.drop_zone.add_token(ArchitectToken(type=ttype))
-
-    def _add_separator(self) -> None:
-        """Legacy method - replaced by dropdown in professional UI"""
-        self.drop_zone.add_token(ArchitectToken(type=TokenType.SEPARATOR, value="_"))
 
     def _on_magic_wand(self) -> None:
         """Heuristically guess tokens from samples and populate the drop zone."""

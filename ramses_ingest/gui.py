@@ -747,6 +747,21 @@ class IngestWindow(QMainWindow):
 
     # -- Professional UI Methods ---------------------------------------------
 
+    def _open_folder(self, path: str) -> None:
+        """Open folder in system file manager (cross-platform)"""
+        import platform
+        import subprocess
+
+        try:
+            if platform.system() == "Windows":
+                os.startfile(path)
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.Popen(["open", path])
+            else:  # Linux
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            self._log(f"Failed to open folder: {e}")
+
     def _setup_shortcuts(self) -> None:
         """Setup keyboard shortcuts for professional workflow"""
         from PySide6.QtGui import QShortcut, QKeySequence
@@ -809,7 +824,10 @@ class IngestWindow(QMainWindow):
                 frames_item = self._table.item(row, 4)  # Frames column
                 if frames_item:
                     frames_text = frames_item.text()
-                    is_sequence = "f" in frames_text and int(frames_text.replace("f", "")) > 1
+                    try:
+                        is_sequence = "f" in frames_text and int(frames_text.replace("f", "")) > 1
+                    except (ValueError, AttributeError):
+                        is_sequence = False  # Default to single frame on error
 
                     if is_sequence and not self._chk_sequences.isChecked():
                         show = False
@@ -888,8 +906,12 @@ class IngestWindow(QMainWindow):
         if self._selected_plan_idx >= 0 and self._selected_plan_idx < len(self._plans):
             plan = self._plans[self._selected_plan_idx]
             plan.shot_id = text
-            # Update table
-            self._table.item(self._selected_plan_idx, 2).setText(text)
+            # Update table with signals blocked to prevent race condition
+            item = self._table.item(self._selected_plan_idx, 2)
+            if item:
+                blocked = self._table.blockSignals(True)
+                item.setText(text)
+                self._table.blockSignals(blocked)
             self._update_summary()
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
@@ -1020,6 +1042,9 @@ class IngestWindow(QMainWindow):
 
     def _populate_table(self) -> None:
         """Populate the table with current plans (replaces _populate_tree)"""
+        # Block signals to prevent triggering itemChanged during population
+        blocked = self._table.blockSignals(True)
+
         self._table.setRowCount(0)
         self._table.setRowCount(len(self._plans))
 
@@ -1088,6 +1113,9 @@ class IngestWindow(QMainWindow):
             # Set row height for better readability
             self._table.setRowHeight(idx, 28)
 
+        # Re-enable signals
+        self._table.blockSignals(blocked)
+
         # Update filter counts
         self._update_filter_counts()
         self._update_summary()
@@ -1122,7 +1150,9 @@ class IngestWindow(QMainWindow):
             for row in selected_rows:
                 if row < len(self._plans):
                     self._plans[row].shot_id = shot_id
-                    self._table.item(row, 2).setText(shot_id)
+                    item = self._table.item(row, 2)
+                    if item:
+                        item.setText(shot_id)
 
             self._update_summary()
 
@@ -1326,12 +1356,12 @@ class IngestWindow(QMainWindow):
                 plan = self._plans[row]
 
                 act_src = QAction("Open Source Folder", self)
-                act_src.triggered.connect(lambda: os.startfile(plan.match.clip.directory))
+                act_src.triggered.connect(lambda: self._open_folder(plan.match.clip.directory))
                 menu.addAction(act_src)
 
                 if plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
                     act_dst = QAction("Open Destination Folder", self)
-                    act_dst.triggered.connect(lambda: os.startfile(plan.target_publish_dir))
+                    act_dst.triggered.connect(lambda: self._open_folder(plan.target_publish_dir))
                     menu.addAction(act_dst)
 
                 menu.addSeparator()
