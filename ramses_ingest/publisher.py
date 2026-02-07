@@ -396,7 +396,8 @@ def execute_plan(
 def register_ramses_objects(
     plan: IngestPlan, 
     log: Callable[[str], None], 
-    sequence_cache: dict[str, str] | None = None
+    sequence_cache: dict[str, str] | None = None,
+    shot_cache: dict[str, object] | None = None
 ) -> None:
     """Create or HEAL RamSequence / RamShot via the Daemon API."""
     try:
@@ -423,11 +424,15 @@ def register_ramses_objects(
     seq_obj = None
     if plan.sequence_id:
         seq_upper = plan.sequence_id.upper()
-        # Find existing sequence to heal it, or create new
-        for s in daemon.getObjects("RamSequence"):
-            if s.shortName().upper() == seq_upper:
-                seq_obj = s
-                break
+        
+        # Use cache if available, otherwise fetch
+        if sequence_cache and seq_upper in sequence_cache:
+            seq_obj = RamSequence(sequence_cache[seq_upper])
+        else:
+            for s in daemon.getObjects("RamSequence"):
+                if s.shortName().upper() == seq_upper:
+                    seq_obj = s
+                    break
         
         seq_folder = os.path.join(project.folderPath(), "05-SHOTS", plan.sequence_id).replace("\\", "/")
         seq_data = {
@@ -446,21 +451,31 @@ def register_ramses_objects(
             log(f"  Creating sequence {plan.sequence_id}...")
             try:
                 seq_obj = RamSequence(data=seq_data, create=True)
+                if sequence_cache is not None:
+                    sequence_cache[seq_upper] = seq_obj.uuid()
             except Exception as exc:
                 log(f"  Sequence creation failed: {exc}")
         else:
-            # HEAL existing sequence
-            log(f"  Healing sequence {plan.sequence_id} metadata...")
-            seq_obj.setData(seq_data)
+            # HEAL only if needed
+            current_data = seq_obj.data()
+            if current_data.get("folderPath") != seq_folder or current_data.get("project") != project_uuid:
+                log(f"  Healing sequence {plan.sequence_id} metadata...")
+                seq_obj.setData(seq_data)
 
     # 2. Handle Shot
     if plan.shot_id:
         shot_upper = plan.shot_id.upper()
         shot_obj = None
-        for s in daemon.getObjects("RamShot"):
-            if s.shortName().upper() == shot_upper:
-                shot_obj = s
-                break
+        
+        # Use provided shot_cache (passed from app.py)
+        if shot_cache and shot_upper in shot_cache:
+            shot_obj = shot_cache[shot_upper]
+        else:
+            # Fallback to direct lookup (avoid getObjects in loop)
+            for s in project.shots():
+                if s.shortName().upper() == shot_upper:
+                    shot_obj = s
+                    break
 
         # Derive folder path
         if plan.sequence_id:
@@ -487,13 +502,17 @@ def register_ramses_objects(
         if not shot_obj:
             log(f"  Creating shot {plan.shot_id}...")
             try:
-                RamShot(data=shot_data, create=True)
+                shot_obj = RamShot(data=shot_data, create=True)
+                if shot_cache is not None:
+                    shot_cache[shot_upper] = shot_obj
             except Exception as exc:
                 log(f"  Shot creation failed: {exc}")
         else:
-            # HEAL existing shot
-            log(f"  Healing shot {plan.shot_id} metadata...")
-            shot_obj.setData(shot_data)
+            # HEAL only if needed
+            current_data = shot_obj.data()
+            if current_data.get("folderPath") != shot_folder or current_data.get("project") != project_uuid:
+                log(f"  Healing shot {plan.shot_id} metadata...")
+                shot_obj.setData(shot_data)
 
 
 def update_ramses_status(
