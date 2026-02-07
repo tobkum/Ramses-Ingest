@@ -23,6 +23,9 @@ from ramses_ingest.scanner import Clip
 from ramses_ingest.matcher import MatchResult
 from ramses_ingest.prober import MediaInfo
 
+from ramses.file_info import RamFileInfo
+from ramses.constants import ItemType
+
 
 @dataclass
 class IngestPlan:
@@ -34,6 +37,7 @@ class IngestPlan:
     sequence_id: str = ""
     shot_id: str = ""
     project_id: str = ""
+    project_name: str = "" # Added long name support
     step_id: str = "PLATE"
 
     is_new_sequence: bool = False
@@ -73,20 +77,9 @@ def build_plans(
     step_id: str = "PLATE",
     existing_sequences: list[str] | None = None,
     existing_shots: list[str] | None = None,
+    project_name: str = "",
 ) -> list[IngestPlan]:
-    """Build an ``IngestPlan`` for each matched clip.
-
-    Args:
-        matches: Matched clips from the matcher module.
-        media_infos: Keyed by clip.first_file path.
-        project_id: Ramses project short name.
-        step_id: Pipeline step (default ``PLATE``).
-        existing_sequences: Short names of sequences already in Ramses.
-        existing_shots: Short names of shots already in Ramses.
-
-    Returns:
-        List of plans, one per clip.
-    """
+    """Build an ``IngestPlan`` for each matched clip."""
     if existing_sequences is None:
         existing_sequences = []
     if existing_shots is None:
@@ -105,6 +98,7 @@ def build_plans(
             sequence_id=match.sequence_id,
             shot_id=match.shot_id,
             project_id=project_id,
+            project_name=project_name or project_id,
             step_id=step_id,
         )
 
@@ -177,22 +171,20 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
 def resolve_paths(
     plans: list[IngestPlan],
     project_root: str,
-    shots_folder: str = "04-SHOTS",
+    shots_folder: str = "05-SHOTS",
 ) -> None:
     """Fill in ``target_publish_dir`` and ``target_preview_dir`` on each plan.
 
     Uses the Ramses folder convention::
 
-        {project_root}/{shots_folder}/[{SEQUENCE}]/{SHOT}/{STEP}/_published/v{NNN}/
-        {project_root}/{shots_folder}/[{SEQUENCE}]/{SHOT}/{STEP}/_preview/
+        {project_root}/{shots_folder}/[{SEQUENCE}]/{SHOT}/{Project}_S_{Shot}_{Step}/_published/v{NNN}/
 
-    This is the offline fallback when the daemon is not available.
+    This is the offline fallback matching the Ramses API behavior.
     """
     for plan in plans:
         if not plan.can_execute:
             continue
 
-        # Ramses often groups shots by sequence.
         if plan.sequence_id:
             shot_root = os.path.join(
                 project_root, shots_folder, plan.sequence_id, plan.shot_id,
@@ -202,7 +194,15 @@ def resolve_paths(
                 project_root, shots_folder, plan.shot_id,
             )
 
-        step_folder = os.path.join(shot_root, plan.step_id)
+        # Build step folder name using API convention: PROJ_S_SH010_PLATE
+        nm = RamFileInfo()
+        nm.project = plan.project_id
+        nm.ramType = ItemType.SHOT
+        nm.shortName = plan.shot_id
+        nm.step = plan.step_id
+        step_folder_name = nm.fileName()
+
+        step_folder = os.path.join(shot_root, step_folder_name)
         version_str = f"v{plan.version:03d}"
 
         plan.target_publish_dir = os.path.join(
@@ -326,11 +326,16 @@ def execute_plan(
     # --- Copy frames ---
     try:
         _log(f"  Copying {clip.frame_count or 1} file(s)...")
-        copied = copy_frames(
+        copied_count = copy_frames(
             clip, plan.target_publish_dir,
             plan.project_id, plan.shot_id, plan.step_id,
         )
-        result.frames_copied = copied
+        # Use technical frame count for movies, or files copied for sequences
+        if not clip.is_sequence and plan.media_info.frame_count > 0:
+            result.frames_copied = plan.media_info.frame_count
+        else:
+            result.frames_copied = copied_count
+
         result.published_path = plan.target_publish_dir
     except Exception as exc:
         result.error = f"Copy failed: {exc}"
@@ -393,7 +398,7 @@ def register_ramses_objects(
     log: Callable[[str], None], 
     sequence_cache: dict[str, str] | None = None
 ) -> None:
-    """Attempt to create RamSequence / RamShot via the Daemon API."""
+    """Create or HEAL RamSequence / RamShot via the Daemon API."""
     try:
         from ramses import Ramses
         ram = Ramses.instance()
@@ -408,53 +413,87 @@ def register_ramses_objects(
 
     info = plan.media_info
     daemon = RamDaemonInterface.instance()
+    project = ram.project()
+    if not project:
+        return
+    
+    project_uuid = project.uuid()
 
-    # Use provided cache or fetch fresh (less efficient)
-    if sequence_cache is not None:
-        sequences = sequence_cache
-    else:
-        sequences = {s.shortName().upper(): s.uuid() for s in daemon.getObjects("RamSequence")}
-
-    if plan.is_new_sequence and plan.sequence_id:
+    # 1. Handle Sequence
+    seq_obj = None
+    if plan.sequence_id:
         seq_upper = plan.sequence_id.upper()
-        if seq_upper not in sequences:
+        # Find existing sequence to heal it, or create new
+        for s in daemon.getObjects("RamSequence"):
+            if s.shortName().upper() == seq_upper:
+                seq_obj = s
+                break
+        
+        seq_folder = os.path.join(project.folderPath(), "05-SHOTS", plan.sequence_id).replace("\\", "/")
+        seq_data = {
+            "shortName": plan.sequence_id,
+            "name": plan.sequence_id,
+            "folderPath": seq_folder,
+            "project": project_uuid,
+            "overrideResolution": True,
+            "width": info.width or 1920,
+            "height": info.height or 1080,
+            "overrideFramerate": True,
+            "framerate": info.fps or 24.0,
+        }
+
+        if not seq_obj:
             log(f"  Creating sequence {plan.sequence_id}...")
             try:
-                new_seq = RamSequence(data={
-                    "shortName": plan.sequence_id,
-                    "name": plan.sequence_id,
-                    "overrideResolution": True,
-                    "width": info.width or 1920,
-                    "height": info.height or 1080,
-                    "overrideFramerate": True,
-                    "framerate": info.fps or 24.0,
-                }, create=True)
-                sequences[seq_upper] = new_seq.uuid()
+                seq_obj = RamSequence(data=seq_data, create=True)
             except Exception as exc:
                 log(f"  Sequence creation failed: {exc}")
+        else:
+            # HEAL existing sequence
+            log(f"  Healing sequence {plan.sequence_id} metadata...")
+            seq_obj.setData(seq_data)
 
-    if plan.is_new_shot and plan.shot_id:
-        log(f"  Creating shot {plan.shot_id}...")
-        try:
-            seq_uuid = sequences.get(plan.sequence_id.upper(), "")
+    # 2. Handle Shot
+    if plan.shot_id:
+        shot_upper = plan.shot_id.upper()
+        shot_obj = None
+        for s in daemon.getObjects("RamShot"):
+            if s.shortName().upper() == shot_upper:
+                shot_obj = s
+                break
 
-            duration = 5.0
-            if info.fps and info.fps > 0:
-                fc = info.frame_count or (plan.match.clip.frame_count if plan.match.clip.is_sequence else 0)
-                if fc > 0:
-                    duration = fc / info.fps
+        # Derive folder path
+        if plan.sequence_id:
+            shot_folder = os.path.join(project.folderPath(), "05-SHOTS", plan.sequence_id, plan.shot_id).replace("\\", "/")
+        else:
+            shot_folder = os.path.join(project.folderPath(), "05-SHOTS", plan.shot_id).replace("\\", "/")
 
-            shot_data = {
-                "shortName": plan.shot_id,
-                "name": plan.shot_id,
-                "duration": duration,
-            }
-            if seq_uuid:
-                shot_data["sequence"] = seq_uuid
+        duration = 5.0
+        if info.fps and info.fps > 0:
+            fc = info.frame_count or (plan.match.clip.frame_count if plan.match.clip.is_sequence else 0)
+            if fc > 0:
+                duration = fc / info.fps
 
-            RamShot(data=shot_data, create=True)
-        except Exception as exc:
-            log(f"  Shot creation failed: {exc}")
+        shot_data = {
+            "shortName": plan.shot_id,
+            "name": plan.shot_id,
+            "folderPath": shot_folder,
+            "project": project_uuid,
+            "duration": duration,
+        }
+        if seq_obj:
+            shot_data["sequence"] = seq_obj.uuid()
+
+        if not shot_obj:
+            log(f"  Creating shot {plan.shot_id}...")
+            try:
+                RamShot(data=shot_data, create=True)
+            except Exception as exc:
+                log(f"  Shot creation failed: {exc}")
+        else:
+            # HEAL existing shot
+            log(f"  Healing shot {plan.shot_id} metadata...")
+            shot_obj.setData(shot_data)
 
 
 def update_ramses_status(

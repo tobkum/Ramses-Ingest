@@ -179,9 +179,10 @@ class TestResolvePaths(unittest.TestCase):
         resolve_paths([plan], "/projects/PROJ")
 
         self.assertIn("SH010", plan.target_publish_dir)
-        self.assertIn("PLATE", plan.target_publish_dir)
+        self.assertIn("PROJ_S_SH010_PLATE", plan.target_publish_dir)
         self.assertIn("v002", plan.target_publish_dir)
         self.assertIn("_preview", plan.target_preview_dir)
+        self.assertIn("05-SHOTS", plan.target_publish_dir)
 
     def test_resolve_paths_skips_unexecutable(self):
         clip = Clip(base_name="x", extension="exr", directory=Path("/tmp"),

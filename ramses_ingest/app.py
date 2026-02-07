@@ -233,6 +233,7 @@ class IngestEngine:
             matches,
             media_infos,
             project_id=self._project_id or "PROJ",
+            project_name=self._project_name or self._project_id or "Project",
             step_id=self._step_id,
             existing_sequences=self._existing_sequences,
             existing_shots=self._existing_shots,
@@ -295,6 +296,10 @@ class IngestEngine:
         _log("Phase 2: Processing files (Parallel)...")
         results: list[IngestResult] = []
         
+        # Initialize results with failed entries for non-executable plans
+        # so they show up in the report as skipped/failed.
+        executed_plans = set()
+
         # Helper for thread pool
         def _run_one(plan: IngestPlan) -> IngestResult:
             return execute_plan(
@@ -308,19 +313,28 @@ class IngestEngine:
                 skip_ramses_registration=True,
             )
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-            future_to_plan = {executor.submit(_run_one, p): p for p in executable}
-            
-            for i, future in enumerate(concurrent.futures.as_completed(future_to_plan), 1):
-                try:
-                    res = future.result()
-                    results.append(res)
-                    prefix = "OK" if res.success else "FAILED"
-                    _log(f"[{i}/{total}] {res.plan.shot_id}: {prefix}")
-                    if not res.success:
-                        _log(f"  Error: {res.error}")
-                except Exception as exc:
-                    _log(f"[{i}/{total}] CRITICAL ERROR: {exc}")
+        if executable:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+                future_to_plan = {executor.submit(_run_one, p): p for p in executable}
+                
+                for i, future in enumerate(concurrent.futures.as_completed(future_to_plan), 1):
+                    plan = future_to_plan[future]
+                    executed_plans.add(id(plan))
+                    try:
+                        res = future.result()
+                        results.append(res)
+                        prefix = "OK" if res.success else "FAILED"
+                        _log(f"[{i}/{total}] {res.plan.shot_id}: {prefix}")
+                        if not res.success:
+                            _log(f"  Error: {res.error}")
+                    except Exception as exc:
+                        _log(f"[{i}/{total}] CRITICAL ERROR processing {plan.shot_id}: {exc}")
+                        results.append(IngestResult(plan=plan, error=str(exc)))
+
+        # Add skipped plans to results for the report
+        for p in plans:
+            if id(p) not in executed_plans:
+                results.append(IngestResult(plan=p, error=p.error or "Skipped or not executable"))
 
         # Phase 3: Update Lifecycle Status (Feature 5)
         if update_status:
@@ -334,15 +348,18 @@ class IngestEngine:
                         pass
 
         # Phase 4: Generate Report (Feature 4)
-        _log("Phase 4: Generating ingest manifest...")
+        _log(f"Phase 4: Generating ingest manifest for {len(results)} items...")
         from ramses_ingest.reporting import generate_html_report
         report_name = f"Ingest_Report_{self.project_id}_{int(time.time())}.html"
         report_path = os.path.join(self.project_path, "_ingest_reports", report_name) if self.project_path else report_name
+        
         if generate_html_report(results, report_path, studio_name=self.studio_name):
             _log(f"  Manifest created: {report_path}")
+        else:
+            _log(f"  ERROR: Failed to write manifest to {report_path}")
 
         succeeded = sum(1 for r in results if r.success)
-        _log(f"Done: {succeeded}/{total} succeeded.")
+        _log(f"Done: {succeeded}/{len(plans)} succeeded.")
         return results
 
 

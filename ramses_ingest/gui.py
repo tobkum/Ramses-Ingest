@@ -59,6 +59,19 @@ QLabel#statusDisconnected {
 }
 
 /* --- Inputs --- */
+QLineEdit {
+    background-color: #2d2d2d;
+    border: 1px solid #3e3e42;
+    border-radius: 4px;
+    padding: 2px 8px;
+    color: #d4d4d4;
+    min-height: 24px;
+}
+
+QLineEdit:focus {
+    border-color: #007acc;
+}
+
 QComboBox {
     background-color: #2d2d2d;
     border: 1px solid #3e3e42;
@@ -137,13 +150,18 @@ QTreeWidget {
 }
 
 QTreeWidget::item {
-    padding: 3px;
+    padding: 6px;
     border-bottom: 1px solid #2d2d2d;
+}
+
+QTreeWidget::item:hover {
+    background-color: #2a2d2e;
 }
 
 QTreeWidget::item:selected {
     background-color: #094771;
     color: #ffffff;
+    border-left: 2px solid #007acc;
 }
 
 QHeaderView::section {
@@ -445,9 +463,19 @@ class IngestWindow(QMainWindow):
         rule_row.addWidget(btn_edit_rules)
         root.addLayout(rule_row)
 
+        # --- Filter bar -----------------------------------------------------
+        filter_row = QHBoxLayout()
+        self._search_edit = QLineEdit()
+        self._search_edit.setPlaceholderText("Search by Shot or Sequence ID...")
+        self._search_edit.textChanged.connect(self._on_search_changed)
+        filter_row.addWidget(self._search_edit)
+        root.addLayout(filter_row)
+
         # --- Shot table -----------------------------------------------------
         self._tree = QTreeWidget()
-        self._tree.setAlternatingRowColors(True)
+        self._tree.itemChanged.connect(self._on_item_changed)
+        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.setRootIsDecorated(False)
         self._tree.setSelectionMode(QTreeWidget.SelectionMode.ExtendedSelection)
         self._tree.setHeaderLabels([
@@ -618,13 +646,13 @@ class IngestWindow(QMainWindow):
 
             # Status
             if not plan.match.matched:
-                item.setText(1, "---")
+                item.setText(1, " ? ")
                 item.setForeground(1, QColor("#B2B24C"))
             elif plan.is_new_shot:
-                item.setText(1, "NEW")
+                item.setText(1, " NEW ")
                 item.setForeground(1, QColor("#4CB24C"))
             else:
-                item.setText(1, "UPD")
+                item.setText(1, " UPD ")
                 item.setForeground(1, QColor("#4C8CB2"))
 
             # Sequence / Shot
@@ -633,8 +661,11 @@ class IngestWindow(QMainWindow):
 
             # Frames
             clip = plan.match.clip
+            mi = plan.media_info
             if clip.is_sequence:
                 item.setText(4, f"{clip.frame_count}fr")
+            elif mi.frame_count > 0:
+                item.setText(4, f"{mi.frame_count}fr")
             else:
                 item.setText(4, "movie")
 
@@ -683,6 +714,57 @@ class IngestWindow(QMainWindow):
     def _on_studio_changed(self, text: str) -> None:
         self._engine.studio_name = text
         save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text)
+
+    def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        """Update the button summary when a checkbox is toggled."""
+        if column == 0:
+            self._update_summary()
+
+    def _on_search_changed(self, text: str) -> None:
+        """Filter the shot table based on sequence or shot ID."""
+        search = text.lower()
+        for i in range(self._tree.topLevelItemCount()):
+            item = self._tree.topLevelItem(i)
+            seq = item.text(2).lower()
+            shot = item.text(3).lower()
+            item.setHidden(search not in seq and search not in shot)
+
+    def _on_context_menu(self, pos) -> None:
+        """Show a right-click menu for the selected items."""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
+        
+        item = self._tree.itemAt(pos)
+        if not item:
+            return
+
+        idx = self._tree.indexOfTopLevelItem(item)
+        if idx < 0 or idx >= len(self._plans):
+            return
+        
+        plan = self._plans[idx]
+        menu = QMenu(self)
+        
+        act_src = QAction("Open Source Folder", self)
+        act_src.triggered.connect(lambda: os.startfile(plan.match.clip.directory))
+        menu.addAction(act_src)
+
+        if plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
+            act_dst = QAction("Open Destination Folder", self)
+            act_dst.triggered.connect(lambda: os.startfile(plan.target_publish_dir))
+            menu.addAction(act_dst)
+        
+        menu.addSeparator()
+        
+        act_remove = QAction("Remove from List", self)
+        act_remove.triggered.connect(lambda: self._remove_plan_at(idx))
+        menu.addAction(act_remove)
+
+        menu.exec(self._tree.viewport().mapToGlobal(pos))
+
+    def _remove_plan_at(self, index: int) -> None:
+        self._plans.pop(index)
+        self._populate_tree()
 
     def _on_drop(self, paths: list[str]) -> None:
         if self._scan_worker and self._scan_worker.isRunning():
