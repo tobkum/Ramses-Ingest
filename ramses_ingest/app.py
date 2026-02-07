@@ -45,8 +45,7 @@ class IngestEngine:
 
         # OCIO Defaults
         self.ocio_config: str | None = os.getenv("OCIO")
-        self.ocio_in: str = "Linear"
-        self.ocio_out: str = "sRGB"
+        self.ocio_in: str = "sRGB"
 
     # -- Properties ----------------------------------------------------------
 
@@ -129,19 +128,29 @@ class IngestEngine:
             if user:
                 self._operator_name = user.name()
 
+            # Relational Batching: Fetch only what's needed for this project
+            # to stay below the 64KB socket limit.
+            from ramses.daemon_interface import RamDaemonInterface
+            daemon = RamDaemonInterface.instance()
+            project_uuid = project.uuid()
+
             # Cache sequences
             self._existing_sequences = []
-            for seq in project.sequences():
-                sn = seq.shortName()
-                self._existing_sequences.append(sn)
+            all_seqs = daemon.getObjects("RamSequence")
+            for seq in all_seqs:
+                if seq.get("project") == project_uuid:
+                    sn = seq.shortName()
+                    self._existing_sequences.append(sn)
 
             # Cache shots
             self._existing_shots = []
             self._shot_objects = {}
-            for shot in project.shots():
-                sn = shot.shortName()
-                self._existing_shots.append(sn)
-                self._shot_objects[sn.upper()] = shot
+            all_shots = daemon.getObjects("RamShot")
+            for shot in all_shots:
+                if shot.get("project") == project_uuid:
+                    sn = shot.shortName()
+                    self._existing_shots.append(sn)
+                    self._shot_objects[sn.upper()] = shot
 
             # Cache step short names
             self._steps = []
@@ -324,7 +333,7 @@ class IngestEngine:
                 progress_callback=None,
                 ocio_config=self.ocio_config,
                 ocio_in=self.ocio_in,
-                ocio_out=self.ocio_out,
+                ocio_out="sRGB",
                 skip_ramses_registration=True,
             )
 

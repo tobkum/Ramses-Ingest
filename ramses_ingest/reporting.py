@@ -25,24 +25,28 @@ def _get_base64_image(path: str) -> str:
 
 
 def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", operator: str = "Unknown") -> bool:
-    """Generate a clean, professional HTML manifest with MD5 integrity and technical specs."""
+    """Generate a clean, professional HTML manifest with color audit and sticky headers."""
     
     css = """
     body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: #f5f5f5; color: #333; padding: 30px; margin: 0; }
-    .report { max-width: 1200px; margin: 0 auto; background: white; padding: 40px; border: 1px solid #ddd; border-radius: 4px; }
+    .report { max-width: 1400px; margin: 0 auto; background: white; padding: 40px; border: 1px solid #ddd; border-radius: 4px; position: relative; }
     
     header { border-bottom: 2px solid #005a9e; padding-bottom: 20px; margin-bottom: 25px; }
-    .studio-badge { display: inline-block; font-size: 11px; font-weight: bold; color: white; background: #005a9e; padding: 3px 10px; border-radius: 10px; margin-bottom: 10px; text-transform: uppercase; }
+    .studio-header { font-size: 12px; font-weight: bold; color: #005a9e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
     h1 { margin: 0; font-size: 26px; color: #222; }
     
-    .meta-grid { display: flex; gap: 2px; background: #eee; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; margin-bottom: 30px; }
-    .meta-item { flex: 1; background: white; padding: 15px; border-right: 1px solid #eee; }
+    .meta-grid { display: flex; gap: 2px; background: #eee; border: 1px solid #ddd; border-radius: 4px; overflow: hidden; margin-bottom: 20px; }
+    .meta-item { flex: 1; background: white; padding: 15px; border-right: 1px solid #eee; min-width: 0; }
     .meta-item:last-child { border-right: none; }
-    .meta-label { font-size: 11px; font-weight: bold; color: #888; text-transform: uppercase; margin-bottom: 5px; display: block; }
-    .meta-value { font-size: 14px; color: #222; font-weight: 600; }
+    .meta-label { font-size: 10px; font-weight: bold; color: #888; text-transform: uppercase; margin-bottom: 5px; display: block; }
+    .meta-value { font-size: 13px; color: #222; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
 
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th { text-align: left; background: #f9f9f9; padding: 12px 10px; border-bottom: 2px solid #eee; color: #666; font-size: 12px; text-transform: uppercase; }
+    .warning-banner { background: #fff5f5; border: 1px solid #feb2b2; color: #c53030; padding: 10px 15px; border-radius: 4px; margin-bottom: 20px; font-size: 13px; font-weight: 600; display: flex; align-items: center; }
+    .warning-banner:before { content: "⚠️"; margin-right: 10px; font-size: 16px; }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    thead th { position: sticky; top: 0; background: #f9f9f9; z-index: 10; box-shadow: inset 0 -1px 0 #eee; }
+    th { text-align: left; padding: 12px 10px; border-bottom: 2px solid #eee; color: #666; font-size: 12px; text-transform: uppercase; }
     td { padding: 12px 10px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: middle; }
     
     .thumb { width: 120px; height: 68px; background: #eee; border-radius: 2px; object-fit: cover; display: block; border: 1px solid #ccc; }
@@ -52,11 +56,18 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     .status-warn { color: #f39c12; font-weight: bold; }
     
     .code { font-family: 'Consolas', 'Courier New', monospace; background: #f4f4f4; padding: 2px 5px; border-radius: 3px; font-size: 11px; color: #444; }
-    .tech { color: #777; font-size: 12px; line-height: 1.4; }
+    .tech { color: #666; font-size: 11px; line-height: 1.4; }
+    .color-audit { color: #005a9e; font-weight: 600; font-size: 10px; margin-top: 4px; text-transform: uppercase; }
 
     .footer { margin-top: 50px; font-size: 11px; color: #999; text-align: center; border-top: 1px solid #eee; padding-top: 20px; }
     """
 
+    # Calculate Totals and Codec Consistency
+    total_frames = 0
+    total_size_bytes = 0
+    succeeded = 0
+    found_codecs = set()
+    
     rows = []
     step_id = "—"
     for res in results:
@@ -64,6 +75,17 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             continue
         
         step_id = res.plan.step_id
+        if res.success:
+            succeeded += 1
+            total_frames += res.frames_copied
+            found_codecs.add(res.plan.media_info.codec.lower())
+            
+            try:
+                if res.plan.match.clip.first_file:
+                    fsize = os.path.getsize(res.plan.match.clip.first_file)
+                    total_size_bytes += (fsize * res.frames_copied)
+            except Exception:
+                pass
 
         status_cls = "status-ok" if res.success else "status-fail"
         if res.success:
@@ -74,13 +96,19 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         else:
             status_text = "FAILED"
         
-        # Tech Specs
+        # Tech Specs & Color Audit
         mi = res.plan.media_info
         res_str = f"{mi.width}x{mi.height}" if mi.width else "—"
         codec_str = mi.codec.upper() if mi.codec else "—"
         tc_str = mi.start_timecode or "—"
         version_str = f"v{res.plan.version:03d}"
-        md5_str = res.checksum or "—"
+        
+        # Format Color VUI tags (Primaries / Transfer / Matrix)
+        color_parts = []
+        if mi.color_primaries: color_parts.append(mi.color_primaries)
+        if mi.color_transfer: color_parts.append(mi.color_transfer)
+        if mi.color_space: color_parts.append(mi.color_space)
+        color_str = " / ".join(color_parts) if color_parts else "No VUI Tags"
         
         # Visuals
         b64_img = _get_base64_image(res.preview_path)
@@ -93,18 +121,25 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td><span class="code">{version_str}</span></td>
             <td class="{status_cls}">{status_text}</td>
             <td>{res.frames_copied}</td>
-            <td class="tech"><b>{res_str}</b><br>{mi.fps} fps<br>{codec_str}</td>
+            <td class="tech">
+                <b>{res_str}</b> @ {mi.fps} fps<br>{codec_str} / {mi.pix_fmt}<br>
+                <div class="color-audit">{color_str}</div>
+            </td>
             <td><span class="code">{tc_str}</span></td>
-            <td><span class="code" style="font-size:10px;">{md5_str}</span></td>
+            <td><span class="code" style="font-size:10px;">{res.checksum or "—"}</span></td>
         </tr>
         """
         rows.append(row_html)
 
-    if not rows:
-        rows.append("<tr><td colspan='8' style='text-align:center; padding:40px; color:#999;'>No clips processed in this session.</td></tr>")
-
+    # Analytics Header
+    total_gb = total_size_bytes / (1024**3)
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     project = getattr(results[0].plan, 'project_name', "") or results[0].plan.project_id if results and results[0].plan else "Unknown"
+
+    # Mixed Codec Warning
+    warning_banner = ""
+    if len(found_codecs) > 1:
+        warning_banner = f'<div class="warning-banner">Mixed Codecs Detected in Delivery: {", ".join(c.upper() for c in found_codecs)}</div>'
 
     html_parts = [
         "<!DOCTYPE html>",
@@ -117,7 +152,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "<body>",
         '    <div class="report">',
         '        <header>',
-        f'            <div class="studio-badge">{studio_name}</div>',
+        f'            <div class="studio-header">{studio_name}</div>',
         "            <h1>Ingest Manifest</h1>",
         '        </header>',
         '        <div class="meta-grid">',
@@ -125,8 +160,10 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '            <div class="meta-item"><span class="meta-label">Operator</span><span class="meta-value">' + operator + '</span></div>',
         '            <div class="meta-item"><span class="meta-label">Step</span><span class="meta-value">' + step_id + '</span></div>',
         '            <div class="meta-item"><span class="meta-label">Timestamp</span><span class="meta-value">' + timestamp + '</span></div>',
-        '            <div class="meta-item"><span class="meta-label">Volume</span><span class="meta-value">' + str(len(results)) + ' Clips</span></div>',
+        '            <div class="meta-item"><span class="meta-label">Total Size</span><span class="meta-value">' + f"{total_gb:.2f} GB" + '</span></div>',
+        '            <div class="meta-item"><span class="meta-label">Total Frames</span><span class="meta-value">' + str(total_frames) + '</span></div>',
         '        </div>',
+        warning_banner,
         "        <table>",
         "            <thead>",
         "                <tr>",
@@ -135,7 +172,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "                    <th>Version</th>",
         "                    <th>Verification</th>",
         "                    <th># Frames</th>",
-        "                    <th>Technical</th>",
+        "                    <th>Technical Details & Color Audit</th>",
         "                    <th>Timecode</th>",
         "                    <th>MD5 Checksum</th>",
         "                </tr>",

@@ -514,14 +514,9 @@ class IngestWindow(QMainWindow):
         opt_row2.addSpacing(20)
         opt_row2.addWidget(QLabel("Colorspace:"))
         self._ocio_in = QComboBox()
-        self._ocio_in.addItems(["Linear", "sRGB", "Rec.709", "LogC", "S-Log3", "V-Log"])
+        self._ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
         self._ocio_in.currentTextChanged.connect(self._on_ocio_in_changed)
         opt_row2.addWidget(self._ocio_in)
-        opt_row2.addWidget(QLabel("→"))
-        self._ocio_out = QComboBox()
-        self._ocio_out.addItems(["sRGB", "Rec.709", "Linear"])
-        self._ocio_out.currentTextChanged.connect(self._on_ocio_out_changed)
-        opt_row2.addWidget(self._ocio_out)
         
         opt_row2.addStretch()
         root.addLayout(opt_row2)
@@ -658,6 +653,8 @@ class IngestWindow(QMainWindow):
         self._tree.clear()
         for plan in self._plans:
             item = QTreeWidgetItem()
+            # Link the plan object to the tree item for robust retrieval during sorting
+            item.setData(0, Qt.ItemDataRole.UserRole, plan)
 
             # Checkbox
             if plan.can_execute:
@@ -722,6 +719,9 @@ class IngestWindow(QMainWindow):
             # Editable seq/shot for unmatched
             if not plan.match.matched:
                 item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEditable)
+                # Subtle red background for issues
+                for col in range(self._tree.columnCount()):
+                    item.setBackground(col, QColor("#3d1c1c"))
 
             self._tree.addTopLevelItem(item)
 
@@ -805,16 +805,22 @@ class IngestWindow(QMainWindow):
         menu.exec(self._tree.viewport().mapToGlobal(pos))
 
     def _remove_selected_plans(self) -> None:
-        """Batch remove all selected items from the internal plans list."""
+        """Batch remove all selected items robustly using plan object linkage."""
         selected = self._tree.selectedItems()
         if not selected:
             return
             
-        # Get indices in reverse order to pop safely
-        indices = sorted([self._tree.indexOfTopLevelItem(it) for item in selected], reverse=True)
-        for idx in indices:
-            if 0 <= idx < len(self._plans):
-                self._plans.pop(idx)
+        # Get the actual plan objects from the selected items
+        plans_to_remove = []
+        for item in selected:
+            plan = item.data(0, Qt.ItemDataRole.UserRole)
+            if plan:
+                plans_to_remove.append(plan)
+        
+        # Remove from internal list
+        for plan in plans_to_remove:
+            if plan in self._plans:
+                self._plans.remove(plan)
         
         self._populate_tree()
 

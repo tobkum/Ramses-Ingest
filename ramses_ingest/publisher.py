@@ -157,7 +157,8 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
     if clip.is_sequence:
         padding = clip.padding
         
-        # We'll copy the first frame separately to get its checksum safely
+        # Process frames sequentially to prevent Windows handle exhaustion (WinError 32)
+        # and disk thrashing. High-level shot parallelism already provides enough speed.
         f1 = clip.frames[0]
         s1 = os.path.join(str(clip.directory), f"{clip.base_name}.{str(f1).zfill(padding)}.{clip.extension}")
         d1_name = f"{project_id}_S_{shot_id}_{step_id}.{str(f1).zfill(padding)}.{clip.extension}"
@@ -166,19 +167,18 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
         copied = 1
 
         if len(clip.frames) > 1:
-            def _copy_one_frame(frame: int) -> None:
+            for frame in clip.frames[1:]:
                 src = os.path.join(
                     str(clip.directory),
                     f"{clip.base_name}.{str(frame).zfill(padding)}.{clip.extension}",
                 )
                 dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
                 dst = os.path.join(dest_dir, dst_name)
-                _copy_and_verify(src, dst)
-
-            # Use threads for the remaining frames
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                list(executor.map(_copy_one_frame, clip.frames[1:]))
-            copied = len(clip.frames)
+                # Ensure each copy finishes and closes its handle before moving on
+                shutil.copy2(src, dst)
+                if os.path.getsize(src) != os.path.getsize(dst):
+                    raise OSError(f"Size mismatch: {dst}")
+                copied += 1
 
     else:
         src = clip.first_file
@@ -342,8 +342,8 @@ def execute_plan(
     generate_proxy: bool = False,
     progress_callback: Callable[[str], None] | None = None,
     ocio_config: str | None = None,
-    ocio_in: str = "Linear",
-    ocio_out: str = "sRGB",
+    ocio_in: str = "sRGB",
+    ocio_out: str = "sRGB", # Hardcoded for safety
     skip_ramses_registration: bool = False,
 ) -> IngestResult:
     """Execute a single ``IngestPlan``: create Ramses objects, copy frames, generate previews.
@@ -428,7 +428,6 @@ def execute_plan(
                 clip, thumb_path,
                 ocio_config=ocio_config,
                 ocio_in=ocio_in,
-                ocio_out=ocio_out,
             )
             if ok:
                 result.preview_path = thumb_path
@@ -446,7 +445,6 @@ def execute_plan(
                 clip, proxy_path,
                 ocio_config=ocio_config,
                 ocio_in=ocio_in,
-                ocio_out=ocio_out,
             )
         except Exception as exc:
             _log(f"  Proxy (non-fatal): {exc}")
