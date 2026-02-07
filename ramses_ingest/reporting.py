@@ -107,94 +107,487 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     
     css = """
     :root {
-        --bg: #f5f5f5;
+        --bg: #f8f9fa;
         --card-bg: #ffffff;
-        --border: #ddd;
-        --text-main: #333;
-        --text-muted: #666;
-        --accent: #005a9e;
-        --success: #27ae60;
-        --warning: #f39c12;
-        --error: #c53030;
-        --table-header: #f9f9f9;
+        --border: #e0e0e0;
+        --border-light: #f0f0f0;
+        --text-main: #1a1a1a;
+        --text-muted: #6c757d;
+        --accent: #0056b3;
+        --accent-hover: #004494;
+        --success: #28a745;
+        --warning: #ffc107;
+        --error: #dc3545;
+        --table-header: #f8f9fa;
+        --table-row-hover: rgba(0, 86, 179, 0.04);
+        --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+        --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+        --shadow-lg: 0 10px 30px rgba(0,0,0,0.12);
     }
 
     [data-theme="dark"] {
-        --bg: #121212;
-        --card-bg: #1e1e1e;
-        --border: #333;
-        --text-main: #e0e0e0;
-        --text-muted: #888;
-        --accent: #00bff3;
-        --success: #27ae60;
-        --warning: #f39c12;
-        --error: #f44747;
-        --table-header: #252526;
+        --bg: #0d1117;
+        --card-bg: #161b22;
+        --border: #30363d;
+        --border-light: #21262d;
+        --text-main: #e6edf3;
+        --text-muted: #8b949e;
+        --accent: #58a6ff;
+        --accent-hover: #79c0ff;
+        --success: #3fb950;
+        --warning: #d29922;
+        --error: #f85149;
+        --table-header: #0d1117;
+        --table-row-hover: rgba(88, 166, 255, 0.06);
+        --shadow-sm: 0 0 0 1px rgba(0,0,0,0.1);
+        --shadow-md: 0 0 0 1px rgba(0,0,0,0.1);
+        --shadow-lg: 0 0 0 1px rgba(0,0,0,0.1);
     }
 
-    body { font-family: 'Segoe UI', Tahoma, sans-serif; background-color: var(--bg); color: var(--text-main); padding: 30px; margin: 0; transition: background-color 0.3s, color 0.3s; }
-    .report { max-width: 1400px; margin: 0 auto; background: var(--card-bg); padding: 40px; border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
-    
-    header { border-bottom: 2px solid var(--accent); padding-bottom: 20px; margin-bottom: 25px; display: flex; justify-content: space-between; align-items: flex-end; }
-    .studio-header { font-size: 12px; font-weight: bold; color: var(--accent); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 5px; }
-    h1 { margin: 0; font-size: 28px; color: var(--text-main); }
-    
+    * { box-sizing: border-box; }
+
+    body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
+        background-color: var(--bg);
+        color: var(--text-main);
+        padding: 20px;
+        margin: 0;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+        transition: background-color 0.2s ease, color 0.2s ease;
+    }
+
+    .report {
+        max-width: 100%;
+        margin: 0 auto;
+        background: var(--card-bg);
+        padding: 32px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: var(--shadow-lg);
+    }
+
+    header {
+        border-bottom: 3px solid var(--accent);
+        padding-bottom: 24px;
+        margin-bottom: 32px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+    }
+
+    .studio-header {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--accent);
+        text-transform: uppercase;
+        letter-spacing: 2.5px;
+        margin-bottom: 8px;
+    }
+
+    h1 {
+        margin: 0;
+        font-size: 32px;
+        font-weight: 700;
+        color: var(--text-main);
+        letter-spacing: -0.5px;
+    }
+
     /* Theme Toggle */
-    .theme-toggle { background: var(--border); border: none; color: var(--text-main); padding: 8px 12px; border-radius: 4px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 8px; }
-    .theme-toggle:hover { opacity: 0.8; }
+    .theme-toggle {
+        background: var(--table-header);
+        border: 1px solid var(--border);
+        color: var(--text-main);
+        padding: 8px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.2s ease;
+    }
+    .theme-toggle:hover {
+        background: var(--border-light);
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-sm);
+    }
 
     /* Executive Health Dashboard */
-    .health-dashboard { display: flex; gap: 24px; margin-bottom: 35px; }
-    .health-badge { flex: 0 0 180px; padding: 16px; border-radius: 8px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; border: 1px solid var(--border); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-    .health-score { font-size: 28px; font-weight: 800; line-height: 1; margin-bottom: 8px; letter-spacing: -0.5px; }
-    .health-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.9; }
-    
+    .health-dashboard {
+        display: flex;
+        gap: 16px;
+        margin-bottom: 32px;
+    }
+
+    .health-badge {
+        flex: 0 0 150px;
+        padding: 16px;
+        border-radius: 8px;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        border: 2px solid;
+        box-shadow: var(--shadow-md);
+        transition: transform 0.2s ease;
+    }
+
+    .health-badge:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-lg);
+    }
+
+    .health-score {
+        font-size: 26px;
+        font-weight: 800;
+        line-height: 1;
+        margin-bottom: 8px;
+        letter-spacing: -0.5px;
+    }
+
+    .health-label {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        opacity: 0.95;
+    }
+
     .health-green { background-color: var(--success); color: #fff; border-color: var(--success); }
-    .health-yellow { background-color: var(--warning); color: #fff; border-color: var(--warning); }
+    .health-yellow { background-color: var(--warning); color: #000; border-color: var(--warning); }
     .health-red { background-color: var(--error); color: #fff; border-color: var(--error); }
 
-    [data-theme="dark"] .health-green { color: #fff; }
     [data-theme="dark"] .health-yellow { color: #000; }
-    [data-theme="dark"] .health-red { color: #fff; }
 
-    .meta-grid { display: flex; flex-wrap: wrap; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; flex-grow: 1; }
-    .meta-item { flex: 1; background: var(--card-bg); padding: 15px; min-width: 120px; }
-    .meta-label { font-size: 10px; font-weight: bold; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; display: block; }
-    .meta-value { font-size: 13px; color: var(--text-main); font-weight: 600; display: block; }
+    .meta-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1px;
+        background: var(--border);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        flex-grow: 1;
+    }
 
-    .attention-box { background: rgba(243, 156, 18, 0.1); border: 1px solid var(--warning); color: var(--warning); padding: 12px 20px; border-radius: 4px; margin-bottom: 10px; font-size: 13px; }
+    .meta-item {
+        flex: 1;
+        background: var(--card-bg);
+        padding: 12px 14px;
+        min-width: 110px;
+    }
 
-    .error-summary { background: rgba(244, 71, 71, 0.05); border: 1px solid var(--error); border-radius: 4px; padding: 20px; margin-bottom: 30px; }
-    .error-summary-title { font-size: 15px; font-weight: bold; color: var(--error); margin-bottom: 12px; }
-    .error-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-    .error-list li { padding: 8px 12px; background: rgba(0,0,0,0.02); border-radius: 3px; border-left: 3px solid var(--error); font-size: 12px; }
+    .meta-label {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-bottom: 6px;
+        display: block;
+    }
 
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; background: rgba(0,0,0,0.02); border-radius: 6px; overflow: hidden; }
-    thead th { background: var(--table-header); color: var(--text-muted); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 15px 10px; text-align: left; border-bottom: 1px solid var(--border); }
-    thead th:nth-child(2) { min-width: 180px; } /* Shot ID column */
-    td { padding: 15px 10px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
-    td:nth-child(2) { min-width: 180px; } /* Shot ID column */
-    tr:hover td { background: rgba(0,0,0,0.02); }
+    .meta-value {
+        font-size: 14px;
+        color: var(--text-main);
+        font-weight: 600;
+        display: block;
+    }
+
+    .meta-value-project {
+        font-size: 16px;
+        color: var(--text-main);
+        font-weight: 700;
+        display: block;
+    }
+
+    /* Alert Boxes */
+    .attention-box {
+        background: #fff3cd;
+        border: 2px solid #ffc107;
+        border-left-width: 4px;
+        color: #000;
+        padding: 14px 20px;
+        border-radius: 6px;
+        margin-bottom: 16px;
+        font-size: 13px;
+        font-weight: 500;
+        line-height: 1.5;
+    }
+
+    [data-theme="dark"] .attention-box {
+        background: rgba(255, 193, 7, 0.08);
+        border-color: var(--warning);
+        color: var(--warning);
+    }
+
+    .error-summary {
+        background: rgba(220, 53, 69, 0.06);
+        border: 2px solid var(--error);
+        border-left-width: 4px;
+        border-radius: 8px;
+        padding: 24px;
+        margin-bottom: 32px;
+    }
+
+    .error-summary-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: var(--error);
+        margin-bottom: 16px;
+        letter-spacing: -0.2px;
+    }
+
+    .error-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px;
+    }
+
+    .error-list li {
+        padding: 10px 14px;
+        background: var(--card-bg);
+        border-radius: 4px;
+        border-left: 3px solid var(--error);
+        font-size: 12px;
+        line-height: 1.5;
+        box-shadow: var(--shadow-sm);
+    }
+
+    /* Table Styling */
+    table {
+        width: 100%;
+        border-collapse: separate;
+        border-spacing: 0;
+        margin-top: 24px;
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: var(--shadow-sm);
+    }
+
+    thead th {
+        background: var(--table-header);
+        color: var(--text-muted);
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        padding: 16px 12px;
+        text-align: left;
+        border-bottom: 2px solid var(--border);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+        white-space: nowrap;
+    }
+
+    thead th:nth-child(1) { width: 160px; } /* Thumbnail - fixed */
+    thead th:nth-child(2) { min-width: 140px; } /* Shot ID */
+    thead th:nth-child(3) { text-align: center; } /* Version */
+    thead th:nth-child(4) { text-align: center; } /* Verification */
+    thead th:nth-child(5) { text-align: right; white-space: nowrap; } /* # Frames */
+    thead th:nth-child(6) { text-align: center; } /* Frame Continuity */
+    thead th:nth-child(8) { text-align: center; white-space: nowrap; } /* Timecode */
+    thead th:nth-child(9) { font-family: 'Consolas', monospace; font-size: 11px; } /* MD5 */
+
+    tbody tr {
+        transition: background-color 0.15s ease;
+    }
+
+    tbody tr:hover {
+        background: var(--table-row-hover);
+    }
+
+    tbody tr:last-child td {
+        border-bottom: none;
+    }
+
+    td {
+        padding: 16px 12px;
+        border-bottom: 1px solid var(--border-light);
+        font-size: 13px;
+        vertical-align: middle;
+    }
+
+    td:nth-child(3) { text-align: center; } /* Version */
+    td:nth-child(4) { text-align: center; } /* Verification */
+    td:nth-child(5) { text-align: right; font-variant-numeric: tabular-nums; } /* # Frames */
+    td:nth-child(6) { text-align: center; } /* Frame Continuity */
+    td:nth-child(8) { text-align: center; } /* Timecode */
+
+    .thumb {
+        width: 140px;
+        height: 78px;
+        background: #000;
+        border-radius: 6px;
+        object-fit: cover;
+        display: block;
+        border: 1px solid var(--border);
+        box-shadow: var(--shadow-sm);
+    }
     
-    .thumb { width: 140px; height: 78px; background: #000; border-radius: 4px; object-fit: cover; display: block; border: 1px solid var(--border); }
-    
-    .status-ok { color: var(--success); font-weight: bold; }
-    .status-fail { color: var(--error); font-weight: bold; }
-    .status-warn { color: var(--warning); font-weight: bold; }
-    
-    .xray-wrap { display: flex; flex-direction: column; gap: 8px; }
-    .xray-target { color: var(--text-main); font-weight: bold; font-size: 14px; line-height: 1.5; white-space: nowrap; }
-    .xray-source { color: var(--text-muted); font-size: 10px; font-family: 'Consolas', monospace; line-height: 1.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .xray-arrow { color: var(--accent); margin: 0 4px; font-size: 10px; }
+    /* Status Indicators */
+    .status-ok {
+        color: var(--success);
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
 
-    .deviation { background-color: rgba(243, 156, 18, 0.1); color: var(--warning); border: 1px solid var(--warning); border-radius: 3px; padding: 1px 4px; font-size: 11px; }
-    .code { font-family: 'Consolas', monospace; background: rgba(0,0,0,0.05); padding: 2px 6px; border-radius: 3px; font-size: 11px; color: var(--accent); }
-    .tech { color: var(--text-muted); font-size: 11px; line-height: 1.5; }
-    .color-audit { color: var(--accent); font-weight: 600; font-size: 9px; margin-top: 6px; text-transform: uppercase; opacity: 0.8; }
-    
-    .missing-frames { color: var(--error); font-weight: bold; font-size: 11px; background: rgba(244, 71, 71, 0.05); padding: 2px 6px; border-radius: 2px; }
+    .status-fail {
+        color: var(--error);
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
 
-    .footer { margin-top: 50px; font-size: 11px; color: var(--text-muted); text-align: center; border-top: 1px solid var(--border); padding-top: 20px; }
+    .status-warn {
+        color: var(--warning);
+        font-weight: 700;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    /* Shot ID Column */
+    .xray-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+    }
+
+    .xray-target {
+        color: var(--text-main);
+        font-weight: 700;
+        font-size: 17px;
+        line-height: 1.4;
+        white-space: nowrap;
+        letter-spacing: -0.2px;
+    }
+
+    .xray-source {
+        color: var(--text-muted);
+        font-size: 12px;
+        font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+        line-height: 1.5;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .xray-arrow {
+        color: var(--accent);
+        margin: 0 4px 0 0;
+        font-size: 12px;
+        opacity: 0.7;
+    }
+
+    /* Technical Data Styling */
+    .deviation {
+        background-color: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffc107;
+        border-radius: 4px;
+        padding: 2px 6px;
+        font-size: 11px;
+        font-weight: 600;
+        display: inline-block;
+    }
+
+    [data-theme="dark"] .deviation {
+        background-color: rgba(210, 153, 34, 0.15);
+        color: #d29922;
+        border-color: #d29922;
+    }
+
+    .code {
+        font-family: 'SF Mono', 'Consolas', 'Monaco', monospace;
+        background: var(--table-header);
+        border: 1px solid var(--border-light);
+        padding: 3px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        color: var(--text-main);
+        font-weight: 500;
+        display: inline-block;
+    }
+
+    .tech {
+        color: var(--text-muted);
+        font-size: 12px;
+        line-height: 1.6;
+    }
+
+    .tech b {
+        color: var(--text-main);
+        font-weight: 600;
+    }
+
+    .color-audit {
+        color: var(--accent);
+        font-weight: 600;
+        font-size: 11px;
+        margin-top: 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+
+    .color-audit span {
+        cursor: help;
+        border-bottom: 1px dotted currentColor;
+    }
+
+    .missing-frames {
+        color: var(--error);
+        font-weight: 700;
+        font-size: 11px;
+        background: rgba(220, 53, 69, 0.1);
+        padding: 3px 8px;
+        border-radius: 4px;
+        border: 1px solid var(--error);
+        display: inline-block;
+    }
+
+    /* Footer */
+    .footer {
+        margin-top: 60px;
+        padding-top: 24px;
+        border-top: 2px solid var(--border-light);
+        font-size: 11px;
+        color: var(--text-muted);
+        text-align: center;
+        font-weight: 500;
+    }
+
+    /* Print Styles */
+    @media print {
+        body { background: white; padding: 0; }
+        .report { box-shadow: none; border: none; padding: 20px; }
+        .theme-toggle { display: none; }
+        thead th { position: static; }
+        tbody tr:hover { background: transparent; }
+    }
+
+    /* Responsive */
+    @media (max-width: 1200px) {
+        body { padding: 12px; }
+        .report { padding: 24px; }
+        .health-badge { flex: 0 0 130px; padding: 12px; }
+        .meta-item { padding: 10px 12px; min-width: 100px; }
+        table { font-size: 12px; }
+        td { padding: 12px 10px; }
+        .thumb { width: 120px; height: 67px; }
+    }
     """
 
     # 1. Analyze Batch for Deviations and Totals
@@ -323,19 +716,27 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         cs_issue = colorspace_issues.get(plan_idx)
 
         color_parts = []
+        has_critical_cs_issue = cs_issue and cs_issue.severity == "critical"
+
         if mi.color_primaries:
             tooltip = _colorspace_tooltip(mi.color_primaries)
             # Highlight if this clip has a colorspace issue
-            if cs_issue and cs_issue.severity == "critical":
+            if has_critical_cs_issue:
                 color_parts.append(f'<span class="deviation" title="{cs_issue.message}">{mi.color_primaries}</span>')
             else:
                 color_parts.append(f'<span title="{tooltip}">{mi.color_primaries}</span>')
         if mi.color_transfer:
             tooltip = _colorspace_tooltip(mi.color_transfer)
-            color_parts.append(f'<span title="{tooltip}">{mi.color_transfer}</span>')
+            if has_critical_cs_issue:
+                color_parts.append(f'<span class="deviation" title="{cs_issue.message}">{mi.color_transfer}</span>')
+            else:
+                color_parts.append(f'<span title="{tooltip}">{mi.color_transfer}</span>')
         if mi.color_space:
             tooltip = _colorspace_tooltip(mi.color_space)
-            color_parts.append(f'<span title="{tooltip}">{mi.color_space}</span>')
+            if has_critical_cs_issue:
+                color_parts.append(f'<span class="deviation" title="{cs_issue.message}">{mi.color_space}</span>')
+            else:
+                color_parts.append(f'<span title="{tooltip}">{mi.color_space}</span>')
         color_str = " / ".join(color_parts) if color_parts else '<span title="No color metadata embedded in file">No VUI Tags</span>'
 
         # Add colorspace warning indicator if present
@@ -360,8 +761,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td>
                 <div class="xray-wrap">
                     <div class="xray-target">{res.plan.shot_id}</div>
-                    <div class="xray-source"><span class="xray-arrow">←</span> {res.plan.match.clip.base_name}.{res.plan.match.clip.extension}</div>
                     <div class="xray-source" style="margin-top:2px;">{res.plan.sequence_id or ""}</div>
+                    <div class="xray-source"><span class="xray-arrow">←</span> {res.plan.match.clip.base_name}.{res.plan.match.clip.extension}</div>
                 </div>
             </td>
             <td><span class="code">v{res.plan.version:03d}</span></td>
@@ -373,7 +774,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
                 <div class="color-audit">{color_str}</div>
             </td>
             <td><span class="code">{mi.start_timecode or "—"}</span></td>
-            <td><span class="code" style="font-size:12px;">{res.checksum or "—"}</span></td>
+            <td><span class="code" style="font-size:13px;">{res.checksum or "—"}</span></td>
         </tr>
         """
         rows.append(row_html)
@@ -419,17 +820,19 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         </div>
         """
 
-    # Build attention boxes for deviations and missing frames
+    # Build combined attention box for all issues
     attention_box = ""
     attention_items = []
     if has_deviations:
-        attention_items.append('<div class="attention-box">⚠ Technical Attention Required: Inconsistent resolution or framerate detected in this batch.</div>')
+        attention_items.append('⚠ <strong>Technical Deviation:</strong> Inconsistent resolution or framerate detected')
     if sequences_with_gaps > 0:
-        attention_items.append(f'<div class="attention-box">⚠ Frame Gaps: {sequences_with_gaps} sequence(s) are short {total_missing_frames} frames from their detected range.</div>')
+        attention_items.append(f'⚠ <strong>Frame Gaps:</strong> {sequences_with_gaps} sequence(s) missing {total_missing_frames} frames from expected range')
     if critical_colorspace_issues:
-        attention_items.append('<div class="attention-box">⚠ Colorspace Conflict: Incompatible gamut profiles detected. Refer to color audit below.</div>')
-    
-    attention_box = "\n".join(attention_items)
+        attention_items.append('⚠ <strong>Colorspace Conflict:</strong> Incompatible gamut profiles detected (see color audit below)')
+
+    if attention_items:
+        items_html = "<br>".join(attention_items)
+        attention_box = f'<div class="attention-box"><strong>Attention Required</strong><br>{items_html}</div>'
 
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     project = getattr(results[0].plan, 'project_name', "") or results[0].plan.project_id if results and results[0].plan else "Unknown"
@@ -471,7 +874,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         f'                <div class="health-label">{health_label}</div>',
         '            </div>',
         '            <div class="meta-grid">',
-        '                <div class="meta-item"><span class="meta-label">Project</span><span class="meta-value">' + project + '</span></div>',
+        '                <div class="meta-item"><span class="meta-label">Project</span><span class="meta-value-project">' + project + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Operator</span><span class="meta-value">' + operator + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Step</span><span class="meta-value">' + step_id + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Total Volume</span><span class="meta-value">' + size_display + '</span></div>',
@@ -490,7 +893,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "                    <th>Verification</th>",
         "                    <th># Frames</th>",
         "                    <th>Frame Continuity</th>",
-        "                    <th>Technical Details & Color Audit</th>",
+        "                    <th>Technical Specs</th>",
         "                    <th>Timecode</th>",
         "                    <th>MD5 Checksum</th>",
         "                </tr>",
