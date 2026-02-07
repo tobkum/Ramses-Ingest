@@ -57,9 +57,17 @@ class IngestPlan:
     error: str = ""
     """Non-empty if this plan cannot be executed."""
 
+    # Enhancement #9: Duplicate detection
+    is_duplicate: bool = False
+    """True if this clip appears to be a duplicate of an existing version."""
+    duplicate_version: int = 0
+    """Version number of the duplicate, if found."""
+    duplicate_path: str = ""
+    """Path to the duplicate version, if found."""
+
     @property
     def can_execute(self) -> bool:
-        return self.error == "" and self.match.matched
+        return self.error == "" and self.match.matched and not self.is_duplicate
 
 
 @dataclass
@@ -138,25 +146,49 @@ def _calculate_md5(file_path: str) -> str:
             hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
-def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str) -> tuple[int, str, int, str]:
+def copy_frames(
+    clip: Clip,
+    dest_dir: str,
+    project_id: str,
+    shot_id: str,
+    step_id: str,
+    progress_callback: Callable[[str], None] | None = None,
+    dry_run: bool = False
+) -> tuple[int, str, int, str]:
     """Copy clip frames into *dest_dir* and verify bit-for-bit using MD5.
+
+    Args:
+        clip: Source clip to copy
+        dest_dir: Destination directory
+        project_id: Project short name
+        shot_id: Shot identifier
+        step_id: Step identifier
+        progress_callback: Optional callback for progress updates (Enhancement #5)
+        dry_run: If True, simulate copy without actually writing files (Enhancement #8)
 
     Returns (number of files copied, MD5 checksum of the first file, total bytes moved, first filename).
     Raises OSError if verification or checksum fails.
     """
-    os.makedirs(dest_dir, exist_ok=True)
+    if not dry_run:
+        os.makedirs(dest_dir, exist_ok=True)
     copied = 0
     total_bytes = 0
     first_checksum = ""
     first_filename = ""
 
     def _copy_and_verify(src: str, dst: str) -> tuple[str, int]:
+        if dry_run:
+            # Dry-run: only get source size and checksum, don't copy
+            sz = os.path.getsize(src)
+            src_md5 = _calculate_md5(src)
+            return src_md5, sz
+
         shutil.copy2(src, dst)
         sz = os.path.getsize(src)
         # 1. Quick size check
         if sz != os.path.getsize(dst):
             raise OSError(f"Size mismatch: {dst}")
-        
+
         # 2. Bit-for-bit MD5 check
         src_md5 = _calculate_md5(src)
         if src_md5 != _calculate_md5(dst):
@@ -165,6 +197,7 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
 
     if clip.is_sequence:
         padding = clip.padding
+        total_count = len(clip.frames)
 
         # Copy and verify ALL frames with MD5 checksums for data integrity
         for i, frame in enumerate(clip.frames):
@@ -185,6 +218,10 @@ def copy_frames(clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_i
 
             total_bytes += sz
             copied += 1
+
+            # Progress reporting every 10 frames (or every frame for small sequences)
+            if progress_callback and (i % 10 == 0 or i == total_count - 1):
+                progress_callback(f"    Verifying frame {i+1}/{total_count}...")
 
     else:
         src = clip.first_file
@@ -213,6 +250,77 @@ def _get_next_version(publish_root: str) -> int:
     except Exception:
         pass
     return max_v + 1
+
+
+def generate_thumbnail_for_result(
+    result: IngestResult,
+    ocio_config: str | None = None,
+    ocio_in: str = "sRGB",
+) -> bool:
+    """Generate thumbnail on-demand for a previously ingested result (Enhancement #20).
+
+    This allows lazy thumbnail generation - skip during ingest, generate when needed.
+
+    Args:
+        result: IngestResult from a previous ingest
+        ocio_config: Optional OCIO config file path
+        ocio_in: Source colorspace
+
+    Returns:
+        True if thumbnail generated successfully
+    """
+    if not result.success or not result.plan.target_preview_dir:
+        return False
+
+    try:
+        from ramses_ingest.preview import generate_thumbnail as gen_thumb
+        os.makedirs(result.plan.target_preview_dir, exist_ok=True)
+
+        thumb_name = f"{result.plan.project_id}_S_{result.plan.shot_id}_{result.plan.step_id}.jpg"
+        thumb_path = os.path.join(result.plan.target_preview_dir, thumb_name)
+
+        ok = gen_thumb(
+            result.plan.match.clip,
+            thumb_path,
+            ocio_config=ocio_config,
+            ocio_in=ocio_in,
+        )
+
+        if ok:
+            result.preview_path = thumb_path
+
+        return ok
+    except Exception:
+        return False
+
+
+def check_for_duplicates(plans: list[IngestPlan]) -> None:
+    """Check all plans for duplicate versions and mark them (Enhancement #9).
+
+    Updates the IngestPlan objects in-place with duplicate information.
+
+    Args:
+        plans: List of IngestPlan objects to check
+    """
+    from ramses_ingest.validator import check_for_duplicate_version
+
+    for plan in plans:
+        if not plan.match.matched or not plan.target_publish_dir:
+            continue
+
+        # Get the parent directory containing published versions
+        existing_versions_dir = os.path.dirname(plan.target_publish_dir)
+
+        is_dup, dup_path, dup_version = check_for_duplicate_version(
+            plan.match.clip,
+            existing_versions_dir
+        )
+
+        if is_dup:
+            plan.is_duplicate = True
+            plan.duplicate_version = dup_version
+            plan.duplicate_path = dup_path
+            plan.error = f"Duplicate of v{dup_version:03d}"
 
 
 def resolve_paths(
@@ -353,6 +461,7 @@ def execute_plan(
     ocio_in: str = "sRGB",
     ocio_out: str = "sRGB", # Hardcoded for safety
     skip_ramses_registration: bool = False,
+    dry_run: bool = False,
 ) -> IngestResult:
     """Execute a single ``IngestPlan``: create Ramses objects, copy frames, generate previews.
 
@@ -365,6 +474,7 @@ def execute_plan(
         ocio_in: Source colorspace.
         ocio_out: Target colorspace.
         skip_ramses_registration: If True, skips the DB creation step (useful for parallel execution).
+        dry_run: If True, preview operations without actually copying files (Enhancement #8).
 
     Returns:
         An ``IngestResult`` describing the outcome.
@@ -386,7 +496,7 @@ def execute_plan(
     clip = plan.match.clip
 
     # --- Create Ramses objects if daemon is available ---
-    if not skip_ramses_registration:
+    if not skip_ramses_registration and not dry_run:
         try:
             register_ramses_objects(plan, _log)
         except Exception as exc:
@@ -394,10 +504,13 @@ def execute_plan(
 
     # --- Copy frames ---
     try:
-        _log(f"  Copying {clip.frame_count or 1} file(s)...")
+        action_verb = "Simulating" if dry_run else "Copying"
+        _log(f"  {action_verb} {clip.frame_count or 1} file(s)...")
         copied_count, checksum, total_bytes, first_filename = copy_frames(
             clip, plan.target_publish_dir,
             plan.project_id, plan.shot_id, plan.step_id,
+            progress_callback=progress_callback,  # Enhancement #5: MD5 progress reporting
+            dry_run=dry_run,  # Enhancement #8: Dry-run mode
         )
         # Use technical frame count for movies, or files copied for sequences
         if not clip.is_sequence and plan.media_info.frame_count > 0:
@@ -413,20 +526,21 @@ def execute_plan(
         return result
 
     # --- Write metadata ---
-    try:
-        # Use tracked filename instead of expensive listdir() call
-        _write_ramses_metadata(
-            plan.target_publish_dir,
-            first_filename,
-            plan.version,
-            comment="Ingested via Ramses-Ingest",
-            timecode=plan.media_info.start_timecode,
-        )
-    except Exception as exc:
-        _log(f"  Metadata write (non-fatal): {exc}")
+    if not dry_run:
+        try:
+            # Use tracked filename instead of expensive listdir() call
+            _write_ramses_metadata(
+                plan.target_publish_dir,
+                first_filename,
+                plan.version,
+                comment="Ingested via Ramses-Ingest",
+                timecode=plan.media_info.start_timecode,
+            )
+        except Exception as exc:
+            _log(f"  Metadata write (non-fatal): {exc}")
 
     # --- Generate thumbnail ---
-    if generate_thumbnail and plan.target_preview_dir:
+    if generate_thumbnail and plan.target_preview_dir and not dry_run:
         try:
             from ramses_ingest.preview import generate_thumbnail as gen_thumb
             os.makedirs(plan.target_preview_dir, exist_ok=True)
@@ -444,7 +558,7 @@ def execute_plan(
             _log(f"  Thumbnail (non-fatal): {exc}")
 
     # --- Generate video proxy ---
-    if generate_proxy and plan.target_preview_dir:
+    if generate_proxy and plan.target_preview_dir and not dry_run:
         try:
             from ramses_ingest.preview import generate_proxy as gen_proxy
             proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"

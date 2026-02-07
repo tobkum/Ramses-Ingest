@@ -166,6 +166,10 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     from collections import Counter
     error_categories = Counter()
 
+    # Colorspace validation (Enhancement #3)
+    from ramses_ingest.validator import validate_batch_colorspace
+    colorspace_issues = validate_batch_colorspace([r.plan for r in results if r.plan])
+
     for res in results:
         if not res or not res.plan: continue
         step_id = res.plan.step_id
@@ -266,10 +270,18 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             }
             return tooltips.get(value.lower(), value)
 
+        # Check for colorspace issues from validator
+        plan_idx = results.index(res)
+        cs_issue = colorspace_issues.get(plan_idx)
+
         color_parts = []
         if mi.color_primaries:
             tooltip = _colorspace_tooltip(mi.color_primaries)
-            color_parts.append(f'<span title="{tooltip}">{mi.color_primaries}</span>')
+            # Highlight if this clip has a colorspace issue
+            if cs_issue and cs_issue.severity == "critical":
+                color_parts.append(f'<span class="deviation" title="{cs_issue.message}">{mi.color_primaries}</span>')
+            else:
+                color_parts.append(f'<span title="{tooltip}">{mi.color_primaries}</span>')
         if mi.color_transfer:
             tooltip = _colorspace_tooltip(mi.color_transfer)
             color_parts.append(f'<span title="{tooltip}">{mi.color_transfer}</span>')
@@ -277,6 +289,10 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             tooltip = _colorspace_tooltip(mi.color_space)
             color_parts.append(f'<span title="{tooltip}">{mi.color_space}</span>')
         color_str = " / ".join(color_parts) if color_parts else '<span title="No color metadata embedded in file">No VUI Tags</span>'
+
+        # Add colorspace warning indicator if present
+        if cs_issue:
+            color_str += f' <span style="color:#f39c12; font-weight:bold;" title="{cs_issue.message}">⚠</span>'
         
         # Format missing frames for display
         if res.missing_frames:
@@ -339,6 +355,15 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         attention_boxes.append('<div class="attention-box">Technical Attention Required: Inconsistent technical specs detected in this batch. Review highlighted values below.</div>')
     if sequences_with_gaps > 0:
         attention_boxes.append(f'<div class="attention-box">Frame Gaps Detected: {sequences_with_gaps} sequence(s) have missing frames ({total_missing_frames} total). Incomplete deliveries flagged below.</div>')
+
+    # Colorspace consistency warning (Enhancement #3)
+    critical_colorspace_issues = [idx for idx, issue in colorspace_issues.items() if issue.severity == "critical"]
+    if critical_colorspace_issues:
+        issue_count = len(critical_colorspace_issues)
+        attention_boxes.append(
+            f'<div class="attention-box">Colorspace Warning: {issue_count} clip(s) have colorspace '
+            f'inconsistencies that may cause rendering issues. Review clips marked with ⚠ below.</div>'
+        )
 
     attention_box = "\n".join(attention_boxes)
 

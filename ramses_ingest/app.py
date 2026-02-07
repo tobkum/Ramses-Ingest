@@ -289,8 +289,17 @@ class IngestEngine:
                 self._project_path,
             )
 
+        # Enhancement #9: Check for duplicate versions
+        _log("Checking for duplicate versions...")
+        from ramses_ingest.publisher import check_for_duplicates
+        check_for_duplicates(plans)
+
         matched = sum(1 for p in plans if p.match.matched)
-        _log(f"Ready: {matched} matched, {len(plans) - matched} unmatched.")
+        duplicates = sum(1 for p in plans if p.is_duplicate)
+        if duplicates > 0:
+            _log(f"Ready: {matched} matched, {len(plans) - matched} unmatched, {duplicates} duplicates detected.")
+        else:
+            _log(f"Ready: {matched} matched, {len(plans) - matched} unmatched.")
         return plans
 
     def execute(
@@ -301,8 +310,18 @@ class IngestEngine:
         progress_callback: Callable[[str], None] | None = None,
         update_status: bool = False,
         export_json_audit: bool = False,
+        dry_run: bool = False,
     ) -> list[IngestResult]:
         """Execute all approved (can_execute) plans.
+
+        Args:
+            plans: List of IngestPlan objects to execute
+            generate_thumbnails: Generate JPEG previews
+            generate_proxies: Generate MP4 proxies
+            progress_callback: Optional callback for progress updates
+            update_status: Update Ramses production status to "OK" on success
+            export_json_audit: Generate machine-readable JSON audit trail
+            dry_run: Preview operations without actually copying files (Enhancement #8)
 
         Returns one ``IngestResult`` per plan.
         """
@@ -323,17 +342,21 @@ class IngestEngine:
         shot_cache = self._shot_objects   # Already cached in connect_ramses
 
         # Phase 1: Register Ramses Objects (Sequential, Thread-Safe)
-        _log("Phase 1: Registering shots in Ramses database...")
-        for i, plan in enumerate(executable, 1):
-            try:
-                register_ramses_objects(plan, lambda _: None, sequence_cache=seq_cache)
-            except Exception as exc:
-                _log(f"  Warning: Failed to register {plan.shot_id}: {exc}")
+        if not dry_run:
+            _log("Phase 1: Registering shots in Ramses database...")
+            for i, plan in enumerate(executable, 1):
+                try:
+                    register_ramses_objects(plan, lambda _: None, sequence_cache=seq_cache)
+                except Exception as exc:
+                    _log(f"  Warning: Failed to register {plan.shot_id}: {exc}")
+        else:
+            _log("Dry-run mode: Skipping Ramses registration...")
 
         # Phase 2: Parallel Execution (Copy + FFmpeg)
-        _log("Phase 2: Processing files (Parallel)...")
+        action_msg = "Simulating" if dry_run else "Processing"
+        _log(f"Phase 2: {action_msg} files (Parallel)...")
         results: list[IngestResult] = []
-        
+
         # Initialize results with failed entries for non-executable plans
         # so they show up in the report as skipped/failed.
         executed_plans = set()
@@ -349,6 +372,7 @@ class IngestEngine:
                 ocio_in=self.ocio_in,
                 ocio_out="sRGB",
                 skip_ramses_registration=True,
+                dry_run=dry_run,  # Enhancement #8: Dry-run mode
             )
 
         if executable:
