@@ -31,7 +31,16 @@ def _load_cache():
             _METADATA_CACHE = {}
 
 def _save_cache():
+    global _METADATA_CACHE
     try:
+        # Prune cache if it exceeds 5000 entries (Tier 1 Stability)
+        if len(_METADATA_CACHE) > 5000:
+            # Sort by key (contains path) and keep newest entries by removing random keys 
+            # or just slice it. Since keys are strings, let's keep it simple.
+            keys = list(_METADATA_CACHE.keys())
+            for k in keys[:-5000]:
+                _METADATA_CACHE.pop(k, None)
+
         os.makedirs(os.path.dirname(CACHE_PATH), exist_ok=True)
         with open(CACHE_PATH, "w", encoding="utf-8") as f:
             json.dump(_METADATA_CACHE, f)

@@ -24,11 +24,11 @@ class MatchResult:
 
     clip: Clip
     sequence_id: str = ""
-    """Extracted sequence identifier (e.g. ``SEQ010``)."""
-
     shot_id: str = ""
-    """Extracted shot identifier (e.g. ``SH010``)."""
-
+    version: Optional[int] = None
+    step_id: str = ""
+    project_id: str = ""
+    
     matched: bool = False
     """True if the matcher was able to extract both identifiers."""
 
@@ -143,10 +143,22 @@ def _try_rule(clip: Clip, rule: NamingRule) -> MatchResult:
     shot_id = (rule.shot_prefix + shot_raw) if shot_raw else ""
     seq_id = (rule.sequence_prefix + seq_raw) if seq_raw else ""
 
-    matched = bool(shot_id)  # Shot is mandatory; sequence can be defaulted later
+    # Capture Architect-specific tokens if present in regex
+    ver_raw = groups.get("version", "")
+    version = None
+    if ver_raw:
+        # Strip prefixes (like 'v') if they were caught in the group
+        digits = re.search(r"(\d+)", ver_raw)
+        if digits:
+            version = int(digits.group(1))
+
+    matched = bool(shot_id)  # Shot is mandatory
     return MatchResult(
         clip=clip,
         sequence_id=seq_id,
         shot_id=shot_id,
+        version=version,
+        step_id=groups.get("step", ""),
+        project_id=groups.get("project", ""),
         matched=matched,
     )

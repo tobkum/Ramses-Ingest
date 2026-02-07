@@ -8,6 +8,7 @@ It also provides the core simulation logic for the 'Live Lab'.
 from __future__ import annotations
 
 import re
+import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING

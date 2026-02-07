@@ -11,6 +11,8 @@ Responsibilities:
 
 from __future__ import annotations
 
+import concurrent.futures
+import hashlib
 import json
 import os
 import shutil
@@ -114,7 +116,8 @@ def build_plans(
             shot_id=match.shot_id,
             project_id=project_id,
             project_name=project_name or project_id,
-            step_id=step_id,
+            step_id=match.step_id or step_id,
+            version=match.version or 1,
         )
 
         if not match.matched:
@@ -236,7 +239,12 @@ def copy_frames(
 
 
 def _get_next_version(publish_root: str) -> int:
-    """Find the next available version number by scanning vNNN folders."""
+    """Find the next available version number by scanning vNNN folders.
+    
+    Tier 1 Stability: Only counts a version as 'existing' if it contains media.
+    Empty folders (from failed ingests) are ignored to prevent 'Zombie' gaps.
+    """
+    publish_root = publish_root.replace("\\", "/")
     if not os.path.isdir(publish_root):
         return 1
     
@@ -244,9 +252,18 @@ def _get_next_version(publish_root: str) -> int:
     try:
         for item in os.listdir(publish_root):
             if item.startswith("v") and len(item) == 4 and item[1:].isdigit():
-                v = int(item[1:])
-                if v > max_v:
-                    max_v = v
+                v_path = os.path.join(publish_root, item)
+                # Check if folder contains any media files (not just sidecars)
+                has_media = False
+                for f in os.listdir(v_path):
+                    if not f.startswith("_"):
+                        has_media = True
+                        break
+                
+                if has_media:
+                    v = int(item[1:])
+                    if v > max_v:
+                        max_v = v
     except Exception:
         pass
     return max_v + 1
