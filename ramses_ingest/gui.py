@@ -636,8 +636,15 @@ class IngestWindow(QMainWindow):
 
         self._summary_label.setText(f"Summary: {', '.join(parts)}")
         self._btn_ingest.setText(f"Ingest {n_enabled}/{total}")
-        # Only enable if there are plans AND we are connected
-        self._btn_ingest.setEnabled(n_enabled > 0 and self._engine.connected)
+        
+        # Strict enforcement: Connection AND valid plans AND a defined pipeline step
+        has_step = bool(self._step_combo.currentText())
+        self._btn_ingest.setEnabled(n_enabled > 0 and self._engine.connected and has_step)
+        
+        if self._engine.connected and not has_step:
+            self._btn_ingest.setToolTip("No Shot Production steps found in this project. Ingest disabled.")
+        else:
+            self._btn_ingest.setToolTip("")
 
     def _get_enabled_plans(self) -> list[IngestPlan]:
         enabled = []
@@ -751,8 +758,19 @@ class IngestWindow(QMainWindow):
     def _on_step_changed(self, text: str) -> None:
         if text:
             self._engine.step_id = text
-
-    def _on_studio_changed(self, text: str) -> None:
+            self._chk_status.setText(f"Set {text} status to OK")
+            # Re-resolve paths when step changes so Destination column updates
+            if self._plans:
+                self._engine.step_id = text
+                if self._engine.connected:
+                    from ramses_ingest.publisher import resolve_paths_from_daemon
+                    resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
+                self._populate_tree()
+        else:
+            self._engine.step_id = ""
+            self._chk_status.setText("Set status to OK")
+        
+        self._update_summary()
         self._engine.studio_name = text
         save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text)
 
