@@ -182,7 +182,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     .status-fail { color: var(--error); font-weight: bold; }
     .status-warn { color: var(--warning); font-weight: bold; }
     
-    .xray-wrap { display: flex; flex-direction: column; gap: 10px; padding: 15px 10px !important; vertical-align: middle; justify-content: center; }
+    .xray-wrap { display: flex; flex-direction: column; gap: 8px; }
     .xray-target { color: var(--text-main); font-weight: bold; font-size: 14px; line-height: 1.5; white-space: nowrap; }
     .xray-source { color: var(--text-muted); font-size: 10px; font-family: 'Consolas', monospace; line-height: 1.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .xray-arrow { color: var(--accent); margin: 0 4px; font-size: 10px; }
@@ -357,10 +357,12 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         row_html = f"""
         <tr>
             <td>{img_tag}</td>
-            <td class="xray-wrap">
-                <div class="xray-target">{res.plan.shot_id}</div>
-                <div class="xray-source"><span class="xray-arrow">←</span> {res.plan.match.clip.base_name}.{res.plan.match.clip.extension}</div>
-                <div class="xray-source" style="margin-top:2px;">{res.plan.sequence_id or ""}</div>
+            <td>
+                <div class="xray-wrap">
+                    <div class="xray-target">{res.plan.shot_id}</div>
+                    <div class="xray-source"><span class="xray-arrow">←</span> {res.plan.match.clip.base_name}.{res.plan.match.clip.extension}</div>
+                    <div class="xray-source" style="margin-top:2px;">{res.plan.sequence_id or ""}</div>
+                </div>
             </td>
             <td><span class="code">v{res.plan.version:03d}</span></td>
             <td class="{status_cls}">{status_text}</td>
