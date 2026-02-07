@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QLabel, QComboBox, QPushButton, QTreeWidget, QTreeWidgetItem,
     QCheckBox, QTextEdit, QProgressBar, QFrame, QDialog,
     QLineEdit, QSplitter, QHeaderView, QSizePolicy, QMessageBox,
+    QTableWidget, QTableWidgetItem, QStyledItemDelegate, QAbstractItemView,
+    QMenu, QGroupBox, QScrollArea,
 )
 
 from ramses_ingest.app import IngestEngine
@@ -372,6 +374,46 @@ class RulesEditorDialog(QDialog):
 
 
 # ---------------------------------------------------------------------------
+# Helper Widgets for Professional UX
+# ---------------------------------------------------------------------------
+
+class StatusIndicator(QLabel):
+    """Color-coded status dot (● instead of text)"""
+
+    def __init__(self, status: str = "pending", parent=None):
+        super().__init__(parent)
+        self.set_status(status)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setFixedSize(20, 20)
+
+    def set_status(self, status: str):
+        """Update status color: ready=green, warning=yellow, error=red, pending=gray"""
+        colors = {
+            "ready": "#4ec9b0",      # Green
+            "warning": "#f39c12",    # Yellow/Orange
+            "error": "#f44747",      # Red
+            "pending": "#666666",    # Gray
+            "duplicate": "#999999",  # Light gray
+        }
+        color = colors.get(status, "#666666")
+        self.setText("●")
+        self.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
+        self.setToolTip(status.title())
+
+
+class EditableDelegate(QStyledItemDelegate):
+    """Delegate for inline editing of table cells"""
+
+    def createEditor(self, parent, option, index):
+        """Create editor for shot ID override"""
+        if index.column() == 3:  # Shot column
+            editor = QLineEdit(parent)
+            editor.setStyleSheet("background: #2d2d30; border: 1px solid #00bff3;")
+            return editor
+        return super().createEditor(parent, option, index)
+
+
+# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 
@@ -381,12 +423,14 @@ class IngestWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("RAMSES INGEST")
-        self.resize(780, 700)
+        self.resize(1200, 700)  # Wider for 3-panel layout
 
         self._engine = IngestEngine()
         self._plans: list[IngestPlan] = []
         self._scan_worker: ScanWorker | None = None
         self._ingest_worker: IngestWorker | None = None
+        self._current_filter_status = "all"  # For filter sidebar
+        self._selected_plan_idx = -1  # For detail panel
 
         self._build_ui()
         self._try_connect()
