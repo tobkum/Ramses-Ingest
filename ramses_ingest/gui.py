@@ -931,11 +931,19 @@ class IngestWindow(QMainWindow):
         """Update detail panel when selection changes"""
         selected = self._table.selectedItems()
         if not selected:
+            # Block signals while clearing to prevent triggering overrides
+            self._override_shot.blockSignals(True)
+            self._override_seq.blockSignals(True)
+            
             self._detail_widget.clear()
             self._override_shot.clear()
             self._override_shot.setEnabled(False)
             self._override_seq.clear()
             self._override_seq.setEnabled(False)
+            
+            self._override_shot.blockSignals(False)
+            self._override_seq.blockSignals(False)
+            
             self._selected_plan = None
             return
 
@@ -1008,13 +1016,19 @@ class IngestWindow(QMainWindow):
 
         self._detail_widget.setHtml("<br>".join(details))
 
-        # Enable override
+        # --- Update Overrides (SIGNAL PROTECTED) ---
+        # Block signals so that setting text from data doesn't trigger a "change" back to data
+        self._override_shot.blockSignals(True)
+        self._override_seq.blockSignals(True)
+
         self._override_shot.setEnabled(True)
-        if plan.shot_id:
-            self._override_shot.setText(plan.shot_id)
+        self._override_shot.setText(plan.shot_id or "")
 
         self._override_seq.setEnabled(True)
         self._override_seq.setText(plan.sequence_id or "")
+        
+        self._override_shot.blockSignals(False)
+        self._override_seq.blockSignals(False)
 
     def _on_override_changed(self, text: str) -> None:
         """Apply shot ID override to selected plan"""
@@ -1243,8 +1257,15 @@ class IngestWindow(QMainWindow):
 
     def _populate_table(self) -> None:
         """Populate the table with current plans (replaces _populate_tree)"""
-        # Block signals to prevent triggering itemChanged during population
-        blocked = self._table.blockSignals(True)
+        # Block ALL signals to prevent triggering itemSelectionChanged or itemChanged during population
+        self._table.blockSignals(True)
+
+        # Clear selection state to avoid stale references
+        self._selected_plan = None
+        self._override_shot.clear()
+        self._override_seq.clear()
+        self._override_shot.setEnabled(False)
+        self._override_seq.setEnabled(False)
 
         self._table.setRowCount(0)
         self._table.setRowCount(len(self._plans))
@@ -1384,7 +1405,7 @@ class IngestWindow(QMainWindow):
             self._table.setRowHeight(idx, 28)
 
         # Re-enable signals
-        self._table.blockSignals(blocked)
+        self._table.blockSignals(False)
 
         # Update filter counts
         self._update_filter_counts()
