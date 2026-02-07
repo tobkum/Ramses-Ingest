@@ -143,7 +143,11 @@ QComboBox::drop-down {
 
 QCheckBox {
     spacing: 8px;
-    padding: 4px;
+}
+
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
 }
 
 QPushButton {
@@ -238,17 +242,28 @@ QTableWidget {
     border: 1px solid #2d2d2d;
     gridline-color: #252526;
     border-radius: 4px;
+    show-decoration-selected: 0;
+    outline: none;
+}
+
+QTableWidget:focus {
+    outline: none;
+    border: 1px solid #2d2d2d;
 }
 
 QTableWidget::item {
     padding: 8px;
     border-bottom: 1px solid #252526;
-    min-height: 36px;
+    min-height: 42px;
 }
 
 QTableWidget::item:selected {
-    background-color: #094771;
-    color: #ffffff;
+    background-color: rgba(0, 191, 243, 0.15);
+    outline: none;
+}
+
+QTableWidget::item:selected:focus {
+    background-color: rgba(0, 191, 243, 0.25);
 }
 
 /* --- Progress --- */
@@ -471,7 +486,7 @@ class StatusIndicator(QLabel):
         super().__init__(parent)
         self.set_status(status)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setFixedSize(20, 20)
+        self.setContentsMargins(0, 0, 0, 0)
 
     def set_status(self, status: str):
         """Update status color: ready=green, warning=yellow, error=red, pending=gray"""
@@ -484,7 +499,7 @@ class StatusIndicator(QLabel):
         }
         color = colors.get(status, "#666666")
         self.setText("●")
-        self.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold;")
+        self.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold; padding: 0; margin: 0;")
         self.setToolTip(status.title())
 
 
@@ -1501,10 +1516,17 @@ class IngestWindow(QMainWindow):
             status_indicator = StatusIndicator(status)
             if status_msg:
                 status_indicator.setToolTip(status_msg)
-            self._table.setCellWidget(idx, 8, status_indicator)
 
-            # Set row height for better readability
-            self._table.setRowHeight(idx, 28)
+            # Wrap in centered container for proper alignment
+            status_container = QWidget()
+            status_container.setStyleSheet("background: transparent;")
+            status_layout = QHBoxLayout(status_container)
+            status_layout.addWidget(status_indicator)
+            status_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            status_layout.setContentsMargins(0, 0, 0, 0)
+            status_layout.setSpacing(0)
+
+            self._table.setCellWidget(idx, 8, status_container)
 
         # Re-enable signals and sorting
         self._table.blockSignals(False)
