@@ -54,10 +54,11 @@ class ArchitectToken:
         
         # Build the capture group logic
         pattern = ""
+        prefix_part = ""
         if self.type == TokenType.VERSION:
             if self.prefix:
-                pattern += re.escape(self.prefix)
-            pattern += r"\d+" if self.padding <= 0 else fr"\d{{{self.padding}}}"
+                prefix_part = re.escape(self.prefix)
+            pattern = r"\d+" if self.padding <= 0 else fr"\d{{{self.padding}}}"
         elif self.type == TokenType.SHOT or self.type == TokenType.SEQUENCE:
             # Common pattern: alphanumeric but must contain a digit
             pattern = r"[A-Za-z0-9]+"
@@ -69,7 +70,7 @@ class ArchitectToken:
             pattern = r"[A-Za-z0-9]+"
 
         if self.type in [TokenType.SEQUENCE, TokenType.SHOT, TokenType.VERSION, TokenType.STEP, TokenType.PROJECT]:
-            return f"(?P<{self.type.value}>{pattern})"
+            return f"{prefix_part}(?P<{self.type.value}>{pattern})"
         
         return pattern
 

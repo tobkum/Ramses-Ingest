@@ -161,6 +161,27 @@ class TestCopyFrames(unittest.TestCase):
         self.assertEqual(copied, 1)
         self.assertIn("PROJ_S_SH010_PLATE.mov", os.listdir(self.dst_dir))
 
+    def test_fast_verify_catches_size_mismatch(self):
+        """Test that Fast Verify still catches size mismatches on un-hashed frames."""
+        clip = _make_clip("fast", self.src_dir, frame_count=10)
+        
+        # We need to mock shutil.copy2 to simulate a partial/corrupt copy
+        # but ONLY for one specific frame (e.g. frame 5 which is skipped in MD5)
+        import shutil
+        original_copy2 = shutil.copy2
+        
+        def mock_copy_corrupt(src, dst):
+            original_copy2(src, dst)
+            if "0005" in dst:
+                # Corrupt the destination file size
+                with open(dst, "ab") as f:
+                    f.write(b"corruption")
+
+        with patch("shutil.copy2", side_effect=mock_copy_corrupt):
+            with self.assertRaises(OSError) as cm:
+                copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE", fast_verify=True)
+            self.assertIn("Size mismatch", str(cm.exception))
+
 
 class TestResolvePaths(unittest.TestCase):
     def test_resolve_paths_fills_directories(self):

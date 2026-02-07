@@ -84,5 +84,14 @@ class TestProber(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             probe_file("any.mov")
 
+    @patch("os.path.isfile")
+    @patch("subprocess.run")
+    def test_probe_corrupt_json(self, mock_run, mock_isfile):
+        mock_isfile.return_value = True
+        # Return invalid JSON
+        mock_run.return_value = MagicMock(returncode=0, stdout="not json at all")
+        info = probe_file("corrupt.json")
+        self.assertFalse(info.is_valid)
+
 if __name__ == "__main__":
     unittest.main()
