@@ -237,10 +237,11 @@ def copy_frames(
     frames_to_copy = []
     if clip.is_sequence:
         padding = clip.padding
+        separator = clip.separator  # Use detected separator from scanner
         for i, frame in enumerate(clip.frames):
             src = os.path.join(
                 str(clip.directory),
-                f"{clip.base_name}.{str(frame).zfill(padding)}.{clip.extension}",
+                f"{clip.base_name}{separator}{str(frame).zfill(padding)}.{clip.extension}",
             )
             dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
             dst = os.path.join(dest_dir, dst_name)

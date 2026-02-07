@@ -16,11 +16,11 @@ from pathlib import Path
 
 import pyseq
 
-# Matches a frame number between two dots: name.0001.exr
-# OR frame number after underscore: name_0001.exr
-# Uses non-greedy .+? to prevent catastrophic backtracking on long complex filenames
-# Minimum 2 digits for frame numbers to support legacy deliveries (01-99)
-RE_FRAME_PADDING = re.compile(r"^(?P<base>.+?)(?P<sep>[\._])(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
+# Matches frame numbers at the END of the filename (before extension)
+# Examples: name.0001.exr, name_0001.exr, project_v01_shot_0030.exr (matches 0030, not 01)
+# Uses GREEDY .+ to explicitly match from the end (VFX convention: frames always at end)
+# Minimum 2 digits for frame numbers to align with pyseq frame_pattern
+RE_FRAME_PADDING = re.compile(r"^(?P<base>.+)(?P<sep>[\._])(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
 
 # Common media extensions (lowercase)
 IMAGE_EXTENSIONS = {
@@ -57,6 +57,9 @@ class Clip:
     _padding: int = 4
     """Detected zero-padding width from original filename (e.g. '0001' = 4)."""
 
+    _separator: str = "."
+    """Frame number separator character (. or _) detected from original filename."""
+
     @property
     def frame_count(self) -> int:
         return len(self.frames) if self.is_sequence else 0
@@ -73,6 +76,11 @@ class Clip:
     def padding(self) -> int:
         """Detected zero-padding width from the first frame number."""
         return self._padding
+
+    @property
+    def separator(self) -> str:
+        """Frame number separator character from original filename."""
+        return self._separator
 
     @property
     def missing_frames(self) -> list[int]:
@@ -108,8 +116,9 @@ def scan_directory(root: str | Path) -> list[Clip]:
         # Helper to process a single directory
         def _process_dir(dir_path: Path):
             # pyseq.get_sequences expects a string path
+            # Use frame_pattern to require 2+ digits (matches our RE_FRAME_PADDING)
             try:
-                seqs = pyseq.get_sequences(str(dir_path))
+                seqs = pyseq.get_sequences(str(dir_path), frame_pattern=r'\d{2,}')
             except OSError:
                 return
 
@@ -125,17 +134,19 @@ def scan_directory(root: str | Path) -> list[Clip]:
                 is_seq = len(s) > 1
                 frames = []
                 padding = 4
-                
+                separator = "."  # Default separator
+
                 # Check for single-frame sequences (e.g. plate.1001.exr alone)
                 # If len=1, pyseq might not have parsed the frame.
                 if len(s) == 1:
                     item_name = s[0].name
                     item_path = str(s[0])
-                    
+
                     # Check our regex to see if it *should* be a sequence
                     m = RE_FRAME_PADDING.match(item_name)
                     if m:
                         ext = m.group("ext").lower()
+                        separator = m.group("sep")  # Capture separator (. or _)
                         # Exclude movies from being sequences
                         if ext not in MOVIE_EXTENSIONS:
                             is_seq = True
@@ -158,12 +169,12 @@ def scan_directory(root: str | Path) -> list[Clip]:
                         else:
                             base = item_name
                             ext = ""
-                
+
                 else:
                     # Multi-frame sequence detected by pyseq
                     is_seq = True
                     frames = [f.frame for f in s]
-                    
+
                     # Fix: Ensure frames are sorted (pyseq usually does, but good to be safe)
                     frames.sort()
 
@@ -171,20 +182,21 @@ def scan_directory(root: str | Path) -> list[Clip]:
                     # Pyseq head() includes separator often
                     head = s.head()
                     tail = s.tail()
-                    
+
                     # Base name: trip head separator if present
                     # s.head() -> "plate."
                     base = head.rstrip("._")
-                    
+
                     # Extension: s.tail() -> ".exr"
-                    ext = tail.strip(".")
-                    
+                    ext = tail.strip(".").lower()  # Must lowercase for MEDIA_EXTENSIONS comparison
+
                     # Padding: deduce from first item
                     # We can use regex on the first file to be precise
                     first_name = s[0].name
                     m = RE_FRAME_PADDING.match(first_name)
                     if m:
                         padding = len(m.group("frame"))
+                        separator = m.group("sep")  # Capture separator (. or _)
                     else:
                         padding = 4 # Fallback
                 
@@ -192,8 +204,9 @@ def scan_directory(root: str | Path) -> list[Clip]:
                 if ext not in MEDIA_EXTENSIONS:
                     continue
 
-                full_path = str(s[0]) if is_seq and len(s) > 0 else str(s[0]) # s[0] is Item, str(Item) is path
-                
+                # Construct full path to first file (pyseq Item only stores filename)
+                full_path = os.path.join(str(dir_path), s[0].name)
+
                 # Create Clip
                 clip = Clip(
                     base_name=base,
@@ -202,7 +215,8 @@ def scan_directory(root: str | Path) -> list[Clip]:
                     is_sequence=is_seq,
                     frames=frames if is_seq else [],
                     first_file=full_path,
-                    _padding=padding
+                    _padding=padding,
+                    _separator=separator
                 )
                 clips.append(clip)
 
