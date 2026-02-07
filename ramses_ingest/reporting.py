@@ -281,7 +281,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         
         fps_val = mi.fps if mi.fps else 0
         fps_dev = (fps_val != common_fps and common_fps)
-        fps_display = f'<span class="deviation">{fps_val}</span>' if fps_dev else str(fps_val)
+        fps_display = f'<span class="deviation">{fps_val:.3f}</span>' if fps_dev else f"{fps_val:.3f}"
         
         codec_val = mi.codec.upper() if mi.codec else "—"
         codec_dev = (mi.codec and mi.codec.lower() != common_codec and common_codec)

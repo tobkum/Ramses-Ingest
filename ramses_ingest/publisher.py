@@ -30,6 +30,7 @@ from ramses_ingest.path_utils import normalize_path, join_normalized
 from ramses.file_info import RamFileInfo
 from ramses.constants import ItemType
 
+
 def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
     """Verify if the destination volume has enough free space.
 
@@ -45,18 +46,23 @@ def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
         target = os.path.abspath(dest_path)
         while not os.path.exists(target):
             parent = os.path.dirname(target)
-            if parent == target: break # Root reached
+            if parent == target:
+                break  # Root reached
             target = parent
-        
+
         usage = shutil.disk_usage(target)
         # Keep 500MB as safety margin for OS/logs
         if usage.free < (required_bytes + 524288000):
             free_gb = usage.free / (1024**3)
             req_gb = required_bytes / (1024**3)
-            return False, f"Insufficient disk space on {target}. Need {req_gb:.2f} GB, but only {free_gb:.2f} GB free (plus safety margin)."
+            return (
+                False,
+                f"Insufficient disk space on {target}. Need {req_gb:.2f} GB, but only {free_gb:.2f} GB free (plus safety margin).",
+            )
         return True, ""
     except Exception as exc:
-        return True, "" # Don't block on errors (e.g. permission issues on parent)
+        return True, ""  # Don't block on errors (e.g. permission issues on parent)
+
 
 # Thread-safe cache lock for Ramses object registration
 _RAMSES_CACHE_LOCK = threading.Lock()
@@ -72,7 +78,7 @@ class IngestPlan:
     sequence_id: str = ""
     shot_id: str = ""
     project_id: str = ""
-    project_name: str = "" # Added long name support
+    project_name: str = ""  # Added long name support
     step_id: str = "PLATE"
 
     is_new_sequence: bool = False
@@ -101,7 +107,12 @@ class IngestPlan:
 
     @property
     def can_execute(self) -> bool:
-        return self.enabled and self.error == "" and self.match.matched and not self.is_duplicate
+        return (
+            self.enabled
+            and self.error == ""
+            and self.match.matched
+            and not self.is_duplicate
+        )
 
 
 @dataclass
@@ -113,9 +124,9 @@ class IngestResult:
     published_path: str = ""
     preview_path: str = ""
     frames_copied: int = 0
-    bytes_copied: int = 0 # Exact byte count
-    checksum: str = "" # MD5 of the first frame/file
-    missing_frames: list[int] = field(default_factory=list) # Frame gaps in sequences
+    bytes_copied: int = 0  # Exact byte count
+    checksum: str = ""  # MD5 of the first frame/file
+    missing_frames: list[int] = field(default_factory=list)  # Frame gaps in sequences
     error: str = ""
 
 
@@ -173,16 +184,18 @@ def build_plans(
 import concurrent.futures
 import hashlib
 
+
 def _calculate_md5(file_path: str) -> str:
     """Calculate MD5 hash of a file in large chunks (1MB) for performance."""
     hash_md5 = hashlib.md5()
     try:
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(1048576), b""): # 1MB chunks
+            for chunk in iter(lambda: f.read(1048576), b""):  # 1MB chunks
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     except (OSError, IOError):
         return ""
+
 
 def copy_frames(
     clip: Clip,
@@ -193,7 +206,7 @@ def copy_frames(
     progress_callback: Callable[[str], None] | None = None,
     dry_run: bool = False,
     fast_verify: bool = False,
-    max_workers: int = 4
+    max_workers: int = 4,
 ) -> tuple[int, str, int, str]:
     """Copy clip frames into *dest_dir* with parallel processing and verification.
 
@@ -212,16 +225,16 @@ def copy_frames(
     """
     if not dry_run:
         os.makedirs(dest_dir, exist_ok=True)
-    
+
     total_bytes = 0
     first_checksum = ""
     first_filename = ""
-    
+
     # Enforce case-consistency for destination filenames
     # Project casing is preserved, but Shot/Step are standardized to Upper
     shot_id = shot_id.upper()
-    step_id = step_id.upper()
-    
+    step_id = step_id
+
     frames_to_copy = []
     if clip.is_sequence:
         padding = clip.padding
@@ -232,7 +245,7 @@ def copy_frames(
             )
             dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
             dst = os.path.join(dest_dir, dst_name)
-            
+
             # Determine if this frame needs full MD5 verification
             needs_md5 = True
             if fast_verify:
@@ -240,7 +253,7 @@ def copy_frames(
                 mid = len(clip.frames) // 2
                 if i != 0 and i != mid and i != (len(clip.frames) - 1):
                     needs_md5 = False
-            
+
             frames_to_copy.append((src, dst, dst_name, needs_md5, i == 0))
     else:
         src = clip.first_file
@@ -250,7 +263,7 @@ def copy_frames(
 
     def _process_one(args):
         src, dst, dst_name, needs_md5, is_first = args
-        
+
         if dry_run:
             sz = os.path.getsize(src)
             checksum = _calculate_md5(src) if needs_md5 else "skipped"
@@ -258,7 +271,7 @@ def copy_frames(
 
         shutil.copy2(src, dst)
         sz = os.path.getsize(src)
-        
+
         # 1. Size check (always)
         if sz != os.path.getsize(dst):
             raise OSError(f"Size mismatch: {dst}")
@@ -271,27 +284,27 @@ def copy_frames(
             if src_md5 != dst_md5:
                 raise OSError(f"Checksum mismatch: {dst}")
             checksum = src_md5
-            
+
         return checksum, sz, dst_name, is_first
 
     copied_count = 0
     total_frames = len(frames_to_copy)
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(_process_one, f) for f in frames_to_copy]
-        
+
         for i, future in enumerate(concurrent.futures.as_completed(futures)):
             checksum, sz, dst_name, is_first = future.result()
             total_bytes += sz
             copied_count += 1
-            
+
             if is_first:
                 first_checksum = checksum
                 first_filename = dst_name
-                
+
             if progress_callback and (i % 10 == 0 or i == total_frames - 1):
                 mode = "Verifying" if not fast_verify else "Copying"
-                progress_callback(f"    {mode} frame {i+1}/{total_frames}...")
+                progress_callback(f"    {mode} frame {i + 1}/{total_frames}...")
 
     return copied_count, first_checksum, total_bytes, first_filename
 
@@ -329,8 +342,8 @@ def _get_next_version(publish_root: str) -> int:
                             is_valid_version = True
                     except (OSError, PermissionError):
                         pass
-                    
-                    # NOTE: We no longer treat folders with "any media files" as valid 
+
+                    # NOTE: We no longer treat folders with "any media files" as valid
                     # if they are old and have no marker. This allows reclaiming
                     # failed version numbers.
 
@@ -365,6 +378,7 @@ def generate_thumbnail_for_result(
 
     try:
         from ramses_ingest.preview import generate_thumbnail as gen_thumb
+
         os.makedirs(result.plan.target_preview_dir, exist_ok=True)
 
         thumb_name = f"{result.plan.project_id}_S_{result.plan.shot_id}_{result.plan.step_id}.jpg"
@@ -403,8 +417,7 @@ def check_for_duplicates(plans: list[IngestPlan]) -> None:
         existing_versions_dir = os.path.dirname(plan.target_publish_dir)
 
         is_dup, dup_path, dup_version = check_for_duplicate_version(
-            plan.match.clip,
-            existing_versions_dir
+            plan.match.clip, existing_versions_dir
         )
 
         if is_dup:
@@ -420,13 +433,14 @@ def check_for_path_collisions(plans: list[IngestPlan]) -> None:
     Updates the IngestPlan.error field if a collision is detected.
     """
     from collections import defaultdict
+
     path_to_plans = defaultdict(list)
 
     for plan in plans:
         # Only check matched plans that have a target path
         if not plan.match.matched or not plan.target_publish_dir:
             continue
-        
+
         # Normalize path for comparison
         path_key = os.path.normpath(plan.target_publish_dir).lower()
         path_to_plans[path_key].append(plan)
@@ -435,7 +449,9 @@ def check_for_path_collisions(plans: list[IngestPlan]) -> None:
         if len(colliding) > 1:
             for plan in colliding:
                 # Only append if not already showing a more specific error
-                collision_msg = f"COLLISION: {len(colliding)} clips resolving to same path"
+                collision_msg = (
+                    f"COLLISION: {len(colliding)} clips resolving to same path"
+                )
                 if not plan.error:
                     plan.error = collision_msg
                 elif "COLLISION" not in plan.error:
@@ -460,10 +476,10 @@ def resolve_paths(
             continue
 
         # Preserve project casing (Ramses is case-sensitive for projects)
-        # but enforce uppercase for Shot/Step as per standard convention
+        # but enforce uppercase for Shot as per standard convention
         proj_id = plan.project_id
         shot_id = plan.shot_id.upper()
-        step_id = plan.step_id.upper()
+        step_id = plan.step_id
 
         # Build standard Shot Root folder name: PROJ_S_SH010
         snm = RamFileInfo()
@@ -483,18 +499,20 @@ def resolve_paths(
         step_folder_name = nm.fileName()
 
         step_folder = os.path.join(shot_root, step_folder_name)
-        
+
         # VERSION-UP LOGIC
         publish_root = os.path.join(step_folder, "_published")
         plan.version = _get_next_version(publish_root)
-        
+
         version_str = f"v{plan.version:03d}"
 
         plan.target_publish_dir = os.path.join(
-            publish_root, version_str,
+            publish_root,
+            version_str,
         )
         plan.target_preview_dir = os.path.join(
-            step_folder, "_preview",
+            step_folder,
+            "_preview",
         )
 
 
@@ -504,6 +522,7 @@ def resolve_paths_from_daemon(
 ) -> None:
     """Calculate target paths for the UI without creating folders on disk (Dry Resolve)."""
     from ramses.daemon_interface import RamDaemonInterface
+
     daemon = RamDaemonInterface.instance()
 
     for plan in plans:
@@ -512,7 +531,7 @@ def resolve_paths_from_daemon(
         shot_obj = shot_objects.get(plan.shot_id.upper())
         if shot_obj is None:
             continue
-        
+
         try:
             # We bypass high-level API methods to avoid os.makedirs side-effects.
             # Get the raw path from daemon without triggering the API's internal folder creation.
@@ -523,7 +542,7 @@ def resolve_paths_from_daemon(
             # Preserve project casing
             proj_id = plan.project_id
             shot_id = plan.shot_id.upper()
-            step_id = plan.step_id.upper()
+            step_id = plan.step_id
 
             # Build step folder name using API convention
             nm = RamFileInfo()
@@ -535,11 +554,11 @@ def resolve_paths_from_daemon(
 
             # Construct paths manually (Dry)
             step_root = f"{base_path}/{step_folder_name}"
-            
+
             # Find next version (Dry scan of existing folders)
             publish_root = f"{step_root}/_published"
             plan.version = _get_next_version(publish_root)
-            
+
             version_str = f"v{plan.version:03d}"
             plan.target_publish_dir = f"{publish_root}/{version_str}"
             plan.target_preview_dir = f"{step_root}/_preview"
@@ -574,7 +593,7 @@ def _write_ramses_metadata(
     }
     if timecode:
         entry["timecode"] = timecode
-    
+
     data[filename] = entry
 
     os.makedirs(folder, exist_ok=True)
@@ -589,7 +608,7 @@ def execute_plan(
     progress_callback: Callable[[str], None] | None = None,
     ocio_config: str | None = None,
     ocio_in: str = "sRGB",
-    ocio_out: str = "sRGB", # Hardcoded for safety
+    ocio_out: str = "sRGB",  # Hardcoded for safety
     skip_ramses_registration: bool = False,
     dry_run: bool = False,
     fast_verify: bool = False,
@@ -611,6 +630,7 @@ def execute_plan(
     Returns:
         An ``IngestResult`` describing the outcome.
     """
+
     def _log(msg: str) -> None:
         if progress_callback:
             progress_callback(msg)
@@ -639,8 +659,11 @@ def execute_plan(
         action_verb = "Simulating" if dry_run else "Copying"
         _log(f"  {action_verb} {clip.frame_count or 1} file(s)...")
         copied_count, checksum, total_bytes, first_filename = copy_frames(
-            clip, plan.target_publish_dir,
-            plan.project_id, plan.shot_id, plan.step_id,
+            clip,
+            plan.target_publish_dir,
+            plan.project_id,
+            plan.shot_id,
+            plan.step_id,
             progress_callback=progress_callback,  # Enhancement #5: MD5 progress reporting
             dry_run=dry_run,  # Enhancement #8: Dry-run mode
             fast_verify=fast_verify,
@@ -676,12 +699,14 @@ def execute_plan(
     if generate_thumbnail and plan.target_preview_dir and not dry_run:
         try:
             from ramses_ingest.preview import generate_thumbnail as gen_thumb
+
             os.makedirs(plan.target_preview_dir, exist_ok=True)
             thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
             thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
             _log("  Generating thumbnail...")
             ok = gen_thumb(
-                clip, thumb_path,
+                clip,
+                thumb_path,
                 ocio_config=ocio_config,
                 ocio_in=ocio_in,
             )
@@ -694,11 +719,13 @@ def execute_plan(
     if generate_proxy and plan.target_preview_dir and not dry_run:
         try:
             from ramses_ingest.preview import generate_proxy as gen_proxy
+
             proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"
             proxy_path = os.path.join(plan.target_preview_dir, proxy_name)
             _log("  Generating video proxy...")
             gen_proxy(
-                clip, proxy_path,
+                clip,
+                proxy_path,
                 ocio_config=ocio_config,
                 ocio_in=ocio_in,
             )
@@ -719,14 +746,15 @@ def execute_plan(
 
 
 def register_ramses_objects(
-    plan: IngestPlan, 
-    log: Callable[[str], None], 
+    plan: IngestPlan,
+    log: Callable[[str], None],
     sequence_cache: dict[str, str] | None = None,
-    shot_cache: dict[str, object] | None = None
+    shot_cache: dict[str, object] | None = None,
 ) -> None:
     """Create or HEAL RamSequence / RamShot via the Daemon API."""
     try:
         from ramses import Ramses
+
         ram = Ramses.instance()
         if not ram.online():
             return
@@ -742,14 +770,14 @@ def register_ramses_objects(
     project = ram.project()
     if not project:
         return
-    
+
     project_uuid = project.uuid()
 
     # 1. Handle Sequence
     seq_obj = None
     if plan.sequence_id:
         seq_upper = plan.sequence_id.upper()
-        
+
         # Use cache if available, otherwise fetch
         if sequence_cache and seq_upper in sequence_cache:
             seq_obj = RamSequence(sequence_cache[seq_upper])
@@ -758,7 +786,7 @@ def register_ramses_objects(
                 if s.shortName().upper() == seq_upper:
                     seq_obj = s
                     break
-        
+
         seq_folder = join_normalized(project.folderPath(), "05-SHOTS", plan.sequence_id)
         seq_data = {
             "shortName": plan.sequence_id,
@@ -784,7 +812,10 @@ def register_ramses_objects(
         else:
             # HEAL only if needed
             current_data = seq_obj.data()
-            if current_data.get("folderPath") != seq_folder or current_data.get("project") != project_uuid:
+            if (
+                current_data.get("folderPath") != seq_folder
+                or current_data.get("project") != project_uuid
+            ):
                 log(f"  Healing sequence {plan.sequence_id} metadata...")
                 seq_obj.setData(seq_data)
 
@@ -792,7 +823,7 @@ def register_ramses_objects(
     if plan.shot_id:
         shot_upper = plan.shot_id.upper()
         shot_obj = None
-        
+
         # Use provided shot_cache (passed from app.py)
         if shot_cache and shot_upper in shot_cache:
             shot_obj = shot_cache[shot_upper]
@@ -809,11 +840,15 @@ def register_ramses_objects(
         shot_nm.ramType = ItemType.SHOT
         shot_nm.shortName = plan.shot_id
         shot_folder_name = shot_nm.fileName()
-        shot_folder = join_normalized(project.folderPath(), "05-SHOTS", shot_folder_name)
+        shot_folder = join_normalized(
+            project.folderPath(), "05-SHOTS", shot_folder_name
+        )
 
         duration = 5.0
         if info.fps and info.fps > 0:
-            fc = info.frame_count or (plan.match.clip.frame_count if plan.match.clip.is_sequence else 0)
+            fc = info.frame_count or (
+                plan.match.clip.frame_count if plan.match.clip.is_sequence else 0
+            )
             if fc > 0:
                 duration = fc / info.fps
 
@@ -839,7 +874,10 @@ def register_ramses_objects(
         else:
             # HEAL only if needed
             current_data = shot_obj.data()
-            if current_data.get("folderPath") != shot_folder or current_data.get("project") != project_uuid:
+            if (
+                current_data.get("folderPath") != shot_folder
+                or current_data.get("project") != project_uuid
+            ):
                 log(f"  Healing shot {plan.shot_id} metadata...")
                 shot_obj.setData(shot_data)
 
@@ -849,7 +887,7 @@ _USER_ASSIGNMENT_SUPPORTED = True
 
 
 def update_ramses_status(
-    plan: IngestPlan, 
+    plan: IngestPlan,
     status_name: str = "OK",
     shot_cache: dict[str, object] | None = None,
 ) -> bool:
@@ -857,10 +895,11 @@ def update_ramses_status(
     global _USER_ASSIGNMENT_SUPPORTED
     try:
         from ramses import Ramses
+
         ram = Ramses.instance()
         if not ram.online():
             return False
-        
+
         project = ram.project()
         if not project:
             return False
@@ -874,18 +913,19 @@ def update_ramses_status(
                 if shot.shortName().upper() == plan.shot_id.upper():
                     target_shot = shot
                     break
-        
+
         if not target_shot:
             return False
 
         # Find the step object
         from ramses.ram_step import RamStep, StepType
+
         target_step = None
         for step in project.steps(StepType.SHOT_PRODUCTION):
-            if step.shortName().upper() == plan.step_id.upper():
+            if step.shortName() == plan.step_id:
                 target_step = step
                 break
-        
+
         if not target_step:
             return False
 
@@ -898,16 +938,16 @@ def update_ramses_status(
                 if state.shortName().upper() == status_name.upper():
                     target_state = state
                     break
-            
+
             if target_state:
                 try:
                     status.setState(target_state)
                     status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
-                    
+
                     # setUser calls setStatusModifiedBy which fails on some Daemon versions
                     if _USER_ASSIGNMENT_SUPPORTED:
                         try:
-                            status.setUser() 
+                            status.setUser()
                         except Exception as exc:
                             # If we see "Unknown query", stop trying for this session
                             # The API might log this to stdout before we catch it,
@@ -915,11 +955,11 @@ def update_ramses_status(
                             err_msg = str(exc).lower()
                             if "unknown query" in err_msg or "not reply" in err_msg:
                                 _USER_ASSIGNMENT_SUPPORTED = False
-                        
+
                     return True
                 except Exception:
                     return False
-                
+
         return False
     except Exception:
         return False

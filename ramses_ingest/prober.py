@@ -180,7 +180,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     info = MediaInfo(
         width=int(s.get("width", 0)),
         height=int(s.get("height", 0)),
-        fps=round(fps, 3),
+        fps=fps,
         codec=s.get("codec_name", ""),
         pix_fmt=s.get("pix_fmt", ""),
         color_space=s.get("color_space", ""),

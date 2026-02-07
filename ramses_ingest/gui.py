@@ -998,13 +998,13 @@ class IngestWindow(QMainWindow):
             details.append(f"<b>Resolution:</b> {res_val}")
 
         if plan.media_info.fps:
-            fps_val = f"{plan.media_info.fps:.2f}"
+            fps_val = f"{plan.media_info.fps:.3f}"
 
             if (
                 self._engine._project_fps > 0
-                and abs(plan.media_info.fps - self._engine._project_fps) > 0.001
+                and plan.media_info.fps != self._engine._project_fps
             ):
-                fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps:.2f})</b>"
+                fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps:.3f})</b>"
 
             details.append(f"<b>FPS:</b> {fps_val}")
 
@@ -1383,17 +1383,20 @@ class IngestWindow(QMainWindow):
             self._table.setItem(idx, 6, res_item)
 
             # Column 7: FPS (new)
-            fps_text = f"{plan.media_info.fps:.2f}" if plan.media_info.fps > 0 else "—"
+            fps_text = f"{plan.media_info.fps:.3f}" if plan.media_info.fps > 0 else "—"
             is_fps_mismatch = False
             if self._engine._project_fps > 0 and plan.media_info.fps > 0:
-                if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+                # Strict comparison as requested
+                if plan.media_info.fps != self._engine._project_fps:
                     is_fps_mismatch = True
-            
+
             fps_item = QTableWidgetItem(fps_text)
             fps_item.setFlags(fps_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             if is_fps_mismatch:
                 fps_item.setBackground(QColor(120, 100, 0, 100))
-                fps_item.setToolTip(f"FPS mismatch: Project is {self._engine._project_fps:.2f}")
+                fps_item.setToolTip(
+                    f"FPS mismatch: Project is {self._engine._project_fps:.3f}"
+                )
             self._table.setItem(idx, 7, fps_item)
 
             # Column 8: Status (switched to 8)
@@ -1589,7 +1592,7 @@ class IngestWindow(QMainWindow):
             fps = self._engine._project_fps
             w = self._engine._project_width
             h = self._engine._project_height
-            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.2f} FPS")
+            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.3f} FPS")
 
             # Populate steps
             self._step_combo.blockSignals(True)
