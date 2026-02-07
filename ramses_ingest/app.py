@@ -196,7 +196,13 @@ class IngestEngine:
                     self._steps.append(step.shortName())
             except Exception:
                 pass
-            if not self._steps:
+            
+            if self._steps:
+                # If we were on default "PLATE" but it's not in the list, 
+                # switch to the first valid project step.
+                if self._step_id == "PLATE" and "PLATE" not in self._steps:
+                    self._step_id = self._steps[0]
+            else:
                 self._steps = ["PLATE"]
 
             self._connected = True
