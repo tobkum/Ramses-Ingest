@@ -774,10 +774,8 @@ class IngestWindow(QMainWindow):
         else:
             self._engine.step_id = ""
             self._chk_status.setText("Set status to OK")
-        
+
         self._update_summary()
-        self._engine.studio_name = text
-        save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text)
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         """Update the button summary when a checkbox is toggled."""
