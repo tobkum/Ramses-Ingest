@@ -10,12 +10,33 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal, QThread, QUrl
 from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QColor, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QComboBox, QPushButton, QTreeWidget, QTreeWidgetItem,
-    QCheckBox, QTextEdit, QProgressBar, QFrame, QDialog,
-    QLineEdit, QSplitter, QHeaderView, QSizePolicy, QMessageBox,
-    QTableWidget, QTableWidgetItem, QStyledItemDelegate, QAbstractItemView,
-    QMenu, QGroupBox, QScrollArea,
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QComboBox,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QCheckBox,
+    QTextEdit,
+    QProgressBar,
+    QFrame,
+    QDialog,
+    QLineEdit,
+    QSplitter,
+    QHeaderView,
+    QSizePolicy,
+    QMessageBox,
+    QTableWidget,
+    QTableWidgetItem,
+    QStyledItemDelegate,
+    QAbstractItemView,
+    QMenu,
+    QGroupBox,
+    QScrollArea,
 )
 
 from ramses_ingest.app import IngestEngine
@@ -207,6 +228,7 @@ QFrame#dropZone[dragOver="true"] {
 # Drop Zone
 # ---------------------------------------------------------------------------
 
+
 class DropZone(QFrame):
     """Drag-and-drop zone accepting folders and files."""
 
@@ -256,6 +278,7 @@ class DropZone(QFrame):
 # ---------------------------------------------------------------------------
 # Worker threads
 # ---------------------------------------------------------------------------
+
 
 class ScanWorker(QThread):
     """Scans delivery paths in a background thread."""
@@ -336,6 +359,7 @@ class IngestWorker(QThread):
 # Rules Editor Dialog
 # ---------------------------------------------------------------------------
 
+
 class RulesEditorDialog(QDialog):
     """Simple YAML text editor for naming rules (Consolas, dark theme)."""
 
@@ -383,6 +407,7 @@ class RulesEditorDialog(QDialog):
 # Helper Widgets for Professional UX
 # ---------------------------------------------------------------------------
 
+
 class StatusIndicator(QLabel):
     """Color-coded status dot (● instead of text)"""
 
@@ -395,10 +420,10 @@ class StatusIndicator(QLabel):
     def set_status(self, status: str):
         """Update status color: ready=green, warning=yellow, error=red, pending=gray"""
         colors = {
-            "ready": "#4ec9b0",      # Green
-            "warning": "#f39c12",    # Yellow/Orange
-            "error": "#f44747",      # Red
-            "pending": "#666666",    # Gray
+            "ready": "#4ec9b0",  # Green
+            "warning": "#f39c12",  # Yellow/Orange
+            "error": "#f44747",  # Red
+            "pending": "#666666",  # Gray
             "duplicate": "#999999",  # Light gray
         }
         color = colors.get(status, "#666666")
@@ -422,6 +447,7 @@ class EditableDelegate(QStyledItemDelegate):
 # ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
+
 
 class IngestWindow(QMainWindow):
     """Main application window."""
@@ -455,7 +481,9 @@ class IngestWindow(QMainWindow):
         # HEADER BAR - Minimal (Project + Step + Studio + Status)
         # ═══════════════════════════════════════════════════════════════════════
         header = QFrame()
-        header.setStyleSheet("background-color: #1e1e1e; border-radius: 4px; padding: 6px;")
+        header.setStyleSheet(
+            "background-color: #1e1e1e; border-radius: 4px; padding: 6px;"
+        )
         header_lay = QHBoxLayout(header)
         header_lay.setContentsMargins(8, 4, 8, 4)
         header_lay.setSpacing(12)
@@ -463,7 +491,9 @@ class IngestWindow(QMainWindow):
         # Status orb
         self._status_orb = QFrame()
         self._status_orb.setObjectName("statusOrb")
-        self._status_orb.setStyleSheet("background-color: #f44747; border: 1px solid rgba(255,255,255,0.1);")
+        self._status_orb.setStyleSheet(
+            "background-color: #f44747; border: 1px solid rgba(255,255,255,0.1);"
+        )
         header_lay.addWidget(self._status_orb)
 
         self._status_label = QLabel("OFFLINE")
@@ -541,19 +571,25 @@ class IngestWindow(QMainWindow):
 
         self._filter_ready = QPushButton("● Ready (0)")
         self._filter_ready.setCheckable(True)
-        self._filter_ready.setStyleSheet("QPushButton { text-align: left; color: #4ec9b0; }")
+        self._filter_ready.setStyleSheet(
+            "QPushButton { text-align: left; color: #4ec9b0; }"
+        )
         self._filter_ready.clicked.connect(lambda: self._apply_filter("ready"))
         left_lay.addWidget(self._filter_ready)
 
         self._filter_warning = QPushButton("● Warnings (0)")
         self._filter_warning.setCheckable(True)
-        self._filter_warning.setStyleSheet("QPushButton { text-align: left; color: #f39c12; }")
+        self._filter_warning.setStyleSheet(
+            "QPushButton { text-align: left; color: #f39c12; }"
+        )
         self._filter_warning.clicked.connect(lambda: self._apply_filter("warning"))
         left_lay.addWidget(self._filter_warning)
 
         self._filter_error = QPushButton("● Errors (0)")
         self._filter_error.setCheckable(True)
-        self._filter_error.setStyleSheet("QPushButton { text-align: left; color: #f44747; }")
+        self._filter_error.setStyleSheet(
+            "QPushButton { text-align: left; color: #f44747; }"
+        )
         self._filter_error.clicked.connect(lambda: self._apply_filter("error"))
         left_lay.addWidget(self._filter_error)
 
@@ -601,9 +637,9 @@ class IngestWindow(QMainWindow):
         # Table
         self._table = QTableWidget()
         self._table.setColumnCount(8)
-        self._table.setHorizontalHeaderLabels([
-            "", "Filename", "Shot", "Ver", "Seq", "Frames", "Res", "Status"
-        ])
+        self._table.setHorizontalHeaderLabels(
+            ["", "Filename", "Shot", "Ver", "Seq", "Frames", "Res", "Status"]
+        )
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
@@ -626,7 +662,9 @@ class IngestWindow(QMainWindow):
         header.resizeSection(7, 55)  # Status (dot)
 
         # Set delegate for inline editing
-        self._table.setItemDelegateForColumn(2, EditableDelegate(self._table))  # Shot column
+        self._table.setItemDelegateForColumn(
+            2, EditableDelegate(self._table)
+        )  # Shot column
 
         center_lay.addWidget(self._table, 1)
 
@@ -667,8 +705,14 @@ class IngestWindow(QMainWindow):
         self._override_shot.textChanged.connect(self._on_override_changed)
         right_lay.addWidget(self._override_shot)
 
-        right_lay.addStretch()
+        right_lay.addWidget(QLabel("Sequence ID:"))
+        self._override_seq = QLineEdit()
+        self._override_seq.setPlaceholderText("Override sequence ID...")
+        self._override_seq.setEnabled(False)
+        self._override_seq.textChanged.connect(self._on_override_seq_changed)
+        right_lay.addWidget(self._override_seq)
 
+        right_lay.addStretch()
         main_splitter.addWidget(right_panel)
 
         # Set splitter proportions (20% | 50% | 30%)
@@ -680,7 +724,9 @@ class IngestWindow(QMainWindow):
         # BOTTOM ACTION BAR
         # ═══════════════════════════════════════════════════════════════════════
         action_bar = QFrame()
-        action_bar.setStyleSheet("background-color: #1e1e1e; border-radius: 4px; padding: 6px;")
+        action_bar.setStyleSheet(
+            "background-color: #1e1e1e; border-radius: 4px; padding: 6px;"
+        )
         action_bar_lay = QHBoxLayout(action_bar)
         action_bar_lay.setContentsMargins(8, 4, 8, 4)
 
@@ -783,7 +829,9 @@ class IngestWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Return), self, self._on_shortcut_execute)
 
         # Escape = Clear selection
-        QShortcut(QKeySequence(Qt.Key.Key_Escape), self, lambda: self._table.clearSelection())
+        QShortcut(
+            QKeySequence(Qt.Key.Key_Escape), self, lambda: self._table.clearSelection()
+        )
 
         # Delete = Remove selected clips
         QShortcut(QKeySequence(Qt.Key.Key_Delete), self, self._on_remove_selected)
@@ -823,7 +871,7 @@ class IngestWindow(QMainWindow):
             if self._current_filter_status != "all":
                 # Check status column
                 status_item = self._table.cellWidget(row, 7)  # Status column (was 6)
-                if status_item and hasattr(status_item, 'toolTip'):
+                if status_item and hasattr(status_item, "toolTip"):
                     status = status_item.toolTip().lower()
                     if self._current_filter_status not in status:
                         show = False
@@ -842,7 +890,7 @@ class IngestWindow(QMainWindow):
             if show and self._search_edit.text():
                 search = self._search_edit.text().lower()
                 shot_item = self._table.item(row, 2)  # Shot column
-                seq_item = self._table.item(row, 3)   # Seq column
+                seq_item = self._table.item(row, 3)  # Seq column
                 file_item = self._table.item(row, 1)  # Filename column
 
                 match = False
@@ -865,6 +913,8 @@ class IngestWindow(QMainWindow):
             self._detail_widget.clear()
             self._override_shot.clear()
             self._override_shot.setEnabled(False)
+            self._override_seq.clear()
+            self._override_seq.setEnabled(False)
             self._selected_plan_idx = -1
             return
 
@@ -878,19 +928,27 @@ class IngestWindow(QMainWindow):
 
         # Update detail panel
         details = []
-        details.append(f"<b>Clip:</b> {plan.match.clip.base_name}.{plan.match.clip.extension}")
+        details.append(
+            f"<b>Clip:</b> {plan.match.clip.base_name}.{plan.match.clip.extension}"
+        )
         details.append(f"<b>Shot:</b> {plan.shot_id or '—'}")
         details.append(f"<b>Sequence:</b> {plan.sequence_id or '—'}")
-        
+
         # Proper frame count for movies
-        fc = plan.match.clip.frame_count if plan.match.clip.is_sequence else plan.media_info.frame_count
+        fc = (
+            plan.match.clip.frame_count
+            if plan.match.clip.is_sequence
+            else plan.media_info.frame_count
+        )
         if not plan.match.clip.is_sequence and fc <= 0:
-            fc = 1 # Fallback
-            
+            fc = 1  # Fallback
+
         details.append(f"<b>Frames:</b> {fc}")
 
         if plan.media_info.width and plan.media_info.height:
-            details.append(f"<b>Resolution:</b> {plan.media_info.width}x{plan.media_info.height}")
+            details.append(
+                f"<b>Resolution:</b> {plan.media_info.width}x{plan.media_info.height}"
+            )
         if plan.media_info.fps:
             details.append(f"<b>FPS:</b> {plan.media_info.fps:.2f}")
         if plan.media_info.codec:
@@ -902,10 +960,14 @@ class IngestWindow(QMainWindow):
             details.append(f"<br><b style='color:#f44747'>Error:</b> {plan.error}")
 
         if plan.match.clip.missing_frames:
-            details.append(f"<br><b style='color:#f39c12'>Missing Frames:</b> {len(plan.match.clip.missing_frames)}")
+            details.append(
+                f"<br><b style='color:#f39c12'>Missing Frames:</b> {len(plan.match.clip.missing_frames)}"
+            )
 
         if plan.target_publish_dir:
-            details.append(f"<br><b style='color:#00bff3; font-size:10px;'>DESTINATION PATH:</b><br><code style='color:#aaa; font-size:10px;'>{plan.target_publish_dir}</code>")
+            details.append(
+                f"<br><b style='color:#00bff3; font-size:10px;'>DESTINATION PATH:</b><br><code style='color:#aaa; font-size:10px;'>{plan.target_publish_dir}</code>"
+            )
 
         self._detail_widget.setHtml("<br>".join(details))
 
@@ -914,26 +976,43 @@ class IngestWindow(QMainWindow):
         if plan.shot_id:
             self._override_shot.setText(plan.shot_id)
 
+        self._override_seq.setEnabled(True)
+        self._override_seq.setText(plan.sequence_id or "")
+
     def _on_override_changed(self, text: str) -> None:
         """Apply shot ID override to selected plan"""
         if self._selected_plan_idx >= 0 and self._selected_plan_idx < len(self._plans):
             plan = self._plans[self._selected_plan_idx]
             plan.shot_id = text
-            
+
             # Re-resolve paths for this plan to update versioning
             self._resolve_all_paths()
-            
+
             # Update table with signals blocked to prevent race condition
             item = self._table.item(self._selected_plan_idx, 2)
             if item:
                 blocked = self._table.blockSignals(True)
                 item.setText(text)
-                
+
                 # Update Version column too
                 ver_item = self._table.item(self._selected_plan_idx, 3)
                 if ver_item:
                     ver_item.setText(f"v{plan.version:03d}")
-                
+
+                self._table.blockSignals(blocked)
+            self._update_summary()
+
+    def _on_override_seq_changed(self, text: str) -> None:
+        """Apply sequence ID override to selected plan"""
+        if self._selected_plan_idx >= 0 and self._selected_plan_idx < len(self._plans):
+            plan = self._plans[self._selected_plan_idx]
+            plan.sequence_id = text
+
+            # Update table
+            item = self._table.item(self._selected_plan_idx, 4)  # Seq column
+            if item:
+                blocked = self._table.blockSignals(True)
+                item.setText(text or "—")
                 self._table.blockSignals(blocked)
             self._update_summary()
 
@@ -943,22 +1022,24 @@ class IngestWindow(QMainWindow):
             row = item.row()
             if row < len(self._plans):
                 self._plans[row].shot_id = item.text()
-                
+
                 # Re-resolve paths to update versioning
                 self._resolve_all_paths()
-                
+
                 # Update Version column
                 ver_item = self._table.item(row, 3)
                 if ver_item:
                     blocked = self._table.blockSignals(True)
                     ver_item.setText(f"v{self._plans[row].version:03d}")
                     self._table.blockSignals(blocked)
-                    
+
                 self._update_summary()
 
     def _on_remove_selected(self) -> None:
         """Remove selected clips from table"""
-        selected_rows = sorted(set(item.row() for item in self._table.selectedItems()), reverse=True)
+        selected_rows = sorted(
+            set(item.row() for item in self._table.selectedItems()), reverse=True
+        )
         for row in selected_rows:
             if row < len(self._plans):
                 del self._plans[row]
@@ -992,7 +1073,9 @@ class IngestWindow(QMainWindow):
 
         # Fast Verify
         chk_fast = QCheckBox("Fast Verify (MD5 first/mid/last only)")
-        chk_fast.setToolTip("Speeds up ingest by only verifying 3 frames per sequence instead of all.")
+        chk_fast.setToolTip(
+            "Speeds up ingest by only verifying 3 frames per sequence instead of all."
+        )
         chk_fast.setChecked(self._chk_fast_verify.isChecked())
         lay.addWidget(chk_fast)
 
@@ -1053,7 +1136,18 @@ class IngestWindow(QMainWindow):
         # Buttons
         btn_row = QHBoxLayout()
         btn_apply = QPushButton("Apply")
-        btn_apply.clicked.connect(lambda: self._apply_options(chk_thumb, chk_proxy, chk_status, chk_fast, chk_dry, ocio_in, rule_combo, dialog))
+        btn_apply.clicked.connect(
+            lambda: self._apply_options(
+                chk_thumb,
+                chk_proxy,
+                chk_status,
+                chk_fast,
+                chk_dry,
+                ocio_in,
+                rule_combo,
+                dialog,
+            )
+        )
         btn_row.addWidget(btn_apply)
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(dialog.accept)
@@ -1062,7 +1156,17 @@ class IngestWindow(QMainWindow):
 
         dialog.exec()
 
-    def _apply_options(self, chk_thumb, chk_proxy, chk_status, chk_fast, chk_dry, ocio_in, rule_combo, dialog):
+    def _apply_options(
+        self,
+        chk_thumb,
+        chk_proxy,
+        chk_status,
+        chk_fast,
+        chk_dry,
+        ocio_in,
+        rule_combo,
+        dialog,
+    ):
         """Apply options from dialog"""
         self._chk_thumb.setChecked(chk_thumb.isChecked())
         self._chk_proxy.setChecked(chk_proxy.isChecked())
@@ -1076,13 +1180,21 @@ class IngestWindow(QMainWindow):
 
     def _update_filter_counts(self) -> None:
         """Update the count badges on filter buttons"""
-        if not hasattr(self, '_plans'):
+        if not hasattr(self, "_plans"):
             return
 
         total = len(self._plans)
         ready = sum(1 for p in self._plans if p.can_execute and not p.error)
-        warning = sum(1 for p in self._plans if p.can_execute and p.error and "warning" in p.error.lower())
-        error = sum(1 for p in self._plans if not p.can_execute or (p.error and "error" in p.error.lower()))
+        warning = sum(
+            1
+            for p in self._plans
+            if p.can_execute and p.error and "warning" in p.error.lower()
+        )
+        error = sum(
+            1
+            for p in self._plans
+            if not p.can_execute or (p.error and "error" in p.error.lower())
+        )
 
         self._filter_all.setText(f"● All ({total})")
         self._filter_ready.setText(f"● Ready ({ready})")
@@ -1140,8 +1252,12 @@ class IngestWindow(QMainWindow):
             if clip.is_sequence:
                 fc = clip.frame_count
             else:
-                fc = plan.media_info.frame_count if plan.media_info.frame_count > 0 else 1
-            
+                fc = (
+                    plan.media_info.frame_count
+                    if plan.media_info.frame_count > 0
+                    else 1
+                )
+
             frames_item = QTableWidgetItem(str(fc))
             frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._table.setItem(idx, 5, frames_item)
@@ -1187,7 +1303,7 @@ class IngestWindow(QMainWindow):
             chk_widget = self._table.cellWidget(row, 0)
             if chk_widget and chk_widget.findChild(QCheckBox) == sender:
                 if row < len(self._plans):
-                    self._plans[row].enabled = (state == Qt.CheckState.Checked.value)
+                    self._plans[row].enabled = state == Qt.CheckState.Checked.value
                 break
 
         self._update_summary()
@@ -1201,8 +1317,7 @@ class IngestWindow(QMainWindow):
             return
 
         shot_id, ok = QInputDialog.getText(
-            self, "Override Shot ID",
-            f"Enter shot ID for {len(selected_rows)} clip(s):"
+            self, "Override Shot ID", f"Enter shot ID for {len(selected_rows)} clip(s):"
         )
 
         if ok and shot_id:
@@ -1212,6 +1327,30 @@ class IngestWindow(QMainWindow):
                     item = self._table.item(row, 2)
                     if item:
                         item.setText(shot_id)
+
+            self._update_summary()
+
+    def _on_context_override_seq(self) -> None:
+        """Override sequence ID for selected clips"""
+        from PySide6.QtWidgets import QInputDialog
+
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        seq_id, ok = QInputDialog.getText(
+            self,
+            "Override Sequence ID",
+            f"Enter sequence ID for {len(selected_rows)} clip(s):",
+        )
+
+        if ok:
+            for row in selected_rows:
+                if row < len(self._plans):
+                    self._plans[row].sequence_id = seq_id
+                    item = self._table.item(row, 4)  # Seq column
+                    if item:
+                        item.setText(seq_id or "—")
 
             self._update_summary()
 
@@ -1240,13 +1379,13 @@ class IngestWindow(QMainWindow):
         """Update target paths and version numbers for all plans."""
         if not self._plans:
             return
-            
+
         from ramses_ingest.publisher import resolve_paths, resolve_paths_from_daemon
-        
+
         # 1. Try resolving via daemon if connected
         if self._engine.connected and self._engine._shot_objects:
             resolve_paths_from_daemon(self._plans, self._engine._shot_objects)
-            
+
         # 2. Use project path as fallback for any unresolved plans
         if self._engine.project_path:
             unresolved = [p for p in self._plans if not p.target_publish_dir]
@@ -1263,6 +1402,7 @@ class IngestWindow(QMainWindow):
             """)
             # Apply glowing shadow for "Live" feel
             from PySide6.QtWidgets import QGraphicsDropShadowEffect
+
             glow = QGraphicsDropShadowEffect()
             glow.setBlurRadius(15)
             glow.setColor(QColor("#00bff3"))
@@ -1289,7 +1429,9 @@ class IngestWindow(QMainWindow):
             if "PLATE" in self._engine.steps:
                 self._step_combo.setCurrentText("PLATE")
         else:
-            self._status_orb.setStyleSheet("background-color: #f44747; border-radius: 6px;")
+            self._status_orb.setStyleSheet(
+                "background-color: #f44747; border-radius: 6px;"
+            )
             self._status_orb.setGraphicsEffect(None)
             self._status_label.setText("OFFLINE")
             self._status_label.setObjectName("statusDisconnected")
@@ -1338,30 +1480,35 @@ class IngestWindow(QMainWindow):
             parts.append(f"{unmatched} unmatched")
 
         self._summary_label.setText(f"Summary: {', '.join(parts)}")
-        
+
         is_dry = self._chk_dry_run.isChecked()
         btn_text = "Simulate" if is_dry else "Ingest"
         self._btn_ingest.setText(f"{btn_text} {n_enabled}/{total}")
-        
+
         # UI Polish: Change button style if simulating
         if is_dry:
-            self._btn_ingest.setStyleSheet("background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f39c12, stop:1 #d35400); color: white;")
+            self._btn_ingest.setStyleSheet(
+                "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #f39c12, stop:1 #d35400); color: white;"
+            )
         else:
-            self._btn_ingest.setStyleSheet("") # Reset to STYLESHEET default
-        
+            self._btn_ingest.setStyleSheet("")  # Reset to STYLESHEET default
+
         # Strict enforcement: Connection AND valid plans AND a defined pipeline step
         has_step = bool(self._step_combo.currentText())
-        self._btn_ingest.setEnabled(n_enabled > 0 and self._engine.connected and has_step)
-        
+        self._btn_ingest.setEnabled(
+            n_enabled > 0 and self._engine.connected and has_step
+        )
+
         if self._engine.connected and not has_step:
-            self._btn_ingest.setToolTip("No Shot Production steps found in this project. Ingest disabled.")
+            self._btn_ingest.setToolTip(
+                "No Shot Production steps found in this project. Ingest disabled."
+            )
         else:
             self._btn_ingest.setToolTip("")
 
     def _get_enabled_plans(self) -> list[IngestPlan]:
         """Get list of plans that can be executed"""
         return [p for p in self._plans if p.can_execute]
-
 
     # -- Slots ---------------------------------------------------------------
 
@@ -1378,8 +1525,11 @@ class IngestWindow(QMainWindow):
 
     def _on_view_report(self) -> None:
         """Open the last generated HTML report in the system browser."""
-        if self._engine.last_report_path and os.path.exists(self._engine.last_report_path):
+        if self._engine.last_report_path and os.path.exists(
+            self._engine.last_report_path
+        ):
             import webbrowser
+
             webbrowser.open(f"file:///{os.path.abspath(self._engine.last_report_path)}")
 
     def keyPressEvent(self, event) -> None:
@@ -1425,6 +1575,10 @@ class IngestWindow(QMainWindow):
         act_override.triggered.connect(self._on_context_override_shot)
         menu.addAction(act_override)
 
+        act_override_seq = QAction("Override Sequence ID...", self)
+        act_override_seq.triggered.connect(self._on_context_override_seq)
+        menu.addAction(act_override_seq)
+
         act_skip = QAction("Skip Selected", self)
         act_skip.triggered.connect(self._on_context_skip)
         menu.addAction(act_skip)
@@ -1438,12 +1592,16 @@ class IngestWindow(QMainWindow):
                 plan = self._plans[row]
 
                 act_src = QAction("Open Source Folder", self)
-                act_src.triggered.connect(lambda: self._open_folder(plan.match.clip.directory))
+                act_src.triggered.connect(
+                    lambda: self._open_folder(plan.match.clip.directory)
+                )
                 menu.addAction(act_src)
 
                 if plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
                     act_dst = QAction("Open Destination Folder", self)
-                    act_dst.triggered.connect(lambda: self._open_folder(plan.target_publish_dir))
+                    act_dst.triggered.connect(
+                        lambda: self._open_folder(plan.target_publish_dir)
+                    )
                     menu.addAction(act_dst)
 
                 menu.addSeparator()
@@ -1453,7 +1611,6 @@ class IngestWindow(QMainWindow):
         menu.addAction(act_remove)
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
-
 
     def _remove_plan_at(self, index: int) -> None:
         self._plans.pop(index)
@@ -1466,7 +1623,7 @@ class IngestWindow(QMainWindow):
         self._log(f"Loading delivery: {len(paths)} item(s)")
         self._drop_zone._label.setText(f"Scanning {len(paths)} item(s)...")
 
-        # Scan all dropped paths. LoadDelivery in app might need to be updated 
+        # Scan all dropped paths. LoadDelivery in app might need to be updated
         # or we call it multiple times. Let's update engine.load_delivery to handle list.
         self._scan_worker = ScanWorker(self._engine, paths, parent=self)
         self._scan_worker.progress.connect(self._log)
@@ -1533,7 +1690,7 @@ class IngestWindow(QMainWindow):
     def _on_ingest_done(self, results: list[IngestResult]) -> None:
         self._btn_cancel.setVisible(False)
         self._btn_ingest.setEnabled(True)
-        
+
         if self._engine.last_report_path:
             self._btn_view_report.setVisible(True)
 
@@ -1563,7 +1720,7 @@ class IngestWindow(QMainWindow):
         """Launch the visual rule builder and apply the result."""
         from ramses_ingest.architect import NamingArchitectDialog
         from ramses_ingest.matcher import NamingRule
-        
+
         dlg = NamingArchitectDialog(parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             regex = dlg.get_final_regex()
@@ -1571,17 +1728,22 @@ class IngestWindow(QMainWindow):
                 # Add to engine's rules and persist
                 new_rule = NamingRule(pattern=regex)
                 self._engine.rules.insert(0, new_rule)
-                save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=self._engine.studio_name)
-                
+                save_rules(
+                    self._engine.rules,
+                    DEFAULT_RULES_PATH,
+                    studio_name=self._engine.studio_name,
+                )
+
                 # Refresh UI
                 self._rule_combo.clear()
                 self._rule_combo.addItem("Auto-detect")
                 self._populate_rule_combo()
-                self._rule_combo.setCurrentIndex(1) # Select the newly created rule
+                self._rule_combo.setCurrentIndex(1)  # Select the newly created rule
                 self._log(f"New rule created via Architect: {regex}")
 
     def _on_load_edl(self) -> None:
         from PySide6.QtWidgets import QFileDialog
+
         path, _ = QFileDialog.getOpenFileName(
             self, "Select EDL File", "", "EDL Files (*.edl);;All Files (*.*)"
         )
@@ -1590,8 +1752,9 @@ class IngestWindow(QMainWindow):
 
         self._log(f"Applying EDL mapping: {os.path.basename(path)}")
         from ramses_ingest.matcher import EDLMapper
+
         mapper = EDLMapper(path)
-        
+
         updated = 0
         for plan in self._plans:
             # Try to map by clip name
@@ -1599,10 +1762,10 @@ class IngestWindow(QMainWindow):
             edl_shot = mapper.get_shot_id(clip_name)
             if edl_shot:
                 plan.shot_id = edl_shot
-                plan.match.matched = True # Force matched if EDL finds it
+                plan.match.matched = True  # Force matched if EDL finds it
                 plan.error = ""
                 updated += 1
-        
+
         if updated:
             self._log(f"  Mapped {updated} shot(s) from EDL.")
             self._populate_table()
@@ -1619,15 +1782,16 @@ class IngestWindow(QMainWindow):
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def launch_gui() -> None:
     """Create the QApplication and show the main window."""
     existing = QApplication.instance()
     app = existing or QApplication(sys.argv)
-    
+
     # Tier 1 UI: Set consistent global font (9pt is standard for VFX apps)
     font = QFont("Segoe UI", 9)
     app.setFont(font)
-    
+
     app.setStyleSheet(STYLESHEET)
 
     window = IngestWindow()
