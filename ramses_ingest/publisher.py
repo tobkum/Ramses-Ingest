@@ -427,22 +427,22 @@ def resolve_paths(
 
     Uses the Ramses folder convention::
 
-        {project_root}/{shots_folder}/[{SEQUENCE}]/{SHOT}/{Project}_S_{Shot}_{Step}/_published/v{NNN}/
+        {project_root}/{shots_folder}/{Project}_S_{Shot}/{Project}_S_{Shot}_{Step}/_published/v{NNN}/
 
-    This is the offline fallback matching the Ramses API behavior.
+    This matches the standard Ramses API behavior (no sequence nesting on disk).
     """
     for plan in plans:
         if not plan.can_execute:
             continue
 
-        if plan.sequence_id:
-            shot_root = os.path.join(
-                project_root, shots_folder, plan.sequence_id, plan.shot_id,
-            )
-        else:
-            shot_root = os.path.join(
-                project_root, shots_folder, plan.shot_id,
-            )
+        # Build standard Shot Root folder name: PROJ_S_SH010
+        snm = RamFileInfo()
+        snm.project = plan.project_id
+        snm.ramType = ItemType.SHOT
+        snm.shortName = plan.shot_id
+        shot_root_name = snm.fileName()
+
+        shot_root = os.path.join(project_root, shots_folder, shot_root_name)
 
         # Build step folder name using API convention: PROJ_S_SH010_PLATE
         nm = RamFileInfo()
@@ -768,11 +768,13 @@ def register_ramses_objects(
                     shot_obj = s
                     break
 
-        # Derive folder path
-        if plan.sequence_id:
-            shot_folder = join_normalized(project.folderPath(), "05-SHOTS", plan.sequence_id, plan.shot_id)
-        else:
-            shot_folder = join_normalized(project.folderPath(), "05-SHOTS", plan.shot_id)
+        # Derive folder path using standard naming: PROJ_S_SH010
+        shot_nm = RamFileInfo()
+        shot_nm.project = project.shortName()
+        shot_nm.ramType = ItemType.SHOT
+        shot_nm.shortName = plan.shot_id
+        shot_folder_name = shot_nm.fileName()
+        shot_folder = join_normalized(project.folderPath(), "05-SHOTS", shot_folder_name)
 
         duration = 5.0
         if info.fps and info.fps > 0:

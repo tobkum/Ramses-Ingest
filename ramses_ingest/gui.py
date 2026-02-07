@@ -637,8 +637,8 @@ class IngestWindow(QMainWindow):
         # ───────────────────────────────────────────────────────────────────────
         right_panel = QFrame()
         right_panel.setStyleSheet("background-color: #1a1a1a; border-radius: 4px;")
-        right_panel.setMinimumWidth(180)
-        right_panel.setMaximumWidth(260)
+        right_panel.setMinimumWidth(250)
+        right_panel.setMaximumWidth(450)
         right_lay = QVBoxLayout(right_panel)
         right_lay.setContentsMargins(10, 10, 10, 10)
         right_lay.setSpacing(8)
@@ -671,8 +671,8 @@ class IngestWindow(QMainWindow):
 
         main_splitter.addWidget(right_panel)
 
-        # Set splitter proportions (20% | 60% | 20%)
-        main_splitter.setSizes([200, 600, 200])
+        # Set splitter proportions (20% | 50% | 30%)
+        main_splitter.setSizes([200, 500, 300])
 
         root.addWidget(main_splitter, 1)
 
@@ -905,7 +905,7 @@ class IngestWindow(QMainWindow):
             details.append(f"<br><b style='color:#f39c12'>Missing Frames:</b> {len(plan.match.clip.missing_frames)}")
 
         if plan.target_publish_dir:
-            details.append(f"<br><b style='color:#00bff3'>Destination:</b><br><small>{plan.target_publish_dir}</small>")
+            details.append(f"<br><b style='color:#00bff3; font-size:10px;'>DESTINATION PATH:</b><br><code style='color:#aaa; font-size:10px;'>{plan.target_publish_dir}</code>")
 
         self._detail_widget.setHtml("<br>".join(details))
 

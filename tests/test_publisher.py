@@ -189,7 +189,8 @@ class TestResolvePaths(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root)
         
         # Create a v001 to force v002
-        v1_path = os.path.join(root, "05-SHOTS", "SEQ010", "SH010", "PROJ_S_SH010_PLATE", "_published", "v001")
+        # Standard Ramses path: 05-SHOTS/PROJ_S_SH010/PROJ_S_SH010_PLATE/...
+        v1_path = os.path.join(root, "05-SHOTS", "PROJ_S_SH010", "PROJ_S_SH010_PLATE", "_published", "v001")
         os.makedirs(v1_path, exist_ok=True)
         Path(os.path.join(v1_path, ".ramses_complete")).touch()
 
@@ -208,11 +209,13 @@ class TestResolvePaths(unittest.TestCase):
 
         resolve_paths([plan], root)
 
-        self.assertIn("SH010", plan.target_publish_dir)
+        self.assertIn("PROJ_S_SH010", plan.target_publish_dir)
         self.assertIn("PROJ_S_SH010_PLATE", plan.target_publish_dir)
         self.assertIn("v002", plan.target_publish_dir)
         self.assertIn("_preview", plan.target_preview_dir)
         self.assertIn("05-SHOTS", plan.target_publish_dir)
+        # Verify sequence folder is NOT there
+        self.assertNotIn("SEQ010", plan.target_publish_dir)
 
     def test_resolve_paths_skips_unexecutable(self):
         clip = Clip(base_name="x", extension="exr", directory=Path("/tmp"),
