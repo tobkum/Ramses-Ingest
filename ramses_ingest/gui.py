@@ -844,10 +844,10 @@ class IngestWindow(QMainWindow):
         self._scan_worker.start()
 
     def _on_scan_done(self, plans: list[IngestPlan]) -> None:
-        self._plans = plans
+        self._plans.extend(plans)
         self._populate_tree()
         self._drop_zone._label.setText("Drop Footage Here\nAccepts folders and files")
-        self._log(f"Scan complete: {len(plans)} clip(s) detected.")
+        self._log(f"Scan complete: {len(plans)} new clip(s) detected.")
 
     def _on_scan_error(self, msg: str) -> None:
         self._log(f"ERROR: {msg}")
