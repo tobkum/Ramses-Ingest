@@ -18,6 +18,18 @@ from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING
 from ramses_ingest.matcher import match_clips, NamingRule, MatchResult
 from ramses_ingest.prober import probe_file, MediaInfo, flush_cache
 from ramses_ingest.publisher import (
+
+
+def _optimal_io_workers() -> int:
+    """Calculate optimal thread count for I/O-bound operations.
+
+    For I/O-bound work (file copying, network, ffprobe), use more threads
+    than CPU cores. Common pattern: min(32, cpu_count + 4).
+
+    Returns:
+        Optimal number of worker threads (typically 8-32).
+    """
+    return min(32, (os.cpu_count() or 1) + 4)
     build_plans, execute_plan, resolve_paths, resolve_paths_from_daemon,
     register_ramses_objects, IngestPlan, IngestResult, check_for_duplicates,
     update_ramses_status
@@ -38,10 +50,10 @@ class IngestEngine:
         self._connected: bool = False
         self._debug_mode: bool = debug_mode
 
-        # Project Standards
-        self._project_fps: float = 24.0
-        self._project_width: int = 1920
-        self._project_height: int = 1080
+        # Project Standards (loaded from Ramses - no defaults!)
+        self._project_fps: float | None = None
+        self._project_width: int | None = None
+        self._project_height: int | None = None
         
         # Sequence Overrides: {SEQ_NAME: (fps, width, height)}
         self._sequence_settings: dict[str, tuple[float, int, int]] = {}
@@ -209,7 +221,27 @@ class IngestEngine:
             return True
 
         except Exception:
+            # Connection failed - ensure no defaults are used
+            self._project_fps = None
+            self._project_width = None
+            self._project_height = None
             return False
+
+    def _require_connection(self) -> None:
+        """Raise an error if not connected to Ramses daemon.
+
+        Call this at the start of any operation that requires Ramses.
+        """
+        if not self._connected:
+            raise RuntimeError(
+                "Not connected to Ramses daemon. "
+                "Ensure the Ramses application is running and a project is loaded."
+            )
+        if self._project_fps is None or self._project_width is None:
+            raise RuntimeError(
+                "Project settings not loaded from Ramses. "
+                "Connection may have failed or project is not properly configured."
+            )
 
     # -- Pipeline stages -----------------------------------------------------
 
@@ -222,7 +254,12 @@ class IngestEngine:
         """Scan one or more delivery paths and return plans for user review.
 
         Steps: scan → match → probe → build_plans → resolve_paths.
+
+        Raises:
+            RuntimeError: If not connected to Ramses daemon.
         """
+        self._require_connection()
+
         def _log(msg: str) -> None:
             if progress_callback:
                 progress_callback(msg)
@@ -307,7 +344,7 @@ class IngestEngine:
             except Exception:
                 return clip.first_file, MediaInfo()
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=_optimal_io_workers()) as executor:
             future_to_clip = {executor.submit(_probe_one, c): c for c in all_clips}
             for future in concurrent.futures.as_completed(future_to_clip):
                 file_path, info = future.result()
@@ -379,9 +416,11 @@ class IngestEngine:
             if progress_callback:
                 progress_callback(msg)
 
-        if not self._connected:
-            _log("ERROR: Not connected to Ramses. Ingest aborted.")
-            return [IngestResult(plan=p, error="No Ramses connection") for p in plans]
+        try:
+            self._require_connection()
+        except RuntimeError as e:
+            _log(f"ERROR: {e}")
+            return [IngestResult(plan=p, error=str(e)) for p in plans]
 
         executable = [p for p in plans if p.can_execute]
         total = len(executable)
@@ -452,7 +491,7 @@ class IngestEngine:
             )
 
         if executable:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=_optimal_io_workers()) as executor:
                 future_to_plan = {executor.submit(_run_one, p): p for p in executable}
                 
                 for i, future in enumerate(concurrent.futures.as_completed(future_to_plan), 1):

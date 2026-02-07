@@ -205,7 +205,7 @@ def copy_frames(
     progress_callback: Callable[[str], None] | None = None,
     dry_run: bool = False,
     fast_verify: bool = False,
-    max_workers: int = 4,
+    max_workers: int | None = None,
 ) -> tuple[int, str, int, str]:
     """Copy clip frames into *dest_dir* with parallel processing and verification.
 
@@ -218,10 +218,13 @@ def copy_frames(
         progress_callback: Optional callback for progress updates
         dry_run: If True, simulate copy without actually writing files
         fast_verify: If True, only MD5 verify first, middle and last frames.
-        max_workers: Number of parallel copy threads.
+        max_workers: Number of parallel copy threads. If None, auto-calculated for I/O.
 
     Returns (number of files copied, MD5 checksum of the first file, total bytes moved, first filename).
     """
+    if max_workers is None:
+        # I/O-bound operation: use more threads than CPU cores
+        max_workers = min(32, (os.cpu_count() or 1) + 4)
     if not dry_run:
         os.makedirs(dest_dir, exist_ok=True)
 

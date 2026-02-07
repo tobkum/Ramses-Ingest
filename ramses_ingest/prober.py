@@ -13,8 +13,11 @@ import json
 import os
 import subprocess
 import threading
+import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # Cache Settings
 CACHE_PATH = os.path.join(os.path.expanduser("~"), ".ramses_ingest_cache.json")
@@ -80,7 +83,7 @@ def _check_ffprobe():
             check=True
         )
     except (FileNotFoundError, subprocess.CalledProcessError):
-        print("WARNING: 'ffprobe' not found in PATH. Media metadata extraction will fail.")
+        logger.warning("'ffprobe' not found in PATH. Media metadata extraction will fail.")
 
 _check_ffprobe()
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer
@@ -332,6 +333,30 @@ QGroupBox::title {
 
 
 # ---------------------------------------------------------------------------
+# Logging Handler
+# ---------------------------------------------------------------------------
+
+
+class GuiLogHandler(logging.Handler):
+    """Custom logging handler that redirects logs to the IngestWindow._log method."""
+
+    def __init__(self, log_callback) -> None:
+        super().__init__()
+        self.log_callback = log_callback
+
+    def emit(self, record) -> None:
+        try:
+            msg = self.handle_record(record)
+            self.log_callback(msg)
+        except Exception:
+            self.handleError(record)
+
+    def handle_record(self, record) -> str:
+        """Simple format: LEVEL: Message"""
+        return f"{record.levelname}: {record.getMessage()}"
+
+
+# ---------------------------------------------------------------------------
 # Drop Zone
 # ---------------------------------------------------------------------------
 
@@ -592,6 +617,9 @@ class IngestWindow(QMainWindow):
         self._reconnect_timer.setInterval(5000) # Check every 5 seconds
         self._reconnect_timer.timeout.connect(self._try_connect)
 
+        # Initialize logging handler
+        self._setup_logging()
+
         # Debounce timer for expensive path resolution (e.g. while typing overrides)
         self._resolve_timer = QTimer(self)
         self._resolve_timer.setSingleShot(True)
@@ -601,6 +629,15 @@ class IngestWindow(QMainWindow):
         self._build_ui()
         # Connect asynchronously on startup
         QTimer.singleShot(100, self._try_connect)
+
+    def _setup_logging(self) -> None:
+        """Redirect ramses_ingest package logs to the GUI log panel."""
+        handler = GuiLogHandler(self._log)
+        logger = logging.getLogger("ramses_ingest")
+        logger.addHandler(handler)
+        # Ensure we capture at least INFO level
+        if logger.level == logging.NOTSET or logger.level > logging.INFO:
+            logger.setLevel(logging.INFO)
 
     def _on_resolve_timeout(self) -> None:
         """Called after debounce period to resolve paths and update UI."""
@@ -1820,14 +1857,27 @@ class IngestWindow(QMainWindow):
     # -- Helpers -------------------------------------------------------------
 
     def _log(self, msg: str) -> None:
-        # Add syntax highlighting for log messages
-        # Check success patterns FIRST (before error patterns that might contain "failed")
-        if "SUCCEEDED" in msg.upper() or "COMPLETE" in msg.upper() or msg.startswith("✓"):
-            colored_msg = f'<span style="color: #27ae60;">{msg}</span>'
-        elif "ERROR" in msg.upper() or msg.upper().startswith("FAILED"):
+        """Add syntax highlighting for log messages and append to log edit."""
+        msg_upper = msg.upper()
+        
+        # 1. Error Check (Highest Priority)
+        # We check errors first because a message like "Complete: 1 failed" 
+        # should be red, even though it contains "Complete".
+        if any(k in msg_upper for k in ["ERROR", "FAILED", "CRITICAL", "FAIL", "✖", ": FAILED"]):
             colored_msg = f'<span style="color: #f44747; font-weight: bold;">{msg}</span>'
-        elif "WARNING" in msg.upper() or "WARN" in msg.upper():
+            
+        # 2. Success Check
+        elif any(k in msg_upper for k in [
+            "SUCCEEDED", "COMPLETE", "SUCCESS", "DONE", "✓", ": OK", 
+            "MAPPED", "READY:", "MATCHED"
+        ]):
+            colored_msg = f'<span style="color: #27ae60;">{msg}</span>'
+            
+        # 3. Warning Check
+        elif "WARNING" in msg_upper or "WARN" in msg_upper:
             colored_msg = f'<span style="color: #f39c12;">{msg}</span>'
+            
+        # 4. Default / Info
         else:
             colored_msg = msg
 
