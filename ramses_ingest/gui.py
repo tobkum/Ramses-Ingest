@@ -561,12 +561,14 @@ class StatusIndicator(QLabel):
 
     def __init__(self, status: str = "pending", parent=None):
         super().__init__(parent)
+        self.status_type = status
         self.set_status(status)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setContentsMargins(0, 0, 0, 0)
 
     def set_status(self, status: str):
         """Update status color: ready=green, warning=yellow, error=red, pending=gray"""
+        self.status_type = status
         colors = {
             "ready": "#27ae60",  # Green (matches DAEMON ONLINE)
             "warning": "#f39c12",  # Yellow/Orange
@@ -1094,19 +1096,23 @@ class IngestWindow(QMainWindow):
 
     def _apply_table_filters(self) -> None:
         """Apply all active filters to table rows"""
+        search_text = self._search_edit.text().lower()
+
         for row in range(self._table.rowCount()):
             show = True
 
-            # Status filter
+            # 1. Status filter
             if self._current_filter_status != "all":
-                # Check status column
-                status_item = self._table.cellWidget(row, 8)  # Status column (was 7)
-                if status_item and hasattr(status_item, "toolTip"):
-                    status = status_item.toolTip().lower()
-                    if self._current_filter_status not in status:
-                        show = False
+                # Check status column (index 8)
+                status_container = self._table.cellWidget(row, 8)
+                if status_container:
+                    # Find the StatusIndicator inside the container
+                    status_indicator = status_container.findChild(StatusIndicator)
+                    if status_indicator:
+                        if self._current_filter_status != status_indicator.status_type:
+                            show = False
 
-            # Type filter
+            # 2. Type filter
             if show:
                 # Check if it's a sequence or movie
                 plan = self._get_plan_from_row(row)
@@ -1117,26 +1123,18 @@ class IngestWindow(QMainWindow):
                     elif not is_sequence and not self._chk_movies.isChecked():
                         show = False
 
-                        # Search filter
-
-                        if show and self._search_edit.text():
-
-                            search = self._search_edit.text().lower()
-
-                            shot_item = self._table.item(row, 3)  # Shot column (swapped)
-
-                            seq_item = self._table.item(row, 4)   # Seq column
-
-                            file_item = self._table.item(row, 1)  # Filename column
-
-            
+            # 3. Search filter
+            if show and search_text:
+                shot_item = self._table.item(row, 3)  # Shot column
+                seq_item = self._table.item(row, 4)   # Seq column
+                file_item = self._table.item(row, 1)  # Filename column
 
                 match = False
-                if shot_item and search in shot_item.text().lower():
+                if shot_item and search_text in shot_item.text().lower():
                     match = True
-                if seq_item and search in seq_item.text().lower():
+                elif seq_item and search_text in seq_item.text().lower():
                     match = True
-                if file_item and search in file_item.text().lower():
+                elif file_item and search_text in file_item.text().lower():
                     match = True
 
                 if not match:
@@ -1277,23 +1275,20 @@ class IngestWindow(QMainWindow):
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         """Handle inline edits in table"""
-        if item.column() == 3:  # Shot column (was 2)
+        if item.column() == 3:  # Shot column
             row = item.row()
             plan = self._get_plan_from_row(row)
             if plan:
                 plan.shot_id = item.text()
 
-                # Re-resolve paths to update versioning
-                self._resolve_all_paths()
+                # Debounce the expensive resolution/update cycle
+                self._resolve_timer.start()
 
-                # Update Version column (index 2)
-                ver_item = self._table.item(row, 2)
-                if ver_item:
-                    blocked = self._table.blockSignals(True)
-                    ver_item.setText(f"v{plan.version:03d}")
-                    self._table.blockSignals(blocked)
-
-                self._update_summary()
+                # Update the detail panel immediately if this is the selected plan
+                if self._selected_plan == plan:
+                    self._override_shot.blockSignals(True)
+                    self._override_shot.setText(item.text())
+                    self._override_shot.blockSignals(False)
 
     def _on_remove_selected(self) -> None:
         """Remove selected clips from table"""
@@ -1524,17 +1519,18 @@ class IngestWindow(QMainWindow):
             return
 
         total = len(self._plans)
-        ready = sum(1 for p in self._plans if p.can_execute and not p.error)
-        warning = sum(
-            1
-            for p in self._plans
-            if p.can_execute and p.error and "warning" in p.error.lower()
-        )
-        error = sum(
-            1
-            for p in self._plans
-            if not p.can_execute or (p.error and "error" in p.error.lower())
-        )
+        ready = 0
+        warning = 0
+        error = 0
+
+        for plan in self._plans:
+            status, _ = self._get_plan_status(plan)
+            if status == "ready":
+                ready += 1
+            elif status == "warning":
+                warning += 1
+            elif status == "error":
+                error += 1
 
         self._filter_all.setText(f"● All ({total})")
         self._filter_ready.setText(f"● Ready ({ready})")
@@ -1734,25 +1730,7 @@ class IngestWindow(QMainWindow):
                 fps_item.setToolTip("")
 
             # --- Column 8: Status ---
-            status = "pending"
-            status_msg = ""
-
-            if plan.match.clip.missing_frames:
-                status = "warning"
-                status_msg = f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
-            elif is_res_mismatch or is_fps_mismatch:
-                status = "warning"
-                status_msg = "Technical mismatch (Res/FPS)"
-            elif plan.can_execute and not plan.error:
-                status = "ready"
-            elif plan.error:
-                if "warning" in plan.error.lower():
-                    status = "warning"
-                else:
-                    status = "error"
-                    status_msg = plan.error
-            elif plan.is_duplicate:
-                status = "duplicate"
+            status, status_msg = self._get_plan_status(plan)
 
             # Always replace status widget as it's cheap and stateful logic is complex to update
             status_indicator = StatusIndicator(status)
@@ -1776,6 +1754,42 @@ class IngestWindow(QMainWindow):
 
         self._update_filter_counts()
         self._update_summary()
+
+    def _get_plan_status(self, plan: IngestPlan) -> tuple[str, str]:
+        """Determine the status type and message for a plan."""
+        # 1. Technical mismatches (Warning)
+        is_res_mismatch = False
+        if self._engine._project_width > 0 and plan.media_info.width > 0:
+            if (plan.media_info.width != self._engine._project_width or 
+                plan.media_info.height != self._engine._project_height):
+                is_res_mismatch = True
+
+        is_fps_mismatch = False
+        if self._engine._project_fps > 0 and plan.media_info.fps > 0:
+            if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+                is_fps_mismatch = True
+
+        if plan.match.clip.missing_frames:
+            return "warning", f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
+        
+        if is_res_mismatch or is_fps_mismatch:
+            return "warning", "Technical mismatch (Res/FPS)"
+
+        # 2. Plan Errors (Error or Warning)
+        if plan.error:
+            if "warning" in plan.error.lower():
+                return "warning", plan.error
+            return "error", plan.error
+
+        # 3. Duplicate (Duplicate)
+        if plan.is_duplicate:
+            return "duplicate", f"Duplicate of v{plan.duplicate_version:03d}"
+
+        # 4. Ready (Success)
+        if plan.can_execute:
+            return "ready", ""
+
+        return "pending", ""
 
     def _on_checkbox_changed(self, state: int) -> None:
         """Handle checkbox state changes"""
