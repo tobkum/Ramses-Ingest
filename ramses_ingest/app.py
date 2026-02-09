@@ -161,6 +161,19 @@ class IngestEngine:
             self._project_id = project.shortName()
             self._project_name = project.name()
             self._project_path = project.folderPath()
+
+            # Naming Validation: Ensure the project ID is compatible with Ramses API regex (10-char limit)
+            from ramses.file_info import RamFileInfo
+            test_info = RamFileInfo()
+            test_info.project = self._project_id
+            test_info.ramType = "S"
+            test_info.shortName = "SHOT"
+            if not test_info.setFileName(test_info.fileName()):
+                old_id = self._project_id
+                self._project_id = old_id[:10]
+                from ramses.logger import log
+                from ramses.constants import LogLevel
+                log(f"Project Short Name '{old_id}' is too long for Ramses (max 10 chars). Truncating to '{self._project_id}'.", LogLevel.Warning)
             
             # Retrieve Project Standards
             self._project_fps = project.framerate()
