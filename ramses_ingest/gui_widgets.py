@@ -111,9 +111,15 @@ class StatusIndicator(QLabel):
             "error": "#f44747",  # Red
             "pending": "#666666",  # Gray
             "duplicate": "#999999",  # Light gray
+            "skipped": "#444444",   # Dimmed for unchecked items
         }
         color = colors.get(status, "#666666")
-        self.setText("●")
+        
+        if status == "skipped":
+            self.setText("○")  # Hollow circle for skipped
+        else:
+            self.setText("●")
+            
         self.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold; padding: 0; margin: 0;")
         self.setToolTip(status.title())
 

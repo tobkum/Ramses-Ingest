@@ -1622,6 +1622,10 @@ class IngestWindow(QMainWindow):
 
     def _get_plan_status(self, plan: IngestPlan) -> tuple[str, str]:
         """Determine the status type and message for a plan."""
+        # 0. Skipped (Disabled)
+        if not plan.enabled:
+            return "skipped", "Skipped by user"
+
         # 1. Technical mismatches (Warning)
         is_res_mismatch = False
         if self._engine._project_width > 0 and plan.media_info.width > 0:
@@ -1657,18 +1661,95 @@ class IngestWindow(QMainWindow):
         return "pending", ""
 
     def _on_checkbox_changed(self, state: int) -> None:
-        """Handle checkbox state changes"""
+        """Handle checkbox state changes with immediate visual feedback."""
         # Find which row changed
         sender = self.sender()
+        if not sender:
+            return
+
+        target_row = -1
         for row in range(self._table.rowCount()):
             chk_widget = self._table.cellWidget(row, 0)
             if chk_widget and chk_widget.findChild(QCheckBox) == sender:
-                plan = self._get_plan_from_row(row)
-                if plan:
-                    plan.enabled = state == Qt.CheckState.Checked.value
+                target_row = row
                 break
+        
+        if target_row == -1:
+            return
+
+        plan = self._get_plan_from_row(target_row)
+        if not plan:
+            return
+
+        is_checked = (state == Qt.CheckState.Checked.value)
+        plan.enabled = is_checked
+
+        # 1. Update status dot immediately
+        status, status_msg = self._get_plan_status(plan)
+        status_widget = self._table.cellWidget(target_row, 8)
+        if status_widget:
+            indicator = status_widget.findChild(StatusIndicator)
+            if indicator:
+                indicator.set_status(status)
+                if status_msg:
+                    indicator.setToolTip(status_msg)
+
+        # 2. Visual dimming for the whole row
+        opacity = 255 if is_checked else 100
+        # Columns 1 through 7 (Filename -> FPS)
+        for col in range(1, 8):
+            item = self._table.item(target_row, col)
+            if item:
+                # Keep existing color but change alpha
+                current_color = item.foreground().color()
+                # Special case: Error/Warning colors should probably stay colored but dim
+                # For now, just dim the standard text
+                if not is_checked:
+                    item.setForeground(QColor(120, 120, 120))
+                else:
+                     # Restore colors based on simple logic (could be more complex if we stored state)
+                    if col == 3 and not plan.shot_id: # Shot column
+                        item.setForeground(QColor("#f44747"))
+                    else:
+                        item.setForeground(QColor("#e0e0e0"))
+
+        # 3. Re-resolve collisions (expensive, so maybe debounce? For now, direct)
+        # We need to re-check collisions because unchecking a file might resolve a collision for another
+        self._resolve_all_paths()
+        
+        # 4. Refresh other rows that might have changed status due to collision resolution
+        # This is the "Ghost Collision" fix. 
+        # We iterate all rows to update their status dots if they were collisions.
+        for row in range(self._table.rowCount()):
+            if row == target_row: 
+                continue
+                
+            p = self._get_plan_from_row(row)
+            if p and p.enabled: # Only care about enabled ones potentially changing state
+                 # Update status dot
+                s, msg = self._get_plan_status(p)
+                w = self._table.cellWidget(row, 8)
+                if w:
+                    ind = w.findChild(StatusIndicator)
+                    if ind and ind.status_type != s:
+                        ind.set_status(s)
+                        ind.setToolTip(msg)
+                        
+                # Update collision highlighting in Filename column (Col 1)
+                file_item = self._table.item(row, 1)
+                if file_item:
+                    if "COLLISION" in (p.error or ""):
+                        file_item.setBackground(QColor(180, 50, 50, 150))
+                        file_item.setToolTip(p.error)
+                    else:
+                        file_item.setBackground(QColor(0, 0, 0, 0))
+                        # Restore filename tooltip
+                        clip = p.match.clip
+                        fname = f"{clip.base_name}.####.{clip.extension}" if clip.is_sequence else f"{clip.base_name}.{clip.extension}"
+                        file_item.setToolTip(fname)
 
         self._update_summary()
+        self._update_filter_counts()
 
     def _on_context_override_shot(self) -> None:
         """Override shot ID for selected clips"""
@@ -1719,8 +1800,12 @@ class IngestWindow(QMainWindow):
             self._update_summary()
 
     def _on_context_skip(self) -> None:
-        """Skip selected clips (uncheck them)"""
+        """Skip selected clips (uncheck them) efficiently."""
         selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        # 1. Update data and UI state without triggering expensive signals
         for row in selected_rows:
             plan = self._get_plan_from_row(row)
             if plan:
@@ -1729,9 +1814,57 @@ class IngestWindow(QMainWindow):
                 if chk_widget:
                     chk = chk_widget.findChild(QCheckBox)
                     if chk:
+                        chk.blockSignals(True)
                         chk.setChecked(False)
+                        chk.blockSignals(False)
+            
+            # Apply visual dimming immediately
+            for col in range(1, 8):
+                item = self._table.item(row, col)
+                if item:
+                    item.setForeground(QColor(120, 120, 120))
+            
+            # Update status dot
+            status, status_msg = self._get_plan_status(plan) # Should be 'skipped'
+            status_widget = self._table.cellWidget(row, 8)
+            if status_widget:
+                indicator = status_widget.findChild(StatusIndicator)
+                if indicator:
+                    indicator.set_status(status)
+                    if status_msg:
+                        indicator.setToolTip(status_msg)
+
+        # 2. Re-resolve collisions once
+        self._resolve_all_paths()
+
+        # 3. Refresh entire table to catch ghost collisions cleared by skipping
+        # (We iterate all rows to ensure any "COLLISION" errors on other rows are cleared)
+        for row in range(self._table.rowCount()):
+            p = self._get_plan_from_row(row)
+            if p and p.enabled:
+                # Refresh status dot
+                s, msg = self._get_plan_status(p)
+                w = self._table.cellWidget(row, 8)
+                if w:
+                    ind = w.findChild(StatusIndicator)
+                    if ind and ind.status_type != s:
+                        ind.set_status(s)
+                        ind.setToolTip(msg)
+                
+                # Refresh filename background (collision warning)
+                file_item = self._table.item(row, 1)
+                if file_item:
+                    if "COLLISION" in (p.error or ""):
+                        file_item.setBackground(QColor(180, 50, 50, 150))
+                        file_item.setToolTip(p.error)
+                    else:
+                        file_item.setBackground(QColor(0, 0, 0, 0))
+                        clip = p.match.clip
+                        fname = f"{clip.base_name}.####.{clip.extension}" if clip.is_sequence else f"{clip.base_name}.{clip.extension}"
+                        file_item.setToolTip(fname)
 
         self._update_summary()
+        self._update_filter_counts()
 
     # -- Helpers -------------------------------------------------------------
 
@@ -1909,16 +2042,23 @@ class IngestWindow(QMainWindow):
         total = len(self._plans)
         new_shots = sum(1 for p in self._plans if p.is_new_shot and p.match.matched)
 
-        enabled = self._get_enabled_plans()
-        n_enabled = len(enabled)
+        # Count enabled items
+        enabled_plans = [p for p in self._plans if p.enabled]
+        n_enabled = len(enabled_plans)
+        n_skipped = total - n_enabled
 
-        # Count status types
-        ready_count = sum(1 for p in self._plans if p.can_execute and not p.error)
-        warning_count = sum(1 for p in self._plans if p.can_execute and p.error and "warning" in p.error.lower())
-        error_count = sum(1 for p in self._plans if not p.can_execute or (p.error and "error" in p.error.lower()))
+        # Count status types (only for enabled plans)
+        ready_count = sum(1 for p in enabled_plans if p.can_execute and not p.error)
+        warning_count = sum(1 for p in enabled_plans if p.can_execute and p.error and "warning" in p.error.lower())
+        
+        # Errors: Enabled plans that cannot execute OR have an explicit error
+        error_count = sum(1 for p in enabled_plans if not p.can_execute or (p.error and "error" in p.error.lower()))
 
         # Build summary with color coding
         summary_parts = [f"<b>{total} clips</b>"]
+        
+        if n_skipped > 0:
+             summary_parts.append(f"<span style='color: #888;'>({n_enabled} selected)</span>")
 
         if ready_count > 0:
             summary_parts.append(f"<span style='color: #27ae60;'>{ready_count} ready</span>")
@@ -1932,7 +2072,7 @@ class IngestWindow(QMainWindow):
 
         self._summary_label.setText(" • ".join(summary_parts))
 
-        # Set overall label color based on status
+        # Set overall label color based on status of ENABLED items
         if error_count > 0:
             label_color = "#f44747"
         elif warning_count > 0:
@@ -2107,10 +2247,28 @@ class IngestWindow(QMainWindow):
         self._scan_worker.start()
 
     def _on_scan_done(self, plans: list[IngestPlan]) -> None:
-        self._plans.extend(plans)
-        self._populate_table()
+        # Deduplicate: only add clips that aren't already in the list
+        existing_paths = {p.match.clip.first_file for p in self._plans}
+        
+        to_add = []
+        skipped = 0
+        for p in plans:
+            if p.match.clip.first_file not in existing_paths:
+                to_add.append(p)
+                existing_paths.add(p.match.clip.first_file)
+            else:
+                skipped += 1
+
+        if to_add:
+            self._plans.extend(to_add)
+            self._populate_table()
+        
         self._drop_zone._label.setText("Drop Footage Here\nAccepts folders and files")
-        self._log(f"Scan complete: {len(plans)} new clip(s) detected.")
+        
+        msg = f"Scan complete: {len(to_add)} new clip(s) detected."
+        if skipped > 0:
+            msg += f" ({skipped} duplicates skipped)"
+        self._log(msg)
 
     def _on_scan_error(self, msg: str) -> None:
         self._log(f"ERROR: {msg}")

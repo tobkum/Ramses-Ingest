@@ -872,6 +872,7 @@ def register_ramses_objects(
             "folderPath": shot_folder,
             "project": project_uuid,
             "duration": duration,
+            "sourceMedia": plan.match.clip.base_name
         }
         if seq_obj:
             shot_data["sequence"] = seq_obj.uuid()
