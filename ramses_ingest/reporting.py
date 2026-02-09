@@ -591,6 +591,27 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         display: inline-block;
     }
 
+    .resource-badge {
+        display: inline-block;
+        font-size: 10px;
+        font-weight: 800;
+        background: var(--border);
+        color: var(--text-muted);
+        padding: 2px 8px;
+        border-radius: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        margin-left: 8px;
+        vertical-align: middle;
+        border: 1px solid var(--border-light);
+    }
+
+    [data-theme="dark"] .resource-badge {
+        background: #21262d;
+        color: #8b949e;
+        border-color: #30363d;
+    }
+
     /* Footer */
     .footer {
         margin-top: 60px;
@@ -687,10 +708,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     common_fps = get_mode(framerates)
     common_codec = get_mode(codecs)
 
-    # 2. Sort results by sequence -> shot
+    # 2. Tiered Sorting: Hero first, then Auxiliary (Sequence -> Shot)
     sorted_results = sorted(
         results,
         key=lambda r: (
+            1 if r and r.plan and r.plan.resource else 0, # Tier 0: Hero, Tier 1: Aux
             r.plan.sequence_id or "" if r and r.plan else "",
             r.plan.shot_id or "" if r and r.plan else ""
         )
@@ -700,14 +722,33 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     rows = []
     has_deviations = False
     row_number = 0
+    current_tier = 0 # 0=Hero, 1=Aux
 
     for res in sorted_results:
         if not res or not res.plan: continue
         
+        # Check for Tier transition to add a divider
+        new_tier = 1 if res.plan.resource else 0
+        if row_number > 0 and new_tier != current_tier:
+            # Add a sub-header row for Auxiliary data
+            rows.append(f"""
+            <tr style="background: var(--table-header) !important;">
+                <td colspan="10" style="padding: 12px 20px; font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 2px;">
+                    Supporting & Auxiliary Data
+                </td>
+            </tr>
+            """)
+        current_tier = new_tier
+        
         mi = res.plan.media_info
         status_cls = "status-ok" if res.success else "status-fail"
+        
         if res.success:
-            status_text = "PASSED"
+            if res.plan.resource:
+                status_text = "AUXILIARY DATA"
+                status_cls = "status-ok" # Keep green but use the new text
+            else:
+                status_text = "PASSED"
         elif "skipped" in (res.error or "").lower():
             status_text = "SKIPPED"
             status_cls = "status-warn"
@@ -800,6 +841,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         b64_img = _get_base64_image(res.preview_path)
         img_tag = f'<img src="{b64_img}" class="thumb">' if b64_img else '<div class="thumb"></div>'
 
+        # Resource Badge logic
+        resource_tag = ""
+        if res.plan.resource:
+            resource_tag = f'<span class="resource-badge">{res.plan.resource}</span>'
+
         row_number += 1
         row_html = f"""
         <tr>
@@ -807,7 +853,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td>{img_tag}</td>
             <td>
                 <div class="xray-wrap">
-                    <div class="xray-target">{res.plan.shot_id}</div>
+                    <div class="xray-target">{res.plan.shot_id}{resource_tag}</div>
                     <div class="xray-source" style="margin-top:2px;">{res.plan.sequence_id or ""}</div>
                     <div class="xray-source"><span class="xray-arrow">←</span> {res.plan.match.clip.base_name}.{res.plan.match.clip.extension}</div>
                 </div>
