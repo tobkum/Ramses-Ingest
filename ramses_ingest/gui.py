@@ -8,8 +8,8 @@ import sys
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer
-from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QColor, QPalette
+from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, QSize
+from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QColor, QPalette, QAction, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -43,6 +43,12 @@ from PySide6.QtWidgets import (
 from ramses_ingest.app import IngestEngine
 from ramses_ingest.publisher import IngestPlan, IngestResult
 from ramses_ingest.config import load_rules, save_rules, DEFAULT_RULES_PATH
+from ramses_ingest.prober import check_ffprobe
+
+# Import reusable components
+from ramses_ingest.gui_widgets import (
+    GuiLogHandler, DropZone, StatusIndicator, EditableDelegate, RulesEditorDialog
+)
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +93,12 @@ QLabel#mutedLabel {
 
 QLabel#statusConnected {
     color: #27ae60;
+    font-weight: bold;
+    background-color: transparent;
+}
+
+QLabel#statusConnecting {
+    color: #f39c12;
     font-weight: bold;
     background-color: transparent;
 }
@@ -331,80 +343,7 @@ QGroupBox::title {
 }
 """
 
-
-# ---------------------------------------------------------------------------
-# Logging Handler
-# ---------------------------------------------------------------------------
-
-
-class GuiLogHandler(logging.Handler):
-    """Custom logging handler that redirects logs to the IngestWindow._log method."""
-
-    def __init__(self, log_callback) -> None:
-        super().__init__()
-        self.log_callback = log_callback
-
-    def emit(self, record) -> None:
-        try:
-            msg = self.handle_record(record)
-            self.log_callback(msg)
-        except Exception:
-            self.handleError(record)
-
-    def handle_record(self, record) -> str:
-        """Simple format: LEVEL: Message"""
-        return f"{record.levelname}: {record.getMessage()}"
-
-
-# ---------------------------------------------------------------------------
-# Drop Zone
-# ---------------------------------------------------------------------------
-
-
-class DropZone(QFrame):
-    """Drag-and-drop zone accepting folders and files."""
-
-    paths_dropped = Signal(list)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setObjectName("dropZone")
-        self.setAcceptDrops(True)
-        self.setMinimumHeight(70)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        layout = QVBoxLayout(self)
-        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label = QLabel("Drop Footage Here\nAccepts folders and files")
-        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label.setObjectName("mutedLabel")
-        layout.addWidget(self._label)
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-            self.setProperty("dragOver", True)
-            self.style().unpolish(self)
-            self.style().polish(self)
-
-    def dragLeaveEvent(self, event) -> None:
-        self.setProperty("dragOver", False)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        self.setProperty("dragOver", False)
-        self.style().unpolish(self)
-        self.style().polish(self)
-
-        paths = []
-        for url in event.mimeData().urls():
-            local = url.toLocalFile()
-            if local:
-                paths.append(local)
-
-        if paths:
-            self.paths_dropped.emit(paths)
+logger = logging.getLogger("ramses_ingest")
 
 
 # ---------------------------------------------------------------------------
@@ -445,10 +384,11 @@ class ConnectionWorker(QThread):
         self._engine = engine
 
     def run(self) -> None:
-        # No try/except needed as connect_ramses handles its own exceptions internally
-        # and returns False on failure.
-        ok = self._engine.connect_ramses()
-        self.finished.emit(ok)
+        try:
+            ok = self._engine.connect_ramses()
+            self.finished.emit(ok)
+        except Exception:
+            self.finished.emit(False)
 
 
 class IngestWorker(QThread):
@@ -504,97 +444,6 @@ class IngestWorker(QThread):
 
 
 # ---------------------------------------------------------------------------
-# Rules Editor Dialog
-# ---------------------------------------------------------------------------
-
-
-class RulesEditorDialog(QDialog):
-    """Simple YAML text editor for naming rules (Consolas, dark theme)."""
-
-    def __init__(self, rules_path: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Edit Naming Rules")
-        self.resize(600, 400)
-        self._path = rules_path
-
-        layout = QVBoxLayout(self)
-        self._editor = QTextEdit()
-        layout.addWidget(self._editor)
-
-        btn_row = QHBoxLayout()
-        btn_save = QPushButton("Save")
-        btn_cancel = QPushButton("Cancel")
-        btn_row.addStretch()
-        btn_row.addWidget(btn_cancel)
-        btn_row.addWidget(btn_save)
-        layout.addLayout(btn_row)
-
-        btn_save.clicked.connect(self._save)
-        btn_cancel.clicked.connect(self.reject)
-
-        self._load()
-
-    def _load(self) -> None:
-        try:
-            with open(self._path, "r", encoding="utf-8") as f:
-                self._editor.setPlainText(f.read())
-        except FileNotFoundError:
-            self._editor.setPlainText("rules:\n  []")
-
-    def _save(self) -> None:
-        try:
-            os.makedirs(os.path.dirname(self._path), exist_ok=True)
-            with open(self._path, "w", encoding="utf-8") as f:
-                f.write(self._editor.toPlainText())
-            self.accept()
-        except Exception as exc:
-            QMessageBox.warning(self, "Error", f"Could not save: {exc}")
-
-
-# ---------------------------------------------------------------------------
-# Helper Widgets for Professional UX
-# ---------------------------------------------------------------------------
-
-
-class StatusIndicator(QLabel):
-    """Color-coded status dot (● instead of text)"""
-
-    def __init__(self, status: str = "pending", parent=None):
-        super().__init__(parent)
-        self.status_type = status
-        self.set_status(status)
-        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setContentsMargins(0, 0, 0, 0)
-
-    def set_status(self, status: str):
-        """Update status color: ready=green, warning=yellow, error=red, pending=gray"""
-        self.status_type = status
-        colors = {
-            "ready": "#27ae60",  # Green (matches DAEMON ONLINE)
-            "warning": "#f39c12",  # Yellow/Orange
-            "error": "#f44747",  # Red
-            "pending": "#666666",  # Gray
-            "duplicate": "#999999",  # Light gray
-        }
-        color = colors.get(status, "#666666")
-        self.setText("●")
-        self.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: bold; padding: 0; margin: 0;")
-        self.setToolTip(status.title())
-
-
-class EditableDelegate(QStyledItemDelegate):
-    """Delegate for inline editing of table cells"""
-
-    def createEditor(self, parent, option, index):
-        """Create editor for shot ID override"""
-        if index.column() == 3:  # Shot column (swapped with Ver)
-            editor = QLineEdit(parent)
-            editor.setStyleSheet("background: #2d2d30; border: 1px solid #094771;")
-            return editor
-        return super().createEditor(parent, option, index)
-
-
-# ---------------------------------------------------------------------------
 # Main Window
 # ---------------------------------------------------------------------------
 
@@ -606,6 +455,10 @@ class IngestWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Ramses Ingest")
         self.resize(1400, 800)  # Increased from 1200x700
+
+        # Check for ffprobe availability on startup
+        if not check_ffprobe():
+            QTimer.singleShot(500, self._show_ffprobe_warning)
 
         self._engine = IngestEngine()
         self._plans: list[IngestPlan] = []
@@ -632,14 +485,24 @@ class IngestWindow(QMainWindow):
         # Connect asynchronously on startup
         QTimer.singleShot(100, self._try_connect)
 
+    def _show_ffprobe_warning(self) -> None:
+        QMessageBox.warning(
+            self,
+            "FFmpeg Missing",
+            "ffprobe could not be found in your system PATH.\n\n"
+            "Metadata extraction (resolution, frame count) will be unavailable, "
+            "and ingest may fail or produce incomplete data.\n\n"
+            "Please install FFmpeg and restart the application."
+        )
+
     def _setup_logging(self) -> None:
         """Redirect ramses_ingest package logs to the GUI log panel."""
         handler = GuiLogHandler(self._log)
-        logger = logging.getLogger("ramses_ingest")
-        logger.addHandler(handler)
+        # We use the global logger defined at module level (or from ramses_ingest)
+        logging.getLogger("ramses_ingest").addHandler(handler)
         # Ensure we capture at least INFO level
-        if logger.level == logging.NOTSET or logger.level > logging.INFO:
-            logger.setLevel(logging.INFO)
+        if logging.getLogger("ramses_ingest").level == logging.NOTSET:
+             logging.getLogger("ramses_ingest").setLevel(logging.INFO)
 
     def _on_resolve_timeout(self) -> None:
         """Called after debounce period to resolve paths and update UI."""
@@ -1055,8 +918,7 @@ class IngestWindow(QMainWindow):
 
     def _setup_shortcuts(self) -> None:
         """Setup keyboard shortcuts for professional workflow"""
-        from PySide6.QtGui import QShortcut, QKeySequence
-
+        
         # Ctrl+F = Focus search
         QShortcut(QKeySequence("Ctrl+F"), self, lambda: self._search_edit.setFocus())
 
@@ -1293,7 +1155,7 @@ class IngestWindow(QMainWindow):
                     self._override_shot.setText(item.text())
                     self._override_shot.blockSignals(False)
 
-    def _on_remove_selected(self) -> None:
+    def _on_remove_selected(self, _=None) -> None:
         """Remove selected clips from table"""
         selected_rows = sorted(
             set(item.row() for item in self._table.selectedItems()), reverse=True
@@ -1310,7 +1172,7 @@ class IngestWindow(QMainWindow):
         self._update_summary()
         self._update_filter_counts()
 
-    def _show_advanced_options(self) -> None:
+    def _show_advanced_options(self, _=None) -> None:
         """Show advanced options dialog"""
         dialog = QDialog(self)
         dialog.setWindowTitle("Advanced Options")
@@ -1949,14 +1811,18 @@ class IngestWindow(QMainWindow):
         # 3. Check for collisions in the new state
         check_for_path_collisions(self._plans)
 
-    def _try_connect(self) -> None:
+    def _try_connect(self, _=None) -> None:
         """Start background connection attempt."""
         if self._connection_worker and self._connection_worker.isRunning():
             return
 
         # UI Feedback: Connecting state
         self._status_label.setText("CONNECTING...")
-        self._status_label.setStyleSheet("color: #f39c12; font-weight: bold;")
+        self._status_label.setObjectName("statusConnecting")
+        self._status_label.setStyleSheet("") # Clear inline style to let objectName take over
+        self._status_label.style().unpolish(self._status_label)
+        self._status_label.style().polish(self._status_label)
+        
         self._btn_reconnect.setVisible(False)
         self._btn_refresh.setEnabled(False)  # Disable while connecting
 
@@ -1977,14 +1843,15 @@ class IngestWindow(QMainWindow):
 
             self._status_label.setText("DAEMON ONLINE")
             self._status_label.setObjectName("statusConnected")
+            self._status_label.setStyleSheet("") # Clear any inline styles
             pid = self._engine.project_id
             pname = self._engine.project_name
             self._project_label_display.setText(f"{pid} - {pname}")
 
             # Update Standards display
-            fps = self._engine._project_fps
-            w = self._engine._project_width
-            h = self._engine._project_height
+            fps = self._engine._project_fps or 0.0
+            w = self._engine._project_width or 0
+            h = self._engine._project_height or 0
             self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.3f} FPS")
 
             # Populate steps
@@ -2011,6 +1878,7 @@ class IngestWindow(QMainWindow):
         else:
             self._status_label.setText("OFFLINE")
             self._status_label.setObjectName("statusDisconnected")
+            self._status_label.setStyleSheet("") # Clear any inline styles
             self._project_label_display.setText("— (Connection Required)")
             self._btn_ingest.setToolTip("Ramses connection required to ingest.")
             
@@ -2130,7 +1998,7 @@ class IngestWindow(QMainWindow):
         self._engine.studio_name = text
         save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text)
 
-    def _on_view_report(self) -> None:
+    def _on_view_report(self, _=None) -> None:
         """Open the last generated HTML report in the system browser."""
         if self._engine.last_report_path and os.path.exists(
             self._engine.last_report_path
@@ -2142,7 +2010,7 @@ class IngestWindow(QMainWindow):
     def keyPressEvent(self, event) -> None:
         """Handle Delete key for batch removal."""
         if event.key() == Qt.Key.Key_Delete:
-            self._remove_selected_plans()
+            self._on_remove_selected()
         else:
             super().keyPressEvent(event)
 
@@ -2248,14 +2116,14 @@ class IngestWindow(QMainWindow):
         self._log(f"ERROR: {msg}")
         self._drop_zone._label.setText("Drop Footage Here\nAccepts folders and files")
 
-    def _on_clear(self) -> None:
+    def _on_clear(self, _=None) -> None:
         self._plans.clear()
         self._table.setRowCount(0)
         self._update_summary()
         self._log_edit.clear()
         self._progress.setVisible(False)
 
-    def _on_cancel(self) -> None:
+    def _on_cancel(self, _=None) -> None:
         if self._ingest_worker and self._ingest_worker.isRunning():
             self._ingest_worker.terminate()
             self._log("Ingest cancelled by user.")
@@ -2263,7 +2131,7 @@ class IngestWindow(QMainWindow):
             self._btn_ingest.setEnabled(True)
             self._progress.setVisible(False)
 
-    def _on_ingest(self) -> None:
+    def _on_ingest(self, _=None) -> None:
         enabled = self._get_enabled_plans()
         if not enabled:
             return
@@ -2311,7 +2179,7 @@ class IngestWindow(QMainWindow):
         self._progress.setVisible(False)
         self._log(f"INGEST ERROR: {msg}")
 
-    def _on_edit_rules(self) -> None:
+    def _on_edit_rules(self, _=None) -> None:
         dlg = RulesEditorDialog(DEFAULT_RULES_PATH, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self._rule_combo.clear()
@@ -2323,7 +2191,7 @@ class IngestWindow(QMainWindow):
             self._studio_edit.setText(studio)
             self._log("Rules and Studio name reloaded.")
 
-    def _on_launch_architect(self) -> None:
+    def _on_launch_architect(self, _=None) -> None:
         """Launch the visual rule builder and apply the result."""
         from ramses_ingest.architect import NamingArchitectDialog
         from ramses_ingest.matcher import NamingRule
@@ -2348,7 +2216,7 @@ class IngestWindow(QMainWindow):
                 self._rule_combo.setCurrentIndex(1)  # Select the newly created rule
                 self._log(f"New rule created via Architect: {regex}")
 
-    def _on_load_edl(self) -> None:
+    def _on_load_edl(self, _=None) -> None:
         from PySide6.QtWidgets import QFileDialog
 
         path, _ = QFileDialog.getOpenFileName(

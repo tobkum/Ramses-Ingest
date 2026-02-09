@@ -74,7 +74,12 @@ def flush_cache():
 _load_cache()
 
 # Startup Check: Warn if ffprobe is missing
-def _check_ffprobe():
+def check_ffprobe() -> bool:
+    """Check if ffprobe is available in the system PATH.
+
+    Returns:
+        True if ffprobe is found and executable, False otherwise.
+    """
     try:
         subprocess.run(
             ["ffprobe", "-version"],
@@ -82,10 +87,13 @@ def _check_ffprobe():
             stderr=subprocess.DEVNULL,
             check=True
         )
+        return True
     except (FileNotFoundError, subprocess.CalledProcessError):
         logger.warning("'ffprobe' not found in PATH. Media metadata extraction will fail.")
+        return False
 
-_check_ffprobe()
+# Run check on import (logging only)
+check_ffprobe()
 
 
 @dataclass

@@ -147,6 +147,10 @@ class IngestEngine:
                 ram.settings().debugMode = False
                 ram.settings().logLevel = LogLevel.Info
 
+            # If the singleton was already created but is offline, explicitly try to connect
+            if not ram.online():
+                ram.connect()
+
             if not ram.online():
                 return False
 
