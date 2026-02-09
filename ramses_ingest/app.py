@@ -39,6 +39,21 @@ from ramses_ingest.reporting import generate_html_report, generate_json_audit_tr
 from ramses_ingest.path_utils import normalize_path, validate_path_within_root
 
 
+def _generate_one_thumbnail(job_data):
+    """Worker function for parallel thumbnail generation (Module level for Pickling)."""
+    try:
+        from ramses_ingest.preview import generate_thumbnail
+        clip = job_data['clip']
+        path = job_data['path']
+        ocio_config = job_data['ocio_config']
+        ocio_in = job_data['ocio_in']
+
+        ok = generate_thumbnail(clip, path, ocio_config=ocio_config, ocio_in=ocio_in)        
+        return (path if ok else None, ok)
+    except Exception:
+        return (None, False)
+
+
 class IngestEngine:
     """Orchestrates the full ingest pipeline."""
 
@@ -601,6 +616,9 @@ class IngestEngine:
             import multiprocessing
             _log(f"Phase 2.5: Generating {len(thumbnail_jobs)} thumbnails in parallel...")
             
+            # Limit workers to prevent resource exhaustion (FFmpeg is CPU/IO intensive)
+            max_workers = min(multiprocessing.cpu_count(), 4)
+            
             def _generate_one_thumbnail(job_data):
                 """Worker function for parallel thumbnail generation."""
                 try:
@@ -614,9 +632,6 @@ class IngestEngine:
                     return (path if ok else None, ok)
                 except Exception:
                     return (None, False)
-            
-            # Limit workers to prevent resource exhaustion (FFmpeg is CPU/IO intensive)
-            max_workers = min(multiprocessing.cpu_count(), 4)
             
             with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
                 job_list = [job for _, job in thumbnail_jobs]
