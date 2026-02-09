@@ -445,27 +445,36 @@ class IngestEngine:
         
         # 0. State Assignment: Set state based on user choice before path resolution
         target_state = "OK" if update_status else "WIP"
+        needs_re_resolve = False
+
         for p in executable:
+            # Check if state is actually changing from what was resolved in load_delivery
+            old_state = p.state
+            
             # HERO HIERARCHY: Only 'No Resource' clips update the shot status
             if not p.resource:
                 p.state = target_state
             else:
-                # Resources stay in the current state or default to WIP 
-                # but we don't push a status change for them in Phase 1
                 p.state = "WIP" 
             
-            # Clear previous resolution to force fresh path building with new state
-            p.target_publish_dir = ""
-            p.target_preview_dir = ""
+            if p.state != old_state:
+                needs_re_resolve = True
+                # Clear previous resolution to force fresh path building with new state
+                p.target_publish_dir = ""
+                p.target_preview_dir = ""
             
-        # Re-resolve paths to include the correct state in the folder name
-        if self._connected and self._shot_objects:
-            resolve_paths_from_daemon(executable, self._shot_objects)
-        if self._project_path:
-            resolve_paths(
-                [p for p in executable if not p.target_publish_dir],
-                self._project_path,
-            )
+        # Re-resolve paths only if state changed (e.g. WIP -> OK) 
+        # or if they were never resolved (safety)
+        to_resolve = [p for p in executable if needs_re_resolve or not p.target_publish_dir]
+        
+        if to_resolve:
+            if self._connected and self._shot_objects:
+                resolve_paths_from_daemon(to_resolve, self._shot_objects)
+            if self._project_path:
+                resolve_paths(
+                    [p for p in to_resolve if not p.target_publish_dir],
+                    self._project_path,
+                )
 
         total = len(executable)
         _log(f"Starting ingest for {total} clips...")
@@ -502,21 +511,36 @@ class IngestEngine:
         # Phase 1: Register Ramses Objects (Sequential, Thread-Safe)
         if not dry_run:
             _log("Phase 1: Registering shots in Ramses database...")
+            registered_keys: set[tuple[str, str]] = set() # (shot_id, sequence_id)
+            
             for i, plan in enumerate(executable, 1):
+                # Optimization: Only register each unique shot/sequence once per batch
+                reg_key = (plan.shot_id.upper(), plan.sequence_id.upper())
+                
                 try:
                     # HERO HIERARCHY: Only 'No Resource' clips are allowed to update the shot status.
                     # If a resource exists, we register the file but skip the status/state change.
                     skip_status = bool(plan.resource)
-                    if skip_status:
-                        _log(f"  Registering auxiliary resource: {plan.resource} for {plan.shot_id} (Skipping status update)")
                     
-                    from ramses_ingest.publisher import register_ramses_objects
-                    register_ramses_objects(
-                        plan, 
-                        lambda _: None, 
-                        sequence_cache=seq_cache,
-                        skip_status_update=skip_status
-                    )
+                    if reg_key not in registered_keys:
+                        if skip_status:
+                            _log(f"  Registering auxiliary resource: {plan.resource} for {plan.shot_id} (Skipping status update)")
+                        
+                        from ramses_ingest.publisher import register_ramses_objects
+                        register_ramses_objects(
+                            plan, 
+                            lambda _: None, 
+                            sequence_cache=seq_cache,
+                            shot_cache=shot_cache,
+                            skip_status_update=skip_status
+                        )
+                        registered_keys.add(reg_key)
+                    elif not skip_status:
+                        # If we already registered the shot via an auxiliary clip,
+                        # but NOW we have the Hero clip, we MUST push the status update.
+                        from ramses_ingest.publisher import update_ramses_status
+                        update_ramses_status(plan, plan.state, shot_cache=shot_cache)
+                        
                 except Exception as exc:
                     _log(f"  Warning: Failed to register {plan.shot_id}: {exc}")
         else:
@@ -574,7 +598,8 @@ class IngestEngine:
             _log("Phase 3: Finalizing production statuses in Ramses...")
             from ramses_ingest.publisher import update_ramses_status
             for res in results:
-                if res.success:
+                # HERO HIERARCHY: Only 'No Resource' clips are allowed to finalize status
+                if res.success and not res.plan.resource:
                     try:
                         update_ramses_status(res.plan, "OK", shot_cache=shot_cache)
                     except Exception:
@@ -596,6 +621,16 @@ class IngestEngine:
             _log(f"  HTML manifest created: {html_path}")
         else:
             _log(f"  ERROR: Failed to write HTML manifest to {html_path}")
+
+        # CLEANUP: Delete temporary thumbnails for auxiliary resources (Audit cleanup)
+        import tempfile
+        t_dir = tempfile.gettempdir()
+        for res in results:
+            if res.preview_path and res.preview_path.startswith(t_dir):
+                try:
+                    os.remove(res.preview_path)
+                except Exception:
+                    pass
 
         # Generate machine-readable JSON audit trail (optional, for database integration)
         if export_json_audit:

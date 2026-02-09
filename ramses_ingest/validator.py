@@ -58,7 +58,8 @@ def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIs
     # Extract colorspace profiles from matched plans only
     profiles = []
     for i, plan in enumerate(plans):
-        if not plan.match.matched or not plan.media_info.width:
+        # HERO ONLY: Auxiliary resources skip batch-level colorspace validation
+        if not plan.match.matched or not plan.media_info.width or plan.resource:
             continue
 
         profile = {
@@ -213,13 +214,25 @@ def check_for_duplicate_version(
 
 
 def _calculate_md5_safe(file_path: str) -> str:
-    """Calculate MD5 hash of a file, returning empty string on error."""
+    """Calculate MD5 hash of a file sampling start and middle (Enhancement #3.1).
+    
+    Samples 512KB from the beginning and 512KB from the middle to ensure 
+    uniqueness even if files start with identical black leaders or color bars.
+    """
     try:
+        size = os.path.getsize(file_path)
+        chunk_size = 524288  # 512 KB
+        
         hash_md5 = hashlib.md5()
         with open(file_path, "rb") as f:
-            # Use 1MB chunks for better performance on large movie files
-            for chunk in iter(lambda: f.read(1048576), b""):
-                hash_md5.update(chunk)
+            # 1. Sample start
+            hash_md5.update(f.read(chunk_size))
+            
+            # 2. Sample middle (if file is large enough)
+            if size > (chunk_size * 2):
+                f.seek(size // 2)
+                hash_md5.update(f.read(chunk_size))
+                
         return hash_md5.hexdigest()
     except (OSError, IOError):
         return ""

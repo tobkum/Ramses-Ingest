@@ -657,10 +657,12 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             total_frames += res.frames_copied
             total_size_bytes += res.bytes_copied # Exact count from verified copy loop
 
-            mi = res.plan.media_info
-            if mi.width: resolutions.append(f"{mi.width}x{mi.height}")
-            if mi.fps: framerates.append(mi.fps)
-            if mi.codec: codecs.append(mi.codec.lower())
+            # HERO SPEC BASELINE: Only use primary clips to determine the common project specs
+            if not res.plan.resource:
+                mi = res.plan.media_info
+                if mi.width: resolutions.append(f"{mi.width}x{mi.height}")
+                if mi.fps: framerates.append(mi.fps)
+                if mi.codec: codecs.append(mi.codec.lower())
         elif res.error:
             failed += 1
             # Categorize errors for summary
@@ -712,18 +714,18 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         else:
             status_text = "FAILED"
         
-        # Deviation Detection
+        # Deviation Detection - HERO ONLY
+        # Resources (Auxiliary) skip the visual deviation highlighting
         res_val = f"{mi.width}x{mi.height}" if mi.width else "—"
-        res_dev = (res_val != common_res and common_res)
+        res_dev = (not res.plan.resource and res_val != common_res and common_res)
         res_display = f'<span class="deviation" title="Deviation">{res_val}</span>' if res_dev else res_val
         
         fps_val = mi.fps if mi.fps else 0
-        # Use tolerance-based comparison for floating-point FPS values (avoid false positives)
-        fps_dev = (common_fps and abs(fps_val - common_fps) > 0.001)
+        fps_dev = (not res.plan.resource and common_fps and abs(fps_val - common_fps) > 0.001)
         fps_display = f'<span class="deviation">{fps_val:.3f}</span>' if fps_dev else f"{fps_val:.3f}"
         
         codec_val = mi.codec.upper() if mi.codec else "—"
-        codec_dev = (mi.codec and mi.codec.lower() != common_codec and common_codec)
+        codec_dev = (not res.plan.resource and mi.codec and mi.codec.lower() != common_codec and common_codec)
         codec_display = f'<span class="deviation">{codec_val}</span>' if codec_dev else codec_val
         
         if res_dev or fps_dev or codec_dev:

@@ -1682,6 +1682,28 @@ class IngestWindow(QMainWindow):
         self._override_res.blockSignals(False)
         self._table.setSortingEnabled(True)
 
+        # 5. Visual Reconciliation (HERO FIX for Ghost Collisions)
+        # Ensure that ALL rows correctly reflect their error states after the batch update.
+        # This clears stale red backgrounds from rows that were previously colliding.
+        for row in range(self._table.rowCount()):
+            p = self._get_plan_from_row(row)
+            if not p: continue
+            
+            f_item = self._table.item(row, 1)
+            if f_item:
+                if "COLLISION" in (p.error or ""):
+                    f_item.setBackground(QColor(180, 50, 50, 150))
+                    f_item.setToolTip(p.error)
+                elif p.is_duplicate:
+                    f_item.setBackground(QColor(100, 100, 100, 100))
+                    f_item.setToolTip(p.error)
+                else:
+                    f_item.setBackground(QColor(0, 0, 0, 0))
+                    # Restore standard filename tooltip
+                    clip = p.match.clip
+                    fname = f"{clip.base_name}{clip.separator}####.{clip.extension}" if clip.is_sequence else f"{clip.base_name}.{clip.extension}"
+                    f_item.setToolTip(fname)
+
         self._update_filter_counts()
         self._update_summary()
 
@@ -1691,17 +1713,20 @@ class IngestWindow(QMainWindow):
         if not plan.enabled:
             return "skipped", "Skipped by user"
 
-        # 1. Technical mismatches (Warning)
+        # 1. Technical mismatches (Warning) - HERO ONLY
+        # Resources (Auxiliary) are allowed to deviate from project specs without warnings.
         is_res_mismatch = False
-        if self._engine._project_width > 0 and plan.media_info.width > 0:
-            if (plan.media_info.width != self._engine._project_width or 
-                plan.media_info.height != self._engine._project_height):
-                is_res_mismatch = True
-
         is_fps_mismatch = False
-        if self._engine._project_fps > 0 and plan.media_info.fps > 0:
-            if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
-                is_fps_mismatch = True
+        
+        if not plan.resource:
+            if self._engine._project_width > 0 and plan.media_info.width > 0:
+                if (plan.media_info.width != self._engine._project_width or 
+                    plan.media_info.height != self._engine._project_height):
+                    is_res_mismatch = True
+
+            if self._engine._project_fps > 0 and plan.media_info.fps > 0:
+                if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+                    is_fps_mismatch = True
 
         if plan.match.clip.missing_frames:
             return "warning", f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"

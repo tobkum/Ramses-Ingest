@@ -483,6 +483,8 @@ def resolve_paths(
 
     This matches the standard Ramses API behavior (no sequence nesting on disk).
     """
+    version_cache: dict[str, int] = {}  # Cache next version by publish_root path
+
     for plan in plans:
         if not plan.can_execute:
             continue
@@ -512,9 +514,12 @@ def resolve_paths(
 
         step_folder = os.path.join(shot_root, step_folder_name)
 
-        # VERSION-UP LOGIC
+        # VERSION-UP LOGIC (Optimized with cache)
         publish_root = os.path.join(step_folder, "_published")
-        plan.version = _get_next_version(publish_root)
+        if publish_root not in version_cache:
+            version_cache[publish_root] = _get_next_version(publish_root)
+        
+        plan.version = version_cache[publish_root]
 
         # API COMPLIANT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
         if plan.resource:
@@ -540,6 +545,7 @@ def resolve_paths_from_daemon(
     from ramses.daemon_interface import RamDaemonInterface
 
     daemon = RamDaemonInterface.instance()
+    version_cache: dict[str, int] = {}  # Cache next version by publish_root path
 
     for plan in plans:
         if not plan.can_execute:
@@ -571,9 +577,12 @@ def resolve_paths_from_daemon(
             # Construct paths manually (Dry)
             step_root = f"{base_path}/{step_folder_name}"
 
-            # Find next version (Dry scan of existing folders)
+            # Find next version (Dry scan of existing folders) with optimization
             publish_root = f"{step_root}/_published"
-            plan.version = _get_next_version(publish_root)
+            if publish_root not in version_cache:
+                version_cache[publish_root] = _get_next_version(publish_root)
+            
+            plan.version = version_cache[publish_root]
 
             # API STRICT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
             if plan.resource:
@@ -726,18 +735,26 @@ def execute_plan(
         result.error = f"Ingest failed (Rolled back): {error_msg}"
         return result
 
-    # --- Generate thumbnail (HERO ONLY) ---
-    if generate_thumbnail and plan.target_preview_dir and not dry_run and not plan.resource:
+    # --- Generate thumbnail ---
+    if generate_thumbnail and not dry_run:
         try:
             from ramses_ingest.preview import generate_thumbnail as gen_thumb
+            
+            # HERO VS AUXILIARY: Determine target storage
+            if not plan.resource:
+                # Hero: permanent preview folder
+                os.makedirs(plan.target_preview_dir, exist_ok=True)
+                thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
+                thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
+            else:
+                # Auxiliary: temporary storage for report embedding only
+                import tempfile
+                t_dir = tempfile.gettempdir()
+                # Unique name to avoid collisions in system temp
+                t_name = f"ram_tmp_{plan.project_id}_{plan.shot_id}_{plan.resource}_{int(time.time())}.jpg"
+                thumb_path = os.path.join(t_dir, t_name)
 
-            os.makedirs(plan.target_preview_dir, exist_ok=True)
-            
-            # Hero thumbnail name
-            thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
-            
-            thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
-            _log("  Generating thumbnail...")
+            _log(f"  Generating {'report ' if plan.resource else ''}thumbnail...")
             ok = gen_thumb(
                 clip,
                 thumb_path,
@@ -896,9 +913,17 @@ def register_ramses_objects(
             "folderPath": shot_folder,
             "project": project_uuid,
             "duration": duration,
-            "sourceMedia": plan.match.clip.base_name,
-            "resource": plan.resource # Store resource context in shot metadata if supported
         }
+        
+        # HERO SOVEREIGNTY: Only 'No Resource' clips define the source media identity
+        if not plan.resource:
+            shot_data["sourceMedia"] = plan.match.clip.base_name
+        elif shot_obj:
+            # For auxiliary, preserve existing sourceMedia if it exists
+            existing = shot_obj.get("sourceMedia")
+            if existing:
+                shot_data["sourceMedia"] = existing
+
         if seq_obj:
             shot_data["sequence"] = seq_obj.uuid()
 
