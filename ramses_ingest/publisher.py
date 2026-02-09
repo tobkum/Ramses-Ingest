@@ -82,6 +82,7 @@ class IngestPlan:
     project_name: str = ""  # Added long name support
     step_id: str = "PLATE"
     resource: str = ""
+    state: str = "WIP"
 
     is_new_sequence: bool = False
     is_new_shot: bool = False
@@ -323,47 +324,40 @@ def copy_frames(
 
 
 def _get_next_version(publish_root: str) -> int:
-    """Find the next available version number by scanning vNNN folders.
-
-    Zombie Prevention Strategy:
-    1. Folder with .ramses_complete marker = valid version (even if empty)
-    2. Folder with media files = valid version
-    3. Folder with only _ramses_data.json < 1 hour old = valid (ingest in progress)
-    4. Old empty folders = zombies (ignored)
+    """Find the next available version number by scanning API-compliant folders.
+    
+    Ramses API Spec: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
     """
     publish_root = normalize_path(publish_root)
     if not os.path.isdir(publish_root):
         return 1
 
     max_v = 0
+    # Regex to match API-compliant version folders:
+    # 1. (?:(?P<res>.*)_)?  -> Optional resource block
+    # 2. (?P<ver>\d{3})     -> Mandatory 3-digit version
+    # 3. (?:_(?P<state>.*))? -> Optional state block
+    version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
+
     try:
         for item in os.listdir(publish_root):
-            if item.startswith("v") and len(item) == 4 and item[1:].isdigit():
+            match = version_re.match(item)
+            if match:
                 v_path = os.path.join(publish_root, item)
-                
-                # Default assume invalid unless proven otherwise
                 is_valid_version = False
 
-                # Strategy 1: Check for completion marker (Strongest)
                 if os.path.exists(os.path.join(v_path, ".ramses_complete")):
                     is_valid_version = True
                 else:
-                    # Strategy 2: Check if folder is very recent (ingest in progress)
                     try:
                         mtime = os.path.getmtime(v_path)
-                        age_seconds = time.time() - mtime
-                        # Consider folders < 1 hour old as potentially in progress
-                        if age_seconds < 3600:
+                        if (time.time() - mtime) < 3600:
                             is_valid_version = True
                     except (OSError, PermissionError):
                         pass
 
-                    # NOTE: We no longer treat folders with "any media files" as valid
-                    # if they are old and have no marker. This allows reclaiming
-                    # failed version numbers.
-
                 if is_valid_version:
-                    v = int(item[1:])
+                    v = int(match.group("ver"))
                     if v > max_v:
                         max_v = v
     except Exception:
@@ -519,9 +513,11 @@ def resolve_paths(
         publish_root = os.path.join(step_folder, "_published")
         plan.version = _get_next_version(publish_root)
 
-        version_str = f"v{plan.version:03d}"
+        # API COMPLIANT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
         if plan.resource:
-            version_str += f"_{plan.resource}"
+            version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}"
+        else:
+            version_str = f"{plan.version:03d}_{plan.state}"
 
         plan.target_publish_dir = os.path.join(
             publish_root,
@@ -576,9 +572,12 @@ def resolve_paths_from_daemon(
             publish_root = f"{step_root}/_published"
             plan.version = _get_next_version(publish_root)
 
-            version_str = f"v{plan.version:03d}"
+            # API STRICT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
             if plan.resource:
-                version_str += f"_{plan.resource}"
+                version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}"
+            else:
+                version_str = f"{plan.version:03d}_{plan.state}"
+            
             plan.target_publish_dir = f"{publish_root}/{version_str}"
             plan.target_preview_dir = f"{step_root}/_preview"
 

@@ -440,6 +440,21 @@ class IngestEngine:
             return [IngestResult(plan=p, error=str(e)) for p in plans]
 
         executable = [p for p in plans if p.can_execute]
+        
+        # 0. State Assignment: Set state based on user choice before path resolution
+        target_state = "OK" if update_status else "WIP"
+        for p in executable:
+            p.state = target_state
+            
+        # Re-resolve paths to include the correct state in the folder name
+        if self._connected and self._shot_objects:
+            resolve_paths_from_daemon(executable, self._shot_objects)
+        if self._project_path:
+            resolve_paths(
+                [p for p in executable if not p.target_publish_dir],
+                self._project_path,
+            )
+
         total = len(executable)
         _log(f"Starting ingest for {total} clips...")
 
