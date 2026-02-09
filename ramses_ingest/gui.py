@@ -772,6 +772,14 @@ class IngestWindow(QMainWindow):
         self._override_seq.textChanged.connect(self._on_override_seq_changed)
         right_lay.addWidget(self._override_seq)
 
+        right_lay.addWidget(QLabel("Resource:"))
+        self._override_res = QLineEdit()
+        self._override_res.setPlaceholderText("Resource (e.g. PLATE, BG)...")
+        self._override_res.setClearButtonEnabled(True)
+        self._override_res.setEnabled(False)
+        self._override_res.textChanged.connect(self._on_override_res_changed)
+        right_lay.addWidget(self._override_res)
+
         right_lay.addStretch()
         main_splitter.addWidget(right_panel)
 
@@ -1014,15 +1022,19 @@ class IngestWindow(QMainWindow):
             # Block signals while clearing to prevent triggering overrides
             self._override_shot.blockSignals(True)
             self._override_seq.blockSignals(True)
+            self._override_res.blockSignals(True)
             
             self._detail_widget.clear()
             self._override_shot.clear()
             self._override_shot.setEnabled(False)
             self._override_seq.clear()
             self._override_seq.setEnabled(False)
+            self._override_res.clear()
+            self._override_res.setEnabled(False)
             
             self._override_shot.blockSignals(False)
             self._override_seq.blockSignals(False)
+            self._override_res.blockSignals(False)
             
             self._selected_plan = None
             return
@@ -1042,6 +1054,7 @@ class IngestWindow(QMainWindow):
         )
         details.append(f"<b>Shot:</b> {plan.shot_id or '—'}")
         details.append(f"<b>Sequence:</b> {plan.sequence_id or '—'}")
+        details.append(f"<b>Resource:</b> {plan.resource or '—'}")
 
         # Proper frame count for movies
         fc = (
@@ -1103,15 +1116,20 @@ class IngestWindow(QMainWindow):
         # Block signals so that setting text from data doesn't trigger a "change" back to data
         self._override_shot.blockSignals(True)
         self._override_seq.blockSignals(True)
+        self._override_res.blockSignals(True)
 
         self._override_shot.setEnabled(True)
         self._override_shot.setText(plan.shot_id or "")
 
         self._override_seq.setEnabled(True)
         self._override_seq.setText(plan.sequence_id or "")
-        
+
+        self._override_res.setEnabled(True)
+        self._override_res.setText(plan.resource or "")
+
         self._override_shot.blockSignals(False)
         self._override_seq.blockSignals(False)
+        self._override_res.blockSignals(False)
 
     def _on_override_changed(self, text: str) -> None:
         """Apply shot ID override to selected plan"""
@@ -1132,6 +1150,21 @@ class IngestWindow(QMainWindow):
             # Update table
             row = self._table.currentRow()
             item = self._table.item(row, 4)  # Seq column
+            if item:
+                blocked = self._table.blockSignals(True)
+                item.setText(text or "—")
+                self._table.blockSignals(blocked)
+            self._update_summary()
+
+    def _on_override_res_changed(self, text: str) -> None:
+        """Apply resource override to selected plan"""
+        if self._selected_plan:
+            plan = self._selected_plan
+            plan.resource = text
+
+            # Debounce the expensive resolution/update cycle (re-calc paths)
+            self._resolve_timer.start()
+
             if item:
                 blocked = self._table.blockSignals(True)
                 item.setText(text or "—")
@@ -1799,6 +1832,29 @@ class IngestWindow(QMainWindow):
 
             self._update_summary()
 
+    def _on_context_override_res(self) -> None:
+        """Override resource for selected clips"""
+        from PySide6.QtWidgets import QInputDialog
+
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        res, ok = QInputDialog.getText(
+            self,
+            "Override Resource",
+            f"Enter resource for {len(selected_rows)} clip(s) (e.g. PLATE, BG):",
+        )
+
+        if ok:
+            for row in selected_rows:
+                plan = self._get_plan_from_row(row)
+                if plan:
+                    plan.resource = res
+            
+            # Re-resolve paths (this triggers re-calc and table refresh for collision status)
+            self._on_resolve_timeout()
+
     def _on_context_skip(self) -> None:
         """Skip selected clips (uncheck them) efficiently."""
         selected_rows = list(set(item.row() for item in self._table.selectedItems()))
@@ -2193,6 +2249,10 @@ class IngestWindow(QMainWindow):
         act_override_seq = QAction("Override Sequence ID...", self)
         act_override_seq.triggered.connect(self._on_context_override_seq)
         menu.addAction(act_override_seq)
+
+        act_override_res = QAction("Override Resource...", self)
+        act_override_res.triggered.connect(self._on_context_override_res)
+        menu.addAction(act_override_res)
 
         act_skip = QAction("Skip Selected", self)
         act_skip.triggered.connect(self._on_context_skip)
