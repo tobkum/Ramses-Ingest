@@ -298,24 +298,26 @@ class IngestEngine:
         # 1. Process files with grouping
         if file_paths:
             if progress_callback: progress_callback(f"Consolidating {len(file_paths)} files...")
-            from ramses_ingest.scanner import RE_FRAME_PADDING
+            from ramses_ingest.scanner import RE_FRAME_PADDING, MOVIE_EXTENSIONS
             
             temp_buckets: dict[tuple[str, str, str], list[tuple[int, str, int]]] = {}
             standalone: list[Clip] = []
 
             for p in file_paths:
                 name = os.path.basename(p)
+                ext = os.path.splitext(name)[1].lstrip(".").lower()
                 m = RE_FRAME_PADDING.match(name)
-                if m:
+                
+                # Logic: Only group if it matches the padding regex AND is not a movie
+                if m and ext not in MOVIE_EXTENSIONS:
                     base = m.group("base")
-                    ext = m.group("ext").lower()
                     frame_str = m.group("frame")
                     key = (os.path.dirname(p), base, ext)
                     temp_buckets.setdefault(key, []).append((int(frame_str), p, len(frame_str)))
                 else:
                     standalone.append(Clip(
                         base_name=os.path.splitext(name)[0],
-                        extension=os.path.splitext(name)[1].lstrip(".").lower(),
+                        extension=ext,
                         directory=Path(os.path.dirname(p)),
                         first_file=str(p)
                     ))
@@ -445,6 +447,9 @@ class IngestEngine:
         target_state = "OK" if update_status else "WIP"
         for p in executable:
             p.state = target_state
+            # Clear previous resolution to force fresh path building with new state
+            p.target_publish_dir = ""
+            p.target_preview_dir = ""
             
         # Re-resolve paths to include the correct state in the folder name
         if self._connected and self._shot_objects:

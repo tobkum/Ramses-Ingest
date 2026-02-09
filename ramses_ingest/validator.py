@@ -162,8 +162,12 @@ def check_for_duplicate_version(
     clip_frame_count = clip.frame_count if clip.is_sequence else 1
 
     # Scan existing versions
+    # API Spec: [RESOURCE]_[VERSION]_[STATE]
+    version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
+
     for item in sorted(os.listdir(existing_versions_dir)):
-        if not item.startswith("v") or not item[1:4].isdigit():
+        match = version_re.match(item)
+        if not match:
             continue
 
         version_dir = os.path.join(existing_versions_dir, item)
@@ -171,9 +175,11 @@ def check_for_duplicate_version(
             continue
 
         # Count frames in this version
+        # Exclude metadata sidecars and completion markers
+        EXCLUDE_FILES = ("_ramses_data.json", ".ramses_complete", ".DS_Store", "Thumbs.db")
         version_files = [
             f for f in os.listdir(version_dir)
-            if os.path.isfile(os.path.join(version_dir, f)) and not f.startswith("_")
+            if os.path.isfile(os.path.join(version_dir, f)) and f not in EXCLUDE_FILES and not f.startswith("_")
         ]
 
         # Quick size check
@@ -187,11 +193,12 @@ def check_for_duplicate_version(
 
         # Find first file in version directory
         if version_files:
+            # Sort version files to find the first frame consistently
             version_first_file = os.path.join(version_dir, sorted(version_files)[0])
             version_first_md5 = _calculate_md5_safe(version_first_file)
 
             if clip_first_md5 == version_first_md5:
-                version_num = int(item[1:4])  # Extract version number from "v001"
+                version_num = int(match.group("ver"))
                 return True, version_dir, version_num
 
     return False, "", 0
@@ -202,7 +209,8 @@ def _calculate_md5_safe(file_path: str) -> str:
     try:
         hash_md5 = hashlib.md5()
         with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
+            # Use 1MB chunks for better performance on large movie files
+            for chunk in iter(lambda: f.read(1048576), b""):
                 hash_md5.update(chunk)
         return hash_md5.hexdigest()
     except (OSError, IOError):

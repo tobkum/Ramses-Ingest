@@ -15,6 +15,7 @@ import concurrent.futures
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 import threading
@@ -870,7 +871,7 @@ def register_ramses_objects(
 
         # Derive folder path using standard naming: PROJ_S_SH010
         shot_nm = RamFileInfo()
-        shot_nm.project = project.shortName()
+        shot_nm.project = plan.project_id
         shot_nm.ramType = ItemType.SHOT
         shot_nm.shortName = plan.shot_id
         shot_folder_name = shot_nm.fileName()

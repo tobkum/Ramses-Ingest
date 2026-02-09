@@ -65,7 +65,10 @@ class Clip:
 
     @property
     def frame_count(self) -> int:
-        return len(self.frames) if self.is_sequence else 0
+        """Number of files/frames in this clip. Returns 1 for movie files."""
+        if self.is_sequence:
+            return len(self.frames)
+        return 1
 
     @property
     def first_frame(self) -> int:
@@ -202,6 +205,11 @@ def scan_directory(root: str | Path) -> list[Clip]:
             # Filter by allowed extensions
             if ext not in MEDIA_EXTENSIONS:
                 continue
+
+            # Final safety check: Movies are NEVER sequences
+            if ext in MOVIE_EXTENSIONS:
+                is_seq = False
+                frames = []
 
             # Construct full path to first file
             full_path = os.path.join(str(dir_path), s[0].name)

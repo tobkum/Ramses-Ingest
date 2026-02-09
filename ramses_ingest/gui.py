@@ -1456,7 +1456,7 @@ class IngestWindow(QMainWindow):
             # --- Column 1: Filename ---
             filename = f"{clip.base_name}.{clip.extension}"
             if clip.is_sequence:
-                filename = f"{clip.base_name}.####.{clip.extension}"
+                filename = f"{clip.base_name}{clip.separator}####.{clip.extension}"
             
             file_item = self._table.item(idx, 1)
             if not file_item:
