@@ -735,36 +735,32 @@ def execute_plan(
         result.error = f"Ingest failed (Rolled back): {error_msg}"
         return result
 
-    # --- Generate thumbnail ---
+    # --- Generate thumbnail (moved to batch processing for parallelization) ---
+    # Store thumbnail job info for later batch processing
+    result._thumbnail_job = None
     if generate_thumbnail and not dry_run:
-        try:
-            from ramses_ingest.preview import generate_thumbnail as gen_thumb
-            
-            # HERO VS AUXILIARY: Determine target storage
-            if not plan.resource:
-                # Hero: permanent preview folder
-                os.makedirs(plan.target_preview_dir, exist_ok=True)
-                thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
-                thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
-            else:
-                # Auxiliary: temporary storage for report embedding only
-                import tempfile
-                t_dir = tempfile.gettempdir()
-                # Unique name to avoid collisions in system temp
-                t_name = f"ram_tmp_{plan.project_id}_{plan.shot_id}_{plan.resource}_{int(time.time())}.jpg"
-                thumb_path = os.path.join(t_dir, t_name)
-
-            _log(f"  Generating {'report ' if plan.resource else ''}thumbnail...")
-            ok = gen_thumb(
-                clip,
-                thumb_path,
-                ocio_config=ocio_config,
-                ocio_in=ocio_in,
-            )
-            if ok:
-                result.preview_path = thumb_path
-        except Exception as exc:
-            _log(f"  Thumbnail (non-fatal): {exc}")
+        # HERO VS AUXILIARY: Determine target storage
+        if not plan.resource:
+            # Hero: permanent preview folder
+            os.makedirs(plan.target_preview_dir, exist_ok=True)
+            thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
+            thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
+        else:
+            # Auxiliary: temporary storage for report embedding only
+            import tempfile
+            t_dir = tempfile.gettempdir()
+            # Unique name to avoid collisions in system temp
+            t_name = f"ram_tmp_{plan.project_id}_{plan.shot_id}_{plan.resource}_{int(time.time())}.jpg"
+            thumb_path = os.path.join(t_dir, t_name)
+        
+        # Store job for batch processing (avoids sequential FFmpeg calls)
+        result._thumbnail_job = {
+            'clip': clip,
+            'path': thumb_path,
+            'ocio_config': ocio_config,
+            'ocio_in': ocio_in,
+            'is_resource': bool(plan.resource)
+        }
 
     # --- Generate video proxy (HERO ONLY) ---
     if generate_proxy and plan.target_preview_dir and not dry_run and not plan.resource:

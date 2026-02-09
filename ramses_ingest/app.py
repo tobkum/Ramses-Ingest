@@ -593,6 +593,48 @@ class IngestEngine:
             if id(p) not in executed_plans:
                 results.append(IngestResult(plan=p, error=p.error or "Skipped or not executable"))
 
+        # Phase 2.5: Parallel Thumbnail Generation (OPT #1)
+        # Process all thumbnail jobs in parallel to avoid sequential FFmpeg calls
+        thumbnail_jobs = [(res, res._thumbnail_job) for res in results if hasattr(res, '_thumbnail_job') and res._thumbnail_job]
+        
+        if thumbnail_jobs and generate_thumbnails:
+            import multiprocessing
+            _log(f"Phase 2.5: Generating {len(thumbnail_jobs)} thumbnails in parallel...")
+            
+            def _generate_one_thumbnail(job_data):
+                """Worker function for parallel thumbnail generation."""
+                try:
+                    from ramses_ingest.preview import generate_thumbnail
+                    clip = job_data['clip']
+                    path = job_data['path']
+                    ocio_config = job_data['ocio_config']
+                    ocio_in = job_data['ocio_in']
+                    
+                    ok = generate_thumbnail(clip, path, ocio_config=ocio_config, ocio_in=ocio_in)
+                    return (path if ok else None, ok)
+                except Exception:
+                    return (None, False)
+            
+            # Limit workers to prevent resource exhaustion (FFmpeg is CPU/IO intensive)
+            max_workers = min(multiprocessing.cpu_count(), 4)
+            
+            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+                job_list = [job for _, job in thumbnail_jobs]
+                future_to_idx = {executor.submit(_generate_one_thumbnail, job): idx 
+                                for idx, job in enumerate(job_list)}
+                
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    idx = future_to_idx[future]
+                    result_obj, _ = thumbnail_jobs[idx]
+                    try:
+                        thumb_path, success = future.result(timeout=120)
+                        if success and thumb_path:
+                            result_obj.preview_path = thumb_path
+                    except Exception:
+                        pass  # Non-fatal, thumbnail generation failed
+                        
+            _log(f"  Generated thumbnails for {len([r for r in results if r.preview_path])} clips")
+
         # Phase 3: Update Lifecycle Status (Feature 5)
         if update_status:
             _log("Phase 3: Finalizing production statuses in Ramses...")

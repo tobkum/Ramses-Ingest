@@ -11,10 +11,38 @@ Responsibilities:
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
 from ramses_ingest.scanner import Clip
+
+
+def _escape_ffmpeg_filter_path(path: str) -> str:
+    """Escape file path for use in FFmpeg filter strings.
+    
+    FFmpeg filter syntax requires escaping colons, but Windows drive letters
+    (C:, D:, etc.) must be preserved. This also handles UNC paths on network shares.
+    
+    Args:
+        path: File path (Windows or Unix)
+        
+    Returns:
+        Properly escaped path for FFmpeg filter string
+        
+    Examples:
+        C:\\OCIO\\config.ocio → C:/OCIO/config.ocio
+        \\\\server\\share\\config.ocio → //server/share/config.ocio  
+        /mnt/ocio:v2/config.ocio → /mnt/ocio\\:v2/config.ocio
+    """
+    # Convert backslashes to forward slashes for FFmpeg
+    clean = path.replace("\\", "/")
+    
+    # Escape ALL colons except Windows drive letters (single letter followed by colon at start)
+    # Pattern: Match colons not preceded by start-of-string + single letter
+    clean = re.sub(r'(?<!^[A-Za-z]):', r'\\:', clean)
+    
+    return clean
 
 # Thumbnail settings
 THUMB_WIDTH = 960
@@ -63,8 +91,7 @@ def generate_proxy(
 
     vf_chain = [f"scale={PROXY_WIDTH}:-2"]
     if ocio_config and os.path.isfile(ocio_config):
-        # Escape path for FFmpeg filter string
-        clean_path = ocio_config.replace("\\", "/").replace(":", "\\:")
+        clean_path = _escape_ffmpeg_filter_path(ocio_config)
         vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label=sRGB")
 
     vf_str = ",".join(vf_chain)
@@ -123,7 +150,7 @@ def _thumbnail_from_sequence(
 
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]
     if ocio_config and os.path.isfile(ocio_config):
-        clean_path = ocio_config.replace("\\", "/").replace(":", "\\:")
+        clean_path = _escape_ffmpeg_filter_path(ocio_config)
         vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label=sRGB")
     vf_str = ",".join(vf_chain)
 
@@ -137,7 +164,8 @@ def _thumbnail_from_sequence(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # 90s timeout for 8K footage, network storage, and heavy codecs (H.265, ProRes RAW)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -167,7 +195,7 @@ def _thumbnail_from_movie(
 
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]
     if ocio_config and os.path.isfile(ocio_config):
-        clean_path = ocio_config.replace("\\", "/").replace(":", "\\:")
+        clean_path = _escape_ffmpeg_filter_path(ocio_config)
         vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label=sRGB")
     vf_str = ",".join(vf_chain)
 
@@ -182,7 +210,8 @@ def _thumbnail_from_movie(
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        # 90s timeout for 8K footage, network storage, and heavy codecs (H.265, ProRes RAW)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False

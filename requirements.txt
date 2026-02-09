@@ -1,3 +1,4 @@
 # No hard dependencies beyond Python 3.10+ stdlib.
 # FFmpeg/ffprobe must be on PATH for prober.py and preview.py.
 PySide6
+msgpack

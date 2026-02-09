@@ -214,9 +214,9 @@ def check_for_duplicate_version(
 
 
 def _calculate_md5_safe(file_path: str) -> str:
-    """Calculate MD5 hash of a file sampling start and middle (Enhancement #3.1).
+    """Fast MD5 hash using strategic sampling (start, middle, end).
     
-    Samples 512KB from the beginning and 512KB from the middle to ensure 
+    Samples 512KB from three locations to detect duplicates while maintaining
     uniqueness even if files start with identical black leaders or color bars.
     """
     try:
@@ -229,8 +229,12 @@ def _calculate_md5_safe(file_path: str) -> str:
             hash_md5.update(f.read(chunk_size))
             
             # 2. Sample middle (if file is large enough)
-            if size > (chunk_size * 2):
+            if size > (chunk_size * 3):  # Need space for start, middle, and end
                 f.seek(size // 2)
+                hash_md5.update(f.read(chunk_size))
+                
+                # 3. Sample end (to catch trailing differences like burn-in)
+                f.seek(max(0, size - chunk_size))
                 hash_md5.update(f.read(chunk_size))
                 
         return hash_md5.hexdigest()

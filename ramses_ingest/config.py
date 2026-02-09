@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 
 from ramses_ingest.matcher import NamingRule
+
+logger = logging.getLogger(__name__)
 
 # Default rules file shipped with the tool
 DEFAULT_RULES_PATH = os.path.join(
@@ -34,19 +37,36 @@ def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str]:
         data = yaml.safe_load(f)
 
     if not isinstance(data, dict):
+        logger.warning(f"Config file '{path}' is not a valid YAML dictionary")
         return [], studio_name
 
     studio_name = data.get("studio_name", studio_name)
     rules: list[NamingRule] = []
-    for entry in data.get("rules", []):
-        if not isinstance(entry, dict) or "pattern" not in entry:
+    skipped_count = 0
+    
+    for idx, entry in enumerate(data.get("rules", []), start=1):
+        if not isinstance(entry, dict):
+            logger.warning(f"Rule {idx} in '{path}' is not a dictionary - skipping")
+            skipped_count += 1
             continue
+            
+        if "pattern" not in entry:
+            logger.warning(
+                f"Rule {idx} in '{path}' missing required 'pattern' field - skipping. "
+                f"Entry keys: {list(entry.keys())}"
+            )
+            skipped_count += 1
+            continue
+            
         rules.append(NamingRule(
             pattern=entry["pattern"],
             sequence_prefix=entry.get("sequence_prefix", ""),
             shot_prefix=entry.get("shot_prefix", ""),
             use_parent_dir_as_sequence=entry.get("use_parent_dir_as_sequence", False),
         ))
+    
+    if skipped_count > 0:
+        logger.warning(f"Skipped {skipped_count} invalid rule(s) in '{path}'")
 
     return rules, studio_name
 

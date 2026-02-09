@@ -20,10 +20,10 @@ import pyseq
 logger = logging.getLogger(__name__)
 
 # Matches frame numbers at the END of the filename (before extension)
-# Examples: name.0001.exr, name_0001.exr, project_v01_shot_0030.exr (matches 0030, not 01)
+# Examples: name.0001.exr, name_0001.exr, name-0001.exr, project_v01_shot_0030.exr (matches 0030, not 01)
 # Uses GREEDY .+ to explicitly match from the end (VFX convention: frames always at end)
 # Minimum 2 digits for frame numbers to align with pyseq frame_pattern
-RE_FRAME_PADDING = re.compile(r"^(?P<base>.+)(?P<sep>[\._])(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
+RE_FRAME_PADDING = re.compile(r"^(?P<base>.+)(?P<sep>[\._-])(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
 
 # Common media extensions (lowercase)
 IMAGE_EXTENSIONS = {
