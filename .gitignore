@@ -6,3 +6,7 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Development notes
+todo.md
+TODO.md

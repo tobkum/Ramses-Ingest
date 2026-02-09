@@ -53,3 +53,7 @@ python -m ramses_ingest
 3.  **Audit**: Review technical mismatches (FPS/Res) and missing frames.
 4.  **Execute**: Run ingest to move files and register with Ramses.
 5.  **Review**: Check the generated HTML manifest for success/failure metrics.
+
+---
+
+Developed by [Overmind Studios](https://www.overmind-studios.de/)
