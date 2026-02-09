@@ -484,6 +484,9 @@ class IngestWindow(QMainWindow):
         self._build_ui()
         # Connect asynchronously on startup
         QTimer.singleShot(100, self._try_connect)
+        
+        # Maximize on startup
+        self.showMaximized()
 
     def _show_ffprobe_warning(self) -> None:
         QMessageBox.warning(
@@ -692,9 +695,9 @@ class IngestWindow(QMainWindow):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(9)
+        self._table.setColumnCount(10)
         self._table.setHorizontalHeaderLabels(
-            ["", "Filename", "Ver", "Shot", "Seq", "Frames", "Res", "FPS", "Status"]
+            ["", "Filename", "Ver", "Shot", "Seq", "Resource", "Frames", "Res", "FPS", "Status"]
         )
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -712,16 +715,16 @@ class IngestWindow(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(0, 28)  # Checkbox
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Filename
-        for col in [2, 3, 4, 5, 6, 7]:  # Ver, Shot, Seq, Frames, Res, FPS
+        for col in [2, 3, 4, 5, 6, 7, 8]:  # Ver, Shot, Seq, Resource, Frames, Res, FPS
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            header.resizeSection(col, 60 if col in [2, 7] else 80)
-        header.setSectionResizeMode(8, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(8, 55)  # Status (dot)
+            header.resizeSection(col, 60 if col in [2, 8] else 80)
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
+        header.resizeSection(9, 55)  # Status (dot)
 
         # Set delegate for inline editing
-        self._table.setItemDelegateForColumn(
-            3, EditableDelegate(self._table)
-        )  # Shot column (now index 3)
+        delegate = EditableDelegate(self._table)
+        self._table.setItemDelegateForColumn(3, delegate)  # Shot column
+        self._table.setItemDelegateForColumn(5, delegate)  # Resource column
 
         center_lay.addWidget(self._table, 1)
 
@@ -976,8 +979,8 @@ class IngestWindow(QMainWindow):
 
             # 1. Status filter
             if self._current_filter_status != "all":
-                # Check status column (index 8)
-                status_container = self._table.cellWidget(row, 8)
+                # Check status column (index 9)
+                status_container = self._table.cellWidget(row, 9)
                 if status_container:
                     # Find the StatusIndicator inside the container
                     status_indicator = status_container.findChild(StatusIndicator)
@@ -1000,12 +1003,15 @@ class IngestWindow(QMainWindow):
             if show and search_text:
                 shot_item = self._table.item(row, 3)  # Shot column
                 seq_item = self._table.item(row, 4)   # Seq column
+                res_item = self._table.item(row, 5)   # Resource column
                 file_item = self._table.item(row, 1)  # Filename column
 
                 match = False
                 if shot_item and search_text in shot_item.text().lower():
                     match = True
                 elif seq_item and search_text in seq_item.text().lower():
+                    match = True
+                elif res_item and search_text in res_item.text().lower():
                     match = True
                 elif file_item and search_text in file_item.text().lower():
                     match = True
@@ -1187,6 +1193,21 @@ class IngestWindow(QMainWindow):
                     self._override_shot.blockSignals(True)
                     self._override_shot.setText(item.text())
                     self._override_shot.blockSignals(False)
+
+        elif item.column() == 5:  # Resource column
+            row = item.row()
+            plan = self._get_plan_from_row(row)
+            if plan:
+                plan.resource = item.text()
+
+                # Debounce the expensive resolution/update cycle
+                self._resolve_timer.start()
+
+                # Update the detail panel immediately if this is the selected plan
+                if self._selected_plan == plan:
+                    self._override_res.blockSignals(True)
+                    self._override_res.setText(item.text())
+                    self._override_res.blockSignals(False)
 
     def _on_remove_selected(self, _=None) -> None:
         """Remove selected clips from table"""
@@ -1554,18 +1575,28 @@ class IngestWindow(QMainWindow):
             if seq_item.text() != seq_text:
                 seq_item.setText(seq_text)
 
-            # --- Column 5: Frames ---
+            # --- Column 5: Resource ---
+            res_val = plan.resource or ""
+            res_item = self._table.item(idx, 5)
+            if not res_item:
+                res_item = QTableWidgetItem()
+                self._table.setItem(idx, 5, res_item)
+            
+            if res_item.text() != res_val:
+                res_item.setText(res_val)
+
+            # --- Column 6: Frames ---
             if clip.is_sequence:
                 fc = clip.frame_count
             else:
                 fc = plan.media_info.frame_count if plan.media_info.frame_count > 0 else 1
             
             frames_text = str(fc)
-            frames_item = self._table.item(idx, 5)
+            frames_item = self._table.item(idx, 6)
             if not frames_item:
                 frames_item = QTableWidgetItem()
                 frames_item.setFlags(frames_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self._table.setItem(idx, 5, frames_item)
+                self._table.setItem(idx, 6, frames_item)
 
             if frames_item.text() != frames_text:
                 frames_item.setText(frames_text)
@@ -1577,7 +1608,7 @@ class IngestWindow(QMainWindow):
                 frames_item.setBackground(QColor(0, 0, 0, 0))
                 frames_item.setToolTip("")
 
-            # --- Column 6: Resolution ---
+            # --- Column 7: Resolution ---
             res_text = "—"
             is_res_mismatch = False
             if plan.media_info.width and plan.media_info.height:
@@ -1588,11 +1619,11 @@ class IngestWindow(QMainWindow):
                 ):
                     is_res_mismatch = True
 
-            res_item = self._table.item(idx, 6)
+            res_item = self._table.item(idx, 7)
             if not res_item:
                 res_item = QTableWidgetItem()
                 res_item.setFlags(res_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self._table.setItem(idx, 6, res_item)
+                self._table.setItem(idx, 7, res_item)
 
             if res_item.text() != res_text:
                 res_item.setText(res_text)
@@ -1604,18 +1635,18 @@ class IngestWindow(QMainWindow):
                 res_item.setBackground(QColor(0, 0, 0, 0))
                 res_item.setToolTip("")
 
-            # --- Column 7: FPS ---
+            # --- Column 8: FPS ---
             fps_text = f"{plan.media_info.fps:.3f}" if plan.media_info.fps > 0 else "—"
             is_fps_mismatch = False
             if self._engine._project_fps > 0 and plan.media_info.fps > 0:
                 if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
                     is_fps_mismatch = True
 
-            fps_item = self._table.item(idx, 7)
+            fps_item = self._table.item(idx, 8)
             if not fps_item:
                 fps_item = QTableWidgetItem()
                 fps_item.setFlags(fps_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                self._table.setItem(idx, 7, fps_item)
+                self._table.setItem(idx, 8, fps_item)
             
             if fps_item.text() != fps_text:
                 fps_item.setText(fps_text)
@@ -1627,7 +1658,7 @@ class IngestWindow(QMainWindow):
                 fps_item.setBackground(QColor(0, 0, 0, 0))
                 fps_item.setToolTip("")
 
-            # --- Column 8: Status ---
+            # --- Column 9: Status ---
             status, status_msg = self._get_plan_status(plan)
 
             # Always replace status widget as it's cheap and stateful logic is complex to update
@@ -1643,11 +1674,12 @@ class IngestWindow(QMainWindow):
             status_layout.setContentsMargins(0, 0, 0, 0)
             status_layout.setSpacing(0)
 
-            self._table.setCellWidget(idx, 8, status_container)
+            self._table.setCellWidget(idx, 9, status_container)
 
         self._table.blockSignals(False)
         self._override_shot.blockSignals(False)
         self._override_seq.blockSignals(False)
+        self._override_res.blockSignals(False)
         self._table.setSortingEnabled(True)
 
         self._update_filter_counts()
@@ -1719,7 +1751,7 @@ class IngestWindow(QMainWindow):
 
         # 1. Update status dot immediately
         status, status_msg = self._get_plan_status(plan)
-        status_widget = self._table.cellWidget(target_row, 8)
+        status_widget = self._table.cellWidget(target_row, 9)
         if status_widget:
             indicator = status_widget.findChild(StatusIndicator)
             if indicator:
@@ -1729,8 +1761,8 @@ class IngestWindow(QMainWindow):
 
         # 2. Visual dimming for the whole row
         opacity = 255 if is_checked else 100
-        # Columns 1 through 7 (Filename -> FPS)
-        for col in range(1, 8):
+        # Columns 1 through 8 (Filename -> FPS)
+        for col in range(1, 9):
             item = self._table.item(target_row, col)
             if item:
                 # Keep existing color but change alpha
@@ -1761,7 +1793,7 @@ class IngestWindow(QMainWindow):
             if p and p.enabled: # Only care about enabled ones potentially changing state
                  # Update status dot
                 s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 8)
+                w = self._table.cellWidget(row, 9)
                 if w:
                     ind = w.findChild(StatusIndicator)
                     if ind and ind.status_type != s:
@@ -1875,14 +1907,14 @@ class IngestWindow(QMainWindow):
                         chk.blockSignals(False)
             
             # Apply visual dimming immediately
-            for col in range(1, 8):
+            for col in range(1, 9):
                 item = self._table.item(row, col)
                 if item:
                     item.setForeground(QColor(120, 120, 120))
             
             # Update status dot
             status, status_msg = self._get_plan_status(plan) # Should be 'skipped'
-            status_widget = self._table.cellWidget(row, 8)
+            status_widget = self._table.cellWidget(row, 9)
             if status_widget:
                 indicator = status_widget.findChild(StatusIndicator)
                 if indicator:
@@ -1900,7 +1932,7 @@ class IngestWindow(QMainWindow):
             if p and p.enabled:
                 # Refresh status dot
                 s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 8)
+                w = self._table.cellWidget(row, 9)
                 if w:
                     ind = w.findChild(StatusIndicator)
                     if ind and ind.status_type != s:
@@ -1980,12 +2012,17 @@ class IngestWindow(QMainWindow):
             resolve_paths,
             resolve_paths_from_daemon,
             check_for_path_collisions,
+            check_for_duplicates,
         )
 
-        # Reset errors before re-calculating (clears old collisions)
+        # 0. RESET: Clear old paths and transient errors before re-calculating
         for p in self._plans:
-            if "COLLISION" in (p.error or ""):
+            p.target_publish_dir = ""
+            p.target_preview_dir = ""
+            # Clear collision and duplicate errors (they will be re-evaluated)
+            if "COLLISION" in (p.error or "") or "Duplicate" in (p.error or ""):
                 p.error = ""
+            p.is_duplicate = False
 
         # 1. Try resolving via daemon if connected
         if self._engine.connected and self._engine._shot_objects:
@@ -1999,6 +2036,9 @@ class IngestWindow(QMainWindow):
 
         # 3. Check for collisions in the new state
         check_for_path_collisions(self._plans)
+
+        # 4. Re-check for duplicates (Resource-aware now)
+        check_for_duplicates(self._plans)
 
     def _try_connect(self, _=None) -> None:
         """Start background connection attempt."""

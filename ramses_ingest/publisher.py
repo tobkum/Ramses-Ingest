@@ -427,7 +427,9 @@ def check_for_duplicates(plans: list[IngestPlan]) -> None:
         existing_versions_dir = os.path.dirname(plan.target_publish_dir)
 
         is_dup, dup_path, dup_version = check_for_duplicate_version(
-            plan.match.clip, existing_versions_dir
+            plan.match.clip, 
+            existing_versions_dir,
+            resource=plan.resource
         )
 
         if is_dup:
@@ -785,6 +787,7 @@ def register_ramses_objects(
     log: Callable[[str], None],
     sequence_cache: dict[str, str] | None = None,
     shot_cache: dict[str, object] | None = None,
+    skip_status_update: bool = False,
 ) -> None:
     """Create or HEAL RamSequence / RamShot via the Daemon API."""
     try:
@@ -807,6 +810,8 @@ def register_ramses_objects(
         return
 
     project_uuid = project.uuid()
+
+    # ... (Sequence and Shot creation logic remains same) ...
 
     # 1. Handle Sequence
     seq_obj = None
@@ -917,6 +922,10 @@ def register_ramses_objects(
             ):
                 log(f"  Healing shot {plan.shot_id} metadata...")
                 shot_obj.setData(shot_data)
+
+    # 3. Handle Status Update (HERO ONLY)
+    if not skip_status_update:
+        update_ramses_status(plan, plan.state, shot_cache=shot_cache)
 
 
 # Track daemon feature support globally to prevent log flooding

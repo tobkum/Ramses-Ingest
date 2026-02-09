@@ -140,16 +140,19 @@ def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIs
 def check_for_duplicate_version(
     clip: Clip,
     existing_versions_dir: str,
+    resource: str = "",
 ) -> tuple[bool, str, int]:
     """Check if a clip already exists in published versions (Enhancement #9).
 
-    Uses a two-level check for efficiency:
-    1. Quick check: frame count + total size
-    2. Deep check: MD5 of first frame
+    Uses a three-level check for efficiency:
+    1. Resource check: match folder naming block
+    2. Quick check: frame count
+    3. Deep check: MD5 of first frame
 
     Args:
         clip: Source clip to check
         existing_versions_dir: Directory containing published versions (e.g., .../_published/)
+        resource: Optional resource name to filter by.
 
     Returns:
         (is_duplicate, matching_version_path, matching_version_number)
@@ -168,6 +171,11 @@ def check_for_duplicate_version(
     for item in sorted(os.listdir(existing_versions_dir)):
         match = version_re.match(item)
         if not match:
+            continue
+
+        # RESOURCE CHECK: Only compare against same resource stream
+        folder_res = match.group("res") or ""
+        if folder_res.upper() != resource.upper():
             continue
 
         version_dir = os.path.join(existing_versions_dir, item)

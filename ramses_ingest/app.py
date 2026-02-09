@@ -446,7 +446,14 @@ class IngestEngine:
         # 0. State Assignment: Set state based on user choice before path resolution
         target_state = "OK" if update_status else "WIP"
         for p in executable:
-            p.state = target_state
+            # HERO HIERARCHY: Only 'No Resource' clips update the shot status
+            if not p.resource:
+                p.state = target_state
+            else:
+                # Resources stay in the current state or default to WIP 
+                # but we don't push a status change for them in Phase 1
+                p.state = "WIP" 
+            
             # Clear previous resolution to force fresh path building with new state
             p.target_publish_dir = ""
             p.target_preview_dir = ""
@@ -497,7 +504,19 @@ class IngestEngine:
             _log("Phase 1: Registering shots in Ramses database...")
             for i, plan in enumerate(executable, 1):
                 try:
-                    register_ramses_objects(plan, lambda _: None, sequence_cache=seq_cache)
+                    # HERO HIERARCHY: Only 'No Resource' clips are allowed to update the shot status.
+                    # If a resource exists, we register the file but skip the status/state change.
+                    skip_status = bool(plan.resource)
+                    if skip_status:
+                        _log(f"  Registering auxiliary resource: {plan.resource} for {plan.shot_id} (Skipping status update)")
+                    
+                    from ramses_ingest.publisher import register_ramses_objects
+                    register_ramses_objects(
+                        plan, 
+                        lambda _: None, 
+                        sequence_cache=seq_cache,
+                        skip_status_update=skip_status
+                    )
                 except Exception as exc:
                     _log(f"  Warning: Failed to register {plan.shot_id}: {exc}")
         else:
