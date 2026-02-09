@@ -81,6 +81,7 @@ class IngestPlan:
     project_id: str = ""
     project_name: str = ""  # Added long name support
     step_id: str = "PLATE"
+    resource: str = ""
 
     is_new_sequence: bool = False
     is_new_shot: bool = False
@@ -161,6 +162,7 @@ def build_plans(
             project_id=project_id,
             project_name=project_name or project_id,
             step_id=match.step_id or step_id,
+            resource=match.resource,
             version=match.version or 1,
         )
 
@@ -202,6 +204,7 @@ def copy_frames(
     project_id: str,
     shot_id: str,
     step_id: str,
+    resource: str = "",
     progress_callback: Callable[[str], None] | None = None,
     dry_run: bool = False,
     fast_verify: bool = False,
@@ -237,6 +240,13 @@ def copy_frames(
     shot_id = shot_id.upper()
     step_id = step_id
 
+    # Build base part of Ramses filename
+    # e.g. PROJ_S_SH010_PLATE or PROJ_S_SH010_PLATE_BG
+    base_parts = [project_id, "S", shot_id, step_id]
+    if resource:
+        base_parts.append(resource)
+    ramses_base = "_".join(base_parts)
+
     frames_to_copy = []
     if clip.is_sequence:
         padding = clip.padding
@@ -246,7 +256,7 @@ def copy_frames(
                 str(clip.directory),
                 f"{clip.base_name}{separator}{str(frame).zfill(padding)}.{clip.extension}",
             )
-            dst_name = f"{project_id}_S_{shot_id}_{step_id}.{str(frame).zfill(padding)}.{clip.extension}"
+            dst_name = f"{ramses_base}.{str(frame).zfill(padding)}.{clip.extension}"
             dst = os.path.join(dest_dir, dst_name)
 
             # Determine if this frame needs full MD5 verification
@@ -260,7 +270,7 @@ def copy_frames(
             frames_to_copy.append((src, dst, dst_name, needs_md5, i == 0))
     else:
         src = clip.first_file
-        dst_name = f"{project_id}_S_{shot_id}_{step_id}.{clip.extension}"
+        dst_name = f"{ramses_base}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
         frames_to_copy.append((src, dst, dst_name, True, True))
 
@@ -510,6 +520,8 @@ def resolve_paths(
         plan.version = _get_next_version(publish_root)
 
         version_str = f"v{plan.version:03d}"
+        if plan.resource:
+            version_str += f"_{plan.resource}"
 
         plan.target_publish_dir = os.path.join(
             publish_root,
@@ -565,6 +577,8 @@ def resolve_paths_from_daemon(
             plan.version = _get_next_version(publish_root)
 
             version_str = f"v{plan.version:03d}"
+            if plan.resource:
+                version_str += f"_{plan.resource}"
             plan.target_publish_dir = f"{publish_root}/{version_str}"
             plan.target_preview_dir = f"{step_root}/_preview"
 
@@ -670,6 +684,7 @@ def execute_plan(
             plan.project_id,
             plan.shot_id,
             plan.step_id,
+            resource=plan.resource,
             progress_callback=progress_callback,
             dry_run=dry_run,
             fast_verify=fast_verify,
@@ -715,7 +730,11 @@ def execute_plan(
             from ramses_ingest.preview import generate_thumbnail as gen_thumb
 
             os.makedirs(plan.target_preview_dir, exist_ok=True)
-            thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
+            
+            # Name include resource
+            res_suffix = f"_{plan.resource}" if plan.resource else ""
+            thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}{res_suffix}.jpg"
+            
             thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
             _log("  Generating thumbnail...")
             ok = gen_thumb(
@@ -734,7 +753,9 @@ def execute_plan(
         try:
             from ramses_ingest.preview import generate_proxy as gen_proxy
 
-            proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"
+            res_suffix = f"_{plan.resource}" if plan.resource else ""
+            proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}{res_suffix}.mp4"
+            
             proxy_path = os.path.join(plan.target_preview_dir, proxy_name)
             _log("  Generating video proxy...")
             gen_proxy(
@@ -872,7 +893,8 @@ def register_ramses_objects(
             "folderPath": shot_folder,
             "project": project_uuid,
             "duration": duration,
-            "sourceMedia": plan.match.clip.base_name
+            "sourceMedia": plan.match.clip.base_name,
+            "resource": plan.resource # Store resource context in shot metadata if supported
         }
         if seq_obj:
             shot_data["sequence"] = seq_obj.uuid()

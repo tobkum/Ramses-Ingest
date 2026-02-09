@@ -68,6 +68,7 @@ class MatchResult:
     version: Optional[int] = None
     step_id: str = ""
     project_id: str = ""
+    resource: str = ""
     
     matched: bool = False
     """True if the matcher was able to extract both identifiers."""
@@ -204,6 +205,7 @@ def _try_rule(clip: Clip, rule: NamingRule) -> MatchResult:
     # Validate additional fields
     step_raw = _validate_id(groups.get("step", ""), "step", _VALID_STEP_PATTERN)
     project_raw = _validate_id(groups.get("project", ""), "project")
+    resource_raw = _validate_id(groups.get("resource", ""), "resource")
 
     matched = bool(shot_id)  # Shot is mandatory
     return MatchResult(
@@ -213,5 +215,6 @@ def _try_rule(clip: Clip, rule: NamingRule) -> MatchResult:
         version=version,
         step_id=step_raw,
         project_id=project_raw,
+        resource=resource_raw,
         matched=matched,
     )
