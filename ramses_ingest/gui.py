@@ -710,16 +710,16 @@ class IngestWindow(QMainWindow):
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.itemChanged.connect(self._on_table_item_changed)
 
-        # Set column widths
+        # Set column widths (balanced to use full width)
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(0, 28)  # Checkbox
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Filename
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Filename stretches
         for col in [2, 3, 4, 5, 6, 7, 8]:  # Ver, Shot, Seq, Resource, Frames, Res, FPS
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            header.resizeSection(col, 60 if col in [2, 8] else 80)
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(9, 55)  # Status (dot)
+            header.resizeSection(col, 65 if col in [2, 8] else 88)  # Slightly wider than original
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(9, 70)  # Status - wider to prevent header cut-off
 
         # Set delegate for inline editing
         delegate = EditableDelegate(self._table)
