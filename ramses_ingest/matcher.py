@@ -23,6 +23,9 @@ from ramses_ingest.scanner import Clip
 _VALID_ID_PATTERN = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 _VALID_STEP_PATTERN = re.compile(r'^[A-Z0-9_]{1,20}$')
 
+# Cache for compiled regex patterns to avoid recompiling on every match
+_PATTERN_CACHE: dict[str, re.Pattern] = {}
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,7 +93,10 @@ class NamingRule:
     """If True, ignore the regex for sequence and use the parent directory name."""
 
     def compile(self) -> re.Pattern:
-        return re.compile(self.pattern, re.IGNORECASE)
+        """Compile the pattern, using cache to avoid redundant compilation."""
+        if self.pattern not in _PATTERN_CACHE:
+            _PATTERN_CACHE[self.pattern] = re.compile(self.pattern, re.IGNORECASE)
+        return _PATTERN_CACHE[self.pattern]
 
 
 class EDLMapper:

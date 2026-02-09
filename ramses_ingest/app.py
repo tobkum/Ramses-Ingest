@@ -611,29 +611,18 @@ class IngestEngine:
         # Phase 2.5: Parallel Thumbnail Generation (OPT #1)
         # Process all thumbnail jobs in parallel to avoid sequential FFmpeg calls
         thumbnail_jobs = [(res, res._thumbnail_job) for res in results if hasattr(res, '_thumbnail_job') and res._thumbnail_job]
-        
+
         if thumbnail_jobs and generate_thumbnails:
             import multiprocessing
             _log(f"Phase 2.5: Generating {len(thumbnail_jobs)} thumbnails in parallel...")
-            
-            # Limit workers to prevent resource exhaustion (FFmpeg is CPU/IO intensive)
-            max_workers = min(multiprocessing.cpu_count(), 4)
-            
-            def _generate_one_thumbnail(job_data):
-                """Worker function for parallel thumbnail generation."""
-                try:
-                    from ramses_ingest.preview import generate_thumbnail
-                    clip = job_data['clip']
-                    path = job_data['path']
-                    ocio_config = job_data['ocio_config']
-                    ocio_in = job_data['ocio_in']
-                    
-                    ok = generate_thumbnail(clip, path, ocio_config=ocio_config, ocio_in=ocio_in)
-                    return (path if ok else None, ok)
-                except Exception:
-                    return (None, False)
-            
-            with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+
+            # Limit workers to prevent resource exhaustion
+            # FFmpeg thumbnail generation is I/O bound (disk reads), not CPU bound
+            # ThreadPoolExecutor avoids ProcessPoolExecutor's pickle serialization issues on Windows
+            max_workers = min(multiprocessing.cpu_count() * 2, 8)
+
+            # Use module-level function (defined at top of file) for thumbnail generation
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 job_list = [job for _, job in thumbnail_jobs]
                 future_to_idx = {executor.submit(_generate_one_thumbnail, job): idx 
                                 for idx, job in enumerate(job_list)}

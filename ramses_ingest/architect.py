@@ -969,8 +969,13 @@ class NamingArchitectDialog(QDialog):
                 color = "#4ec9b0" if pct >= 80 else "#f39c12" if pct >= 50 else "#f44747"
                 self.match_stats.setText(f"{matched}/{total} matched ({pct}%)")
                 self.match_stats.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: bold;")
-            except:
+            except re.error:
+                # Invalid regex pattern
                 self.match_stats.setText("Invalid pattern")
+                self.match_stats.setStyleSheet("color: #f44747; font-size: 10px; font-weight: bold;")
+            except Exception as e:
+                # Unexpected error (memory, encoding issues, etc.)
+                self.match_stats.setText(f"Error: {type(e).__name__}")
                 self.match_stats.setStyleSheet("color: #f44747; font-size: 10px; font-weight: bold;")
         else:
             self.match_stats.setText("0/0 matched (0%)")

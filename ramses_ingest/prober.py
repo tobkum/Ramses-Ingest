@@ -74,19 +74,27 @@ def _load_cache():
             _METADATA_CACHE = {}
             _CACHE_ACCESS_TIMES = {}
 
+def _prune_lru_cache():
+    """Prune cache using LRU if it exceeds limit.
+
+    Must be called with _CACHE_LOCK held.
+    """
+    global _METADATA_CACHE, _CACHE_ACCESS_TIMES
+    if len(_METADATA_CACHE) > _MAX_CACHE_SIZE:
+        # Sort by access time (oldest first) and remove oldest entries
+        sorted_keys = sorted(_CACHE_ACCESS_TIMES.items(), key=lambda x: x[1])
+        num_to_remove = len(_METADATA_CACHE) - _MAX_CACHE_SIZE
+
+        for key, _ in sorted_keys[:num_to_remove]:
+            _METADATA_CACHE.pop(key, None)
+            _CACHE_ACCESS_TIMES.pop(key, None)
+
 def _save_cache():
     """Save cache to disk in msgpack format (or JSON fallback)."""
     global _METADATA_CACHE, _CACHE_ACCESS_TIMES, _CACHE_DIRTY
     try:
         # Prune cache using LRU if it exceeds limit
-        if len(_METADATA_CACHE) > _MAX_CACHE_SIZE:
-            # Sort by access time (oldest first) and remove oldest entries
-            sorted_keys = sorted(_CACHE_ACCESS_TIMES.items(), key=lambda x: x[1])
-            num_to_remove = len(_METADATA_CACHE) - _MAX_CACHE_SIZE
-
-            for key, _ in sorted_keys[:num_to_remove]:
-                _METADATA_CACHE.pop(key, None)
-                _CACHE_ACCESS_TIMES.pop(key, None)
+        _prune_lru_cache()
 
         cache_data = {
             "cache": _METADATA_CACHE,
@@ -274,6 +282,9 @@ def probe_file(file_path: str | Path) -> MediaInfo:
             _METADATA_CACHE[cache_key] = asdict(info)
             _CACHE_ACCESS_TIMES[cache_key] = time.time()
             _CACHE_DIRTY = True
+
+            # Prune cache proactively to prevent unbounded growth during long GUI sessions
+            _prune_lru_cache()
             # Note: Cache is flushed at end of processing via flush_cache()
 
     return info

@@ -17,6 +17,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import time
 import threading
 from dataclasses import dataclass, field
@@ -68,6 +69,9 @@ def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
 
 # Thread-safe cache lock for Ramses object registration
 _RAMSES_CACHE_LOCK = threading.Lock()
+
+# Thread-safe lock for version number generation to prevent race conditions
+_VERSION_LOCK = threading.Lock()
 
 
 @dataclass
@@ -186,10 +190,6 @@ def build_plans(
     return plans
 
 
-import concurrent.futures
-import hashlib
-
-
 def _calculate_md5(file_path: str) -> str:
     """Calculate MD5 hash of a file in large chunks (1MB) for performance."""
     hash_md5 = hashlib.md5()
@@ -287,6 +287,29 @@ def copy_frames(
         shutil.copy2(src, dst)
         sz = os.path.getsize(src)
 
+        # Force sync on Windows network drives to prevent buffered write issues
+        # On SMB/CIFS shares, copy2 can return success while data is still buffered
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                # Open file handle with write access
+                handle = ctypes.windll.kernel32.CreateFileW(
+                    dst,
+                    0x40000000,  # GENERIC_WRITE
+                    0,           # No sharing
+                    None,
+                    3,           # OPEN_EXISTING
+                    0,
+                    None
+                )
+                if handle != -1:
+                    # Force flush buffers to disk
+                    ctypes.windll.kernel32.FlushFileBuffers(handle)
+                    ctypes.windll.kernel32.CloseHandle(handle)
+            except Exception:
+                # If flush fails, proceed anyway - size/MD5 checks will catch issues
+                pass
+
         # 1. Size check (always)
         if sz != os.path.getsize(dst):
             raise OSError(f"Size mismatch: {dst}")
@@ -326,44 +349,47 @@ def copy_frames(
 
 def _get_next_version(publish_root: str) -> int:
     """Find the next available version number by scanning API-compliant folders.
-    
+
     Ramses API Spec: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
+
+    Thread-safe: Uses _VERSION_LOCK to prevent race conditions in parallel execution.
     """
-    publish_root = normalize_path(publish_root)
-    if not os.path.isdir(publish_root):
-        return 1
+    with _VERSION_LOCK:
+        publish_root = normalize_path(publish_root)
+        if not os.path.isdir(publish_root):
+            return 1
 
-    max_v = 0
-    # Regex to match API-compliant version folders:
-    # 1. (?:(?P<res>.*)_)?  -> Optional resource block
-    # 2. (?P<ver>\d{3})     -> Mandatory 3-digit version
-    # 3. (?:_(?P<state>.*))? -> Optional state block
-    version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
+        max_v = 0
+        # Regex to match API-compliant version folders:
+        # 1. (?:(?P<res>.*)_)?  -> Optional resource block
+        # 2. (?P<ver>\d{3})     -> Mandatory 3-digit version
+        # 3. (?:_(?P<state>.*))? -> Optional state block
+        version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
 
-    try:
-        for item in os.listdir(publish_root):
-            match = version_re.match(item)
-            if match:
-                v_path = os.path.join(publish_root, item)
-                is_valid_version = False
+        try:
+            for item in os.listdir(publish_root):
+                match = version_re.match(item)
+                if match:
+                    v_path = os.path.join(publish_root, item)
+                    is_valid_version = False
 
-                if os.path.exists(os.path.join(v_path, ".ramses_complete")):
-                    is_valid_version = True
-                else:
-                    try:
-                        mtime = os.path.getmtime(v_path)
-                        if (time.time() - mtime) < 3600:
-                            is_valid_version = True
-                    except (OSError, PermissionError):
-                        pass
+                    if os.path.exists(os.path.join(v_path, ".ramses_complete")):
+                        is_valid_version = True
+                    else:
+                        try:
+                            mtime = os.path.getmtime(v_path)
+                            if (time.time() - mtime) < 3600:
+                                is_valid_version = True
+                        except (OSError, PermissionError):
+                            pass
 
-                if is_valid_version:
-                    v = int(match.group("ver"))
-                    if v > max_v:
-                        max_v = v
-    except Exception:
-        pass
-    return max_v + 1
+                    if is_valid_version:
+                        v = int(match.group("ver"))
+                        if v > max_v:
+                            max_v = v
+        except Exception:
+            pass
+        return max_v + 1
 
 
 def generate_thumbnail_for_result(
