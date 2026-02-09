@@ -865,17 +865,21 @@ def register_ramses_objects(
             except Exception as exc:
                 log(f"  Sequence creation failed: {exc}")
         else:
-            # HEAL only if needed
+            # METADATA MINIMIZATION: Only update if changed
             current_data = seq_obj.data()
-            if (
-                current_data.get("folderPath") != seq_folder
-                or current_data.get("project") != project_uuid
-            ):
-                log(f"  Healing sequence {plan.sequence_id} metadata...")
+            needs_update = False
+            for key, val in seq_data.items():
+                if current_data.get(key) != val:
+                    needs_update = True
+                    break
+            
+            if needs_update:
+                log(f"  Updating sequence {plan.sequence_id} metadata...")
                 seq_obj.setData(seq_data)
 
     # 2. Handle Shot
     if plan.shot_id:
+        # ... (shot resolution logic remains same) ...
         shot_upper = plan.shot_id.upper()
         shot_obj = None
 
@@ -937,13 +941,16 @@ def register_ramses_objects(
             except Exception as exc:
                 log(f"  Shot creation failed: {exc}")
         else:
-            # HEAL only if needed
+            # METADATA MINIMIZATION: Only update if changed
             current_data = shot_obj.data()
-            if (
-                current_data.get("folderPath") != shot_folder
-                or current_data.get("project") != project_uuid
-            ):
-                log(f"  Healing shot {plan.shot_id} metadata...")
+            needs_update = False
+            for key, val in shot_data.items():
+                if current_data.get(key) != val:
+                    needs_update = True
+                    break
+            
+            if needs_update:
+                log(f"  Updating shot {plan.shot_id} metadata...")
                 shot_obj.setData(shot_data)
 
     # 3. Handle Status Update (HERO ONLY)
