@@ -726,16 +726,15 @@ def execute_plan(
         result.error = f"Ingest failed (Rolled back): {error_msg}"
         return result
 
-    # --- Generate thumbnail (Non-fatal) ---
-    if generate_thumbnail and plan.target_preview_dir and not dry_run:
+    # --- Generate thumbnail (HERO ONLY) ---
+    if generate_thumbnail and plan.target_preview_dir and not dry_run and not plan.resource:
         try:
             from ramses_ingest.preview import generate_thumbnail as gen_thumb
 
             os.makedirs(plan.target_preview_dir, exist_ok=True)
             
-            # Name include resource
-            res_suffix = f"_{plan.resource}" if plan.resource else ""
-            thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}{res_suffix}.jpg"
+            # Hero thumbnail name
+            thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
             
             thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
             _log("  Generating thumbnail...")
@@ -750,13 +749,12 @@ def execute_plan(
         except Exception as exc:
             _log(f"  Thumbnail (non-fatal): {exc}")
 
-    # --- Generate video proxy (Non-fatal) ---
-    if generate_proxy and plan.target_preview_dir and not dry_run:
+    # --- Generate video proxy (HERO ONLY) ---
+    if generate_proxy and plan.target_preview_dir and not dry_run and not plan.resource:
         try:
             from ramses_ingest.preview import generate_proxy as gen_proxy
 
-            res_suffix = f"_{plan.resource}" if plan.resource else ""
-            proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}{res_suffix}.mp4"
+            proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"
             
             proxy_path = os.path.join(plan.target_preview_dir, proxy_name)
             _log("  Generating video proxy...")
