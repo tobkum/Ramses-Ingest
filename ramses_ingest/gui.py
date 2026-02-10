@@ -1305,6 +1305,11 @@ class IngestWindow(QMainWindow):
         btn_edit.clicked.connect(self._on_edit_rules)
         rule_btns.addWidget(btn_edit)
 
+        btn_reset = QPushButton("Reset to Default")
+        btn_reset.clicked.connect(self._on_reset_rules)
+        btn_reset.setToolTip("Restore the default built-in naming rules")
+        rule_btns.addWidget(btn_reset)
+
         rule_lay.addLayout(rule_btns)
 
         lay.addWidget(rule_group)
@@ -2148,7 +2153,8 @@ class IngestWindow(QMainWindow):
         self._update_summary()
 
     def _populate_rule_combo(self) -> None:
-        rules, _ = load_rules()
+        # Use in-memory rules from engine (already loaded/updated)
+        rules = self._engine.rules
         for i, rule in enumerate(rules):
             label = rule.pattern[:40] + ("..." if len(rule.pattern) > 40 else "")
             self._rule_combo.addItem(f"Rule {i + 1}: {label}")
@@ -2465,14 +2471,50 @@ class IngestWindow(QMainWindow):
     def _on_edit_rules(self, _=None) -> None:
         dlg = RulesEditorDialog(DEFAULT_RULES_PATH, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
-            self._rule_combo.clear()
-            self._rule_combo.addItem("Auto-detect")
-            self._populate_rule_combo()
+            # Load updated rules from disk first
             rules, studio = load_rules()
             self._engine.rules = rules
             self._engine.studio_name = studio
             self._studio_edit.setText(studio)
+
+            # Then refresh the UI with the updated rules
+            self._rule_combo.clear()
+            self._rule_combo.addItem("Auto-detect")
+            self._populate_rule_combo()
             self._log("Rules and Studio name reloaded.")
+
+    def _on_reset_rules(self, _=None) -> None:
+        """Reset rules to the built-in defaults."""
+        from PySide6.QtWidgets import QMessageBox
+        from ramses_ingest.matcher import BUILTIN_RULES
+
+        reply = QMessageBox.question(
+            self,
+            "Reset to Default Rules",
+            "This will restore the default built-in naming rules and discard all custom rules.\n\n"
+            "Are you sure you want to continue?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            # Reset to built-in rules
+            self._engine.rules = BUILTIN_RULES.copy()
+            self._engine.studio_name = "Ramses Studio"
+            self._studio_edit.setText(self._engine.studio_name)
+
+            # Save to disk
+            save_rules(
+                self._engine.rules,
+                DEFAULT_RULES_PATH,
+                studio_name=self._engine.studio_name,
+            )
+
+            # Refresh UI
+            self._rule_combo.clear()
+            self._rule_combo.addItem("Auto-detect")
+            self._populate_rule_combo()
+            self._log("Rules reset to default built-in patterns.")
 
     def _on_launch_architect(self, _=None) -> None:
         """Launch the visual rule builder and apply the result."""
