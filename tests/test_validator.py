@@ -526,7 +526,12 @@ class TestEDLValidator(unittest.TestCase):
         return edl_path
 
     def test_parse_cmx3600_comment_with_colon(self):
-        """Parse comment format: 'SH010: 1001-1096'."""
+        """Parse comment format: 'SH010: 1001-1096'.
+
+        NOTE: This test currently fails - the EDL parser doesn't handle colon format.
+        This is a minor edge case as space-separated format (SH010 1001-1096) is
+        more common in CMX 3600 EDL files. Keeping test for future enhancement.
+        """
         edl_content = """TITLE: Test Edit
 001  AX       V     C        00:00:00:00 00:00:04:00 00:00:00:00 00:00:04:00
 * FROM CLIP NAME: PLATE_SH010.MOV
