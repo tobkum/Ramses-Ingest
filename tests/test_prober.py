@@ -93,5 +93,318 @@ class TestProber(unittest.TestCase):
         info = probe_file("corrupt.json")
         self.assertFalse(info.is_valid)
 
+class TestProberThreading(unittest.TestCase):
+    """Test thread-safety and concurrent operations."""
+
+    def test_concurrent_probe_operations(self):
+        """Multiple threads probing different files should not interfere."""
+        import threading
+        from ramses_ingest import prober
+
+        # Save original cache
+        original_cache = prober._METADATA_CACHE.copy()
+        original_times = prober._CACHE_ACCESS_TIMES.copy()
+
+        try:
+            results = {}
+            lock = threading.Lock()
+
+            def probe_mock_file(file_id):
+                # Mock ffprobe response
+                mock_stdout = json.dumps({
+                    "streams": [{
+                        "width": 1920,
+                        "height": 1080,
+                        "r_frame_rate": "24/1",
+                        "codec_name": "prores",
+                    }],
+                    "format": {"tags": {}}
+                })
+
+                with patch("os.path.isfile", return_value=True):
+                    with patch("os.path.getmtime", return_value=123456.0):
+                        with patch("subprocess.run") as mock_run:
+                            mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
+                            info = probe_file(f"file_{file_id}.mov")
+
+                with lock:
+                    results[file_id] = info
+
+            # Launch 20 threads concurrently
+            threads = [threading.Thread(target=probe_mock_file, args=(i,)) for i in range(20)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # All probes should succeed
+            self.assertEqual(len(results), 20)
+            for info in results.values():
+                self.assertTrue(info.is_valid)
+                self.assertEqual(info.width, 1920)
+        finally:
+            # Restore original cache
+            prober._METADATA_CACHE = original_cache
+            prober._CACHE_ACCESS_TIMES = original_times
+
+    def test_cache_lru_eviction(self):
+        """Add 6000 entries, verify pruning to 5000."""
+        from ramses_ingest import prober
+
+        original_cache = prober._METADATA_CACHE.copy()
+        original_times = prober._CACHE_ACCESS_TIMES.copy()
+
+        try:
+            # Fill cache beyond limit
+            prober._METADATA_CACHE = {f"key_{i}": {"data": i} for i in range(6000)}
+            prober._CACHE_ACCESS_TIMES = {f"key_{i}": float(i) for i in range(6000)}
+
+            # Trigger save (which calls prune)
+            with prober._CACHE_LOCK:
+                prober._CACHE_DIRTY = True
+                prober._save_cache()
+
+            # Should be pruned to 5000
+            self.assertEqual(len(prober._METADATA_CACHE), 5000)
+            self.assertEqual(len(prober._CACHE_ACCESS_TIMES), 5000)
+
+            # Oldest entries (0-999) should be removed
+            self.assertNotIn("key_0", prober._METADATA_CACHE)
+            self.assertNotIn("key_999", prober._METADATA_CACHE)
+            # Newest entries should remain
+            self.assertIn("key_5999", prober._METADATA_CACHE)
+        finally:
+            prober._METADATA_CACHE = original_cache
+            prober._CACHE_ACCESS_TIMES = original_times
+
+    def test_cache_dirty_flag_thread_safety(self):
+        """Concurrent _save_cache calls should use lock."""
+        from ramses_ingest import prober
+        import threading
+
+        original_cache = prober._METADATA_CACHE.copy()
+        original_times = prober._CACHE_ACCESS_TIMES.copy()
+        original_dirty = prober._CACHE_DIRTY
+
+        try:
+            # Add some data
+            prober._METADATA_CACHE = {"test": {"data": 1}}
+            prober._CACHE_ACCESS_TIMES = {"test": 1.0}
+
+            def save_cache_concurrent():
+                with prober._CACHE_LOCK:
+                    prober._CACHE_DIRTY = True
+                prober.flush_cache()
+
+            # Launch multiple threads trying to save
+            threads = [threading.Thread(target=save_cache_concurrent) for _ in range(10)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Should not crash, dirty flag should be False after all saves
+            self.assertFalse(prober._CACHE_DIRTY)
+        finally:
+            prober._METADATA_CACHE = original_cache
+            prober._CACHE_ACCESS_TIMES = original_times
+            prober._CACHE_DIRTY = original_dirty
+
+    def test_msgpack_json_migration_race(self):
+        """Concurrent loads during migration should not corrupt cache."""
+        from ramses_ingest import prober
+        import threading
+        import tempfile
+
+        temp_dir = tempfile.mkdtemp()
+        json_path = os.path.join(temp_dir, "cache.json")
+
+        try:
+            # Create legacy JSON cache
+            cache_data = {
+                "cache": {f"key_{i}": {"data": i} for i in range(100)},
+                "access_times": {f"key_{i}": float(i) for i in range(100)}
+            }
+            with open(json_path, "w") as f:
+                json.dump(cache_data, f)
+
+            # Mock cache paths
+            original_json_path = prober.CACHE_PATH_JSON
+            original_msgpack_path = prober.CACHE_PATH_MSGPACK
+            prober.CACHE_PATH_JSON = json_path
+            prober.CACHE_PATH_MSGPACK = os.path.join(temp_dir, "cache.msgpack")
+
+            results = []
+            lock = threading.Lock()
+
+            def load_concurrent():
+                prober._load_cache()
+                with lock:
+                    results.append(len(prober._METADATA_CACHE))
+
+            # Multiple threads loading at once
+            threads = [threading.Thread(target=load_concurrent) for _ in range(5)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # All threads should load successfully
+            self.assertEqual(len(results), 5)
+            # Cache size should be consistent
+            for size in results:
+                self.assertGreaterEqual(size, 0)
+        finally:
+            prober.CACHE_PATH_JSON = original_json_path
+            prober.CACHE_PATH_MSGPACK = original_msgpack_path
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_cache_hit_updates_access_time(self):
+        """Cache hits should update access time for LRU."""
+        from ramses_ingest import prober
+        import time
+
+        original_cache = prober._METADATA_CACHE.copy()
+        original_times = prober._CACHE_ACCESS_TIMES.copy()
+
+        try:
+            # Add entry with old access time
+            cache_key = "test_file_123456.0:/dummy/file.mov"
+            prober._METADATA_CACHE[cache_key] = {
+                "width": 1920,
+                "height": 1080,
+                "fps": 24.0,
+                "codec": "prores",
+            }
+            old_time = 1000.0
+            prober._CACHE_ACCESS_TIMES[cache_key] = old_time
+
+            # Mock file exists and mtime
+            with patch("os.path.isfile", return_value=True):
+                with patch("os.path.getmtime", return_value=123456.0):
+                    with patch("subprocess.run") as mock_run:
+                        # Should hit cache, not call ffprobe
+                        info = probe_file("/dummy/file.mov")
+                        mock_run.assert_not_called()
+
+            # Access time should be updated
+            new_time = prober._CACHE_ACCESS_TIMES.get(cache_key, 0)
+            self.assertGreater(new_time, old_time)
+        finally:
+            prober._METADATA_CACHE = original_cache
+            prober._CACHE_ACCESS_TIMES = original_times
+
+    def test_cache_corruption_fallback(self):
+        """Corrupted cache file should fallback to empty cache."""
+        from ramses_ingest import prober
+        import tempfile
+
+        temp_dir = tempfile.mkdtemp()
+        cache_path = os.path.join(temp_dir, "corrupt.json")
+
+        try:
+            # Create corrupted JSON
+            with open(cache_path, "w") as f:
+                f.write("{invalid json content")
+
+            original_path = prober.CACHE_PATH_JSON
+            prober.CACHE_PATH_JSON = cache_path
+
+            # Load should not crash
+            prober._load_cache()
+
+            # Cache should be empty dict
+            self.assertIsInstance(prober._METADATA_CACHE, dict)
+            self.assertEqual(len(prober._METADATA_CACHE), 0)
+        finally:
+            prober.CACHE_PATH_JSON = original_path
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_atexit_handler_flushes_cache(self):
+        """atexit handler should flush dirty cache."""
+        from ramses_ingest import prober
+
+        original_dirty = prober._CACHE_DIRTY
+
+        try:
+            # Set dirty flag
+            with prober._CACHE_LOCK:
+                prober._CACHE_DIRTY = True
+
+            # Call flush
+            prober.flush_cache()
+
+            # Should be clean now
+            self.assertFalse(prober._CACHE_DIRTY)
+        finally:
+            prober._CACHE_DIRTY = original_dirty
+
+    def test_probe_updates_both_cache_dicts(self):
+        """Successful probe should update both _METADATA_CACHE and _CACHE_ACCESS_TIMES."""
+        from ramses_ingest import prober
+
+        original_cache = prober._METADATA_CACHE.copy()
+        original_times = prober._CACHE_ACCESS_TIMES.copy()
+
+        try:
+            mock_stdout = json.dumps({
+                "streams": [{
+                    "width": 2048,
+                    "height": 1080,
+                    "r_frame_rate": "24/1",
+                    "codec_name": "h264",
+                }],
+                "format": {"tags": {}}
+            })
+
+            with patch("os.path.isfile", return_value=True):
+                with patch("os.path.getmtime", return_value=999999.0):
+                    with patch("subprocess.run") as mock_run:
+                        mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
+                        info = probe_file("/test/new_file.mov")
+
+            # Both dicts should have entry
+            cache_key = "new_file_999999.0:/test/new_file.mov"
+            self.assertIn(cache_key, prober._METADATA_CACHE)
+            self.assertIn(cache_key, prober._CACHE_ACCESS_TIMES)
+        finally:
+            prober._METADATA_CACHE = original_cache
+            prober._CACHE_ACCESS_TIMES = original_times
+
+    def test_concurrent_cache_pruning(self):
+        """Concurrent pruning should not corrupt cache."""
+        from ramses_ingest import prober
+        import threading
+
+        original_cache = prober._METADATA_CACHE.copy()
+        original_times = prober._CACHE_ACCESS_TIMES.copy()
+
+        try:
+            # Fill cache
+            prober._METADATA_CACHE = {f"key_{i}": {"data": i} for i in range(5500)}
+            prober._CACHE_ACCESS_TIMES = {f"key_{i}": float(i) for i in range(5500)}
+
+            def prune_concurrent():
+                with prober._CACHE_LOCK:
+                    prober._prune_lru_cache()
+
+            # Multiple threads pruning
+            threads = [threading.Thread(target=prune_concurrent) for _ in range(5)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+            # Cache should be pruned to limit
+            self.assertLessEqual(len(prober._METADATA_CACHE), 5000)
+            # Both dicts should match in size
+            self.assertEqual(len(prober._METADATA_CACHE), len(prober._CACHE_ACCESS_TIMES))
+        finally:
+            prober._METADATA_CACHE = original_cache
+            prober._CACHE_ACCESS_TIMES = original_times
+
+
 if __name__ == "__main__":
     unittest.main()

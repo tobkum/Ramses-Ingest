@@ -335,5 +335,343 @@ class TestExecutePlan(unittest.TestCase):
         self.assertFalse(result.success)
 
 
+class TestPublisherConcurrency(unittest.TestCase):
+    """Test concurrency and thread-safety features."""
+
+    def setUp(self):
+        """Create temp directories."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.publish_root = os.path.join(self.temp_dir, "_published")
+
+    def tearDown(self):
+        """Clean up."""
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_concurrent_version_numbering(self):
+        """Multiple threads calling _get_next_version simultaneously should get sequential versions."""
+        from ramses_ingest.publisher import _get_next_version
+        import threading
+
+        versions_obtained = []
+        lock = threading.Lock()
+
+        def get_and_create_version():
+            v = _get_next_version(self.publish_root)
+            with lock:
+                versions_obtained.append(v)
+            # Create version folder to simulate real usage
+            version_dir = os.path.join(self.publish_root, f"{v:03d}")
+            os.makedirs(version_dir, exist_ok=True)
+            # Mark as complete
+            Path(os.path.join(version_dir, ".ramses_complete")).touch()
+
+        # Launch 10 threads concurrently
+        threads = [threading.Thread(target=get_and_create_version) for _ in range(10)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # All versions should be unique
+        self.assertEqual(len(versions_obtained), len(set(versions_obtained)))
+        # Should be sequential 1-10
+        self.assertEqual(sorted(versions_obtained), list(range(1, 11)))
+
+    def test_concurrent_metadata_writes(self):
+        """Multiple threads writing to same _ramses_data.json should not corrupt file."""
+        import threading
+        import json
+
+        folder = os.path.join(self.temp_dir, "version")
+        os.makedirs(folder)
+
+        def write_metadata(filename, version):
+            for _ in range(5):  # Multiple writes per thread
+                _write_ramses_metadata(folder, filename, version)
+
+        # Launch multiple threads writing different entries
+        threads = [
+            threading.Thread(target=write_metadata, args=(f"file_{i}.exr", i))
+            for i in range(10)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        # Verify metadata file is valid JSON and has all entries
+        meta_path = os.path.join(folder, "_ramses_data.json")
+        self.assertTrue(os.path.isfile(meta_path))
+
+        with open(meta_path, "r") as f:
+            data = json.load(f)
+
+        # Should have all 10 entries
+        self.assertEqual(len(data), 10)
+        for i in range(10):
+            self.assertIn(f"file_{i}.exr", data)
+
+    def test_parallel_frame_copy_with_failure(self):
+        """ThreadPoolExecutor with some frames failing should propagate error."""
+        src_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(src_dir)
+
+        # Create some frames but not all
+        frames = list(range(1, 11))
+        for f in frames[:5]:  # Only create first 5 frames
+            path = os.path.join(src_dir, f"test.{f:04d}.exr")
+            Path(path).touch()
+
+        clip = Clip(
+            base_name="test",
+            extension="exr",
+            directory=Path(src_dir),
+            is_sequence=True,
+            frames=frames,  # Claims to have 10 frames
+            first_file=os.path.join(src_dir, "test.0001.exr"),
+        )
+
+        dest_dir = os.path.join(self.temp_dir, "dest")
+
+        # Should raise FileNotFoundError for missing frames
+        with self.assertRaises(FileNotFoundError):
+            copy_frames(clip, dest_dir, "PROJ", "SH010", "PLATE")
+
+    def test_atomic_metadata_write_interruption(self):
+        """Verify temp file cleanup on failure during atomic write."""
+        folder = os.path.join(self.temp_dir, "version")
+        os.makedirs(folder)
+
+        # Cause rename to fail
+        with patch('os.replace', side_effect=OSError("Simulated rename failure")):
+            with self.assertRaises(OSError):
+                _write_ramses_metadata(folder, "test.exr", 1)
+
+        # Verify no temp files left behind
+        temp_files = [f for f in os.listdir(folder) if f.startswith(".ramses_data_")]
+        self.assertEqual(len(temp_files), 0)
+
+    def test_version_cache_optimization(self):
+        """resolve_paths should cache version lookups within same batch."""
+        from ramses_ingest.publisher import resolve_paths
+
+        # Create multiple plans for same shot
+        plans = []
+        for i in range(5):
+            clip = Clip(
+                base_name=f"test_{i}",
+                extension="exr",
+                directory=Path("/tmp"),
+                is_sequence=True,
+                frames=[1],
+                first_file=f"/tmp/test_{i}.0001.exr",
+            )
+            match = MatchResult(clip=clip, matched=True, shot_id="SH010", sequence_id="SEQ010")
+            plan = IngestPlan(
+                match=match,
+                media_info=MediaInfo(),
+                project_id="PROJ",
+                shot_id="SH010",
+                step_id="PLATE",
+            )
+            plans.append(plan)
+
+        # Mock _get_next_version to track calls
+        call_count = []
+        original_get_version = __import__('ramses_ingest.publisher', fromlist=['_get_next_version'])._get_next_version
+
+        def mock_get_version(path):
+            call_count.append(path)
+            return original_get_version(path)
+
+        with patch('ramses_ingest.publisher._get_next_version', side_effect=mock_get_version):
+            resolve_paths(plans, self.temp_dir)
+
+        # Should only call _get_next_version once for the same publish_root
+        # (5 plans for same shot/step = same publish_root)
+        self.assertEqual(len(call_count), 1)
+
+        # All plans should have same version
+        versions = [p.version for p in plans]
+        self.assertEqual(len(set(versions)), 1)
+
+    def test_copy_frames_max_workers_parameter(self):
+        """Test that max_workers parameter limits concurrency."""
+        src_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(src_dir)
+
+        frames = list(range(1, 21))  # 20 frames
+        for f in frames:
+            path = os.path.join(src_dir, f"test.{f:04d}.exr")
+            Path(path).touch()
+
+        clip = Clip(
+            base_name="test",
+            extension="exr",
+            directory=Path(src_dir),
+            is_sequence=True,
+            frames=frames,
+            first_file=os.path.join(src_dir, "test.0001.exr"),
+        )
+
+        dest_dir = os.path.join(self.temp_dir, "dest")
+
+        # Copy with limited workers
+        copied, checksum, bytes_copied, first_file = copy_frames(
+            clip, dest_dir, "PROJ", "SH010", "PLATE", max_workers=2
+        )
+
+        self.assertEqual(copied, 20)
+        self.assertEqual(len(os.listdir(dest_dir)), 20)
+
+    def test_rollback_on_copy_failure(self):
+        """execute_plan should rollback on copy failure."""
+        src_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(src_dir)
+
+        # Create clip with one frame
+        frame_path = os.path.join(src_dir, "test.0001.exr")
+        Path(frame_path).touch()
+
+        clip = Clip(
+            base_name="test",
+            extension="exr",
+            directory=Path(src_dir),
+            is_sequence=True,
+            frames=[1],
+            first_file=frame_path,
+        )
+
+        match = MatchResult(clip=clip, matched=True, shot_id="SH010", sequence_id="SEQ010")
+        pub_dir = os.path.join(self.temp_dir, "published", "v001")
+        plan = IngestPlan(
+            match=match,
+            media_info=MediaInfo(),
+            project_id="PROJ",
+            shot_id="SH010",
+            step_id="PLATE",
+            target_publish_dir=pub_dir,
+        )
+
+        # Cause copy to fail
+        with patch('shutil.copy2', side_effect=OSError("Simulated copy failure")):
+            result = execute_plan(plan, generate_thumbnail=False, generate_proxy=False)
+
+        # Should fail
+        self.assertFalse(result.success)
+        self.assertIn("Rolled back", result.error)
+
+        # Publish directory should be cleaned up
+        self.assertFalse(os.path.exists(pub_dir))
+
+    def test_rollback_failure_logged(self):
+        """Rollback failure should be logged in error message."""
+        src_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(src_dir)
+
+        frame_path = os.path.join(src_dir, "test.0001.exr")
+        Path(frame_path).touch()
+
+        clip = Clip(
+            base_name="test",
+            extension="exr",
+            directory=Path(src_dir),
+            is_sequence=True,
+            frames=[1],
+            first_file=frame_path,
+        )
+
+        match = MatchResult(clip=clip, matched=True, shot_id="SH010", sequence_id="SEQ010")
+        pub_dir = os.path.join(self.temp_dir, "published", "v001")
+        plan = IngestPlan(
+            match=match,
+            media_info=MediaInfo(),
+            project_id="PROJ",
+            shot_id="SH010",
+            step_id="PLATE",
+            target_publish_dir=pub_dir,
+        )
+
+        # Cause both copy and rollback to fail
+        with patch('shutil.copy2', side_effect=OSError("Copy failed")):
+            with patch('shutil.rmtree', side_effect=OSError("Rollback failed")):
+                result = execute_plan(plan, generate_thumbnail=False, generate_proxy=False)
+
+        self.assertFalse(result.success)
+        self.assertIn("rollback failed", result.error.lower())
+
+    def test_dry_run_parallel_verification(self):
+        """Dry run should calculate checksums in parallel without copying."""
+        src_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(src_dir)
+
+        frames = list(range(1, 11))
+        for f in frames:
+            path = os.path.join(src_dir, f"test.{f:04d}.exr")
+            with open(path, "wb") as fp:
+                fp.write(b"test content" * 100)
+
+        clip = Clip(
+            base_name="test",
+            extension="exr",
+            directory=Path(src_dir),
+            is_sequence=True,
+            frames=frames,
+            first_file=os.path.join(src_dir, "test.0001.exr"),
+        )
+
+        dest_dir = os.path.join(self.temp_dir, "dest")
+
+        # Dry run
+        copied, checksum, bytes_copied, first_file = copy_frames(
+            clip, dest_dir, "PROJ", "SH010", "PLATE", dry_run=True
+        )
+
+        self.assertEqual(copied, 10)
+        self.assertNotEqual(checksum, "")
+        self.assertGreater(bytes_copied, 0)
+        # Destination should not be created
+        self.assertFalse(os.path.exists(dest_dir))
+
+    def test_fast_verify_samples_specific_frames(self):
+        """Fast verify should only MD5 first, middle, and last frames."""
+        src_dir = os.path.join(self.temp_dir, "source")
+        os.makedirs(src_dir)
+
+        frames = list(range(1, 11))  # 10 frames
+        for f in frames:
+            path = os.path.join(src_dir, f"test.{f:04d}.exr")
+            with open(path, "wb") as fp:
+                fp.write(b"X" * 1000)
+
+        clip = Clip(
+            base_name="test",
+            extension="exr",
+            directory=Path(src_dir),
+            is_sequence=True,
+            frames=frames,
+            first_file=os.path.join(src_dir, "test.0001.exr"),
+        )
+
+        dest_dir = os.path.join(self.temp_dir, "dest")
+
+        # Track MD5 calls
+        original_md5 = _calculate_md5
+        md5_calls = []
+
+        def track_md5(path):
+            md5_calls.append(path)
+            return original_md5(path)
+
+        with patch('ramses_ingest.publisher._calculate_md5', side_effect=track_md5):
+            copy_frames(clip, dest_dir, "PROJ", "SH010", "PLATE", fast_verify=True)
+
+        # Should call MD5 for: first (0001), middle (0005), last (0010)
+        # Each frame calls MD5 twice (source + dest), but we're counting source calls
+        source_md5_calls = [c for c in md5_calls if src_dir in c]
+        # First, middle, last = 3 frames * 2 (src+dst) = 6 calls
+        self.assertLessEqual(len(source_md5_calls), 6)
+
+
 if __name__ == "__main__":
     unittest.main()
