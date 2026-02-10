@@ -35,7 +35,7 @@ Technical ingest tool for [Ramses](https://ramses.rxlab.guide/) production manag
 ## Installation
 
 ```bash
-git clone https://github.com/your-org/ramses-ingest.git
+git clone https://github.com/tobkum/Ramses-Ingest.git
 cd ramses-ingest
 pip install -r requirements.txt
 ```
