@@ -66,7 +66,7 @@ class Clip:
     @property
     def frame_count(self) -> int:
         """Number of files/frames in this clip. Returns 1 for movie files."""
-        if self.is_sequence:
+        if self.is_sequence and self.frames:
             return len(self.frames)
         return 1
 

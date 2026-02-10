@@ -87,6 +87,12 @@ def generate_proxy(
     ocio_in: str = "sRGB",
 ) -> bool:
     """Transcode *clip* to a lightweight H.264 MP4 proxy in sRGB."""
+    # Validate clip properties before ffmpeg call
+    if not clip.first_file or not os.path.isfile(clip.first_file):
+        return False
+    if clip.is_sequence and not clip.frames:
+        return False
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
     vf_chain = [f"scale={PROXY_WIDTH}:-2"]

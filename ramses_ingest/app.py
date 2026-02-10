@@ -48,9 +48,12 @@ def _generate_one_thumbnail(job_data):
         ocio_config = job_data['ocio_config']
         ocio_in = job_data['ocio_in']
 
-        ok = generate_thumbnail(clip, path, ocio_config=ocio_config, ocio_in=ocio_in)        
+        ok = generate_thumbnail(clip, path, ocio_config=ocio_config, ocio_in=ocio_in)
         return (path if ok else None, ok)
-    except Exception:
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Thumbnail generation failed for {job_data.get('path', 'unknown')}: {e}")
         return (None, False)
 
 
@@ -215,8 +218,13 @@ class IngestEngine:
             for seq in all_seqs:
                 if seq.get("project") == project_uuid:
                     sn = seq.shortName()
+                    if not sn:  # Null check for shortName()
+                        continue
+                    seq_uuid = seq.uuid()
+                    if not seq_uuid:  # Null check for uuid()
+                        continue
                     self._existing_sequences.append(sn)
-                    self._sequence_uuids[sn.upper()] = seq.uuid()
+                    self._sequence_uuids[sn.upper()] = seq_uuid
                     # Store sequence-specific overrides
                     self._sequence_settings[sn.upper()] = (
                         seq.framerate(), seq.width(), seq.height()
@@ -229,6 +237,8 @@ class IngestEngine:
             for shot in all_shots:
                 if shot.get("project") == project_uuid:
                     sn = shot.shortName()
+                    if not sn:  # Null check for shortName()
+                        continue
                     self._existing_shots.append(sn)
                     self._shot_objects[sn.upper()] = shot
 
@@ -375,7 +385,8 @@ class IngestEngine:
         def _probe_one(clip: Clip) -> tuple[str, MediaInfo]:
             try:
                 return clip.first_file, probe_file(clip.first_file)
-            except Exception:
+            except Exception as e:
+                logger.error(f"Probe failed for {clip.first_file}: {e}")
                 return clip.first_file, MediaInfo()
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=_optimal_io_workers()) as executor:
@@ -629,13 +640,21 @@ class IngestEngine:
                 
                 for future in concurrent.futures.as_completed(future_to_idx):
                     idx = future_to_idx[future]
+                    # Bounds check: Validate idx before accessing thumbnail_jobs
+                    if idx < 0 or idx >= len(thumbnail_jobs):
+                        logger.error(f"Invalid thumbnail job index {idx} (max: {len(thumbnail_jobs)-1})")
+                        continue
                     result_obj, _ = thumbnail_jobs[idx]
                     try:
                         thumb_path, success = future.result(timeout=120)
                         if success and thumb_path:
                             result_obj.preview_path = thumb_path
-                    except Exception:
-                        pass  # Non-fatal, thumbnail generation failed
+                    except concurrent.futures.TimeoutExpired:
+                        logger.warning(f"Thumbnail generation timed out after 120s for {result_obj.plan.shot_id}")
+                    except concurrent.futures.CancelledError:
+                        logger.warning(f"Thumbnail generation was cancelled for {result_obj.plan.shot_id}")
+                    except Exception as e:
+                        logger.error(f"Thumbnail generation failed for {result_obj.plan.shot_id}: {e}")
                         
             _log(f"  Generated thumbnails for {len([r for r in results if r.preview_path])} clips")
 

@@ -27,7 +27,7 @@ CACHE_PATH_JSON = os.path.join(os.path.expanduser("~"), ".ramses_ingest_cache.js
 _METADATA_CACHE: dict[str, dict] = {}
 _CACHE_ACCESS_TIMES: dict[str, float] = {}  # Track last access time for LRU
 _CACHE_LOCK = threading.Lock()  # Thread-safe cache access
-_CACHE_DIRTY = False  # Batch writes instead of writing on every probe
+_CACHE_DIRTY = False  # Batch writes instead of writing on every probe (must be accessed with _CACHE_LOCK)
 _MAX_CACHE_SIZE = 5000
 
 # Try to import msgpack for 10x faster cache (fallback to JSON if unavailable)
@@ -41,38 +41,50 @@ except ImportError:
 def _load_cache():
     """Load cache from disk, auto-migrating from JSON to msgpack if needed."""
     global _METADATA_CACHE, _CACHE_ACCESS_TIMES
-    
+
+    # Initialize to safe defaults to prevent crashes on load failure
+    _METADATA_CACHE = {}
+    _CACHE_ACCESS_TIMES = {}
+
     # Try msgpack first (10x faster)
     if _USE_MSGPACK and os.path.exists(CACHE_PATH_MSGPACK):
         try:
             with open(CACHE_PATH_MSGPACK, "rb") as f:
                 data = msgpack.unpack(f, raw=False)
-                _METADATA_CACHE = data.get("cache", {})
-                _CACHE_ACCESS_TIMES = data.get("access_times", {})
+                if isinstance(data, dict):
+                    _METADATA_CACHE = data.get("cache", {})
+                    _CACHE_ACCESS_TIMES = data.get("access_times", {})
             return
         except Exception as e:
             logger.warning(f"Failed to load msgpack cache: {e}, trying JSON fallback")
-    
+            # Reset to empty on msgpack failure
+            _METADATA_CACHE = {}
+            _CACHE_ACCESS_TIMES = {}
+
     # Fallback to JSON (legacy or if msgpack failed)
     if os.path.exists(CACHE_PATH_JSON):
         try:
             with open(CACHE_PATH_JSON, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                _METADATA_CACHE = data.get("cache", {})
-                _CACHE_ACCESS_TIMES = data.get("access_times", {})
-            
+                if isinstance(data, dict):
+                    _METADATA_CACHE = data.get("cache", {})
+                    _CACHE_ACCESS_TIMES = data.get("access_times", {})
+
             # Auto-migrate to msgpack if available
-            if _USE_MSGPACK:
+            if _USE_MSGPACK and _METADATA_CACHE:
                 logger.info(f"Migrating cache from JSON to msgpack ({len(_METADATA_CACHE)} entries)")
-                _save_cache()  # This will save in msgpack format
+                with _CACHE_LOCK:
+                    global _CACHE_DIRTY
+                    _CACHE_DIRTY = True
+                    _save_cache()  # This will save in msgpack format
                 # Clean up old JSON file after successful migration
                 try:
                     os.remove(CACHE_PATH_JSON)
                 except Exception:
                     pass
-        except Exception:
-            _METADATA_CACHE = {}
-            _CACHE_ACCESS_TIMES = {}
+        except Exception as e:
+            logger.warning(f"Failed to load JSON cache: {e}")
+            # Already initialized to empty above
 
 def _prune_lru_cache():
     """Prune cache using LRU if it exceeds limit.
@@ -80,17 +92,21 @@ def _prune_lru_cache():
     Must be called with _CACHE_LOCK held.
     """
     global _METADATA_CACHE, _CACHE_ACCESS_TIMES
-    if len(_METADATA_CACHE) > _MAX_CACHE_SIZE:
+    current_size = len(_METADATA_CACHE)
+    if current_size > _MAX_CACHE_SIZE:
         # Sort by access time (oldest first) and remove oldest entries
         sorted_keys = sorted(_CACHE_ACCESS_TIMES.items(), key=lambda x: x[1])
-        num_to_remove = len(_METADATA_CACHE) - _MAX_CACHE_SIZE
+        num_to_remove = current_size - _MAX_CACHE_SIZE
 
         for key, _ in sorted_keys[:num_to_remove]:
             _METADATA_CACHE.pop(key, None)
             _CACHE_ACCESS_TIMES.pop(key, None)
 
 def _save_cache():
-    """Save cache to disk in msgpack format (or JSON fallback)."""
+    """Save cache to disk in msgpack format (or JSON fallback).
+
+    Must be called with _CACHE_LOCK held.
+    """
     global _METADATA_CACHE, _CACHE_ACCESS_TIMES, _CACHE_DIRTY
     try:
         # Prune cache using LRU if it exceeds limit
@@ -100,7 +116,7 @@ def _save_cache():
             "cache": _METADATA_CACHE,
             "access_times": _CACHE_ACCESS_TIMES
         }
-        
+
         if _USE_MSGPACK:
             # Use msgpack (10x faster)
             cache_path = CACHE_PATH_MSGPACK
@@ -113,15 +129,15 @@ def _save_cache():
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(cache_data, f)
-        
+
         _CACHE_DIRTY = False
     except Exception:
         pass
 
 def flush_cache():
     """Flush dirty cache to disk. Call this at the end of processing."""
-    global _CACHE_DIRTY
     with _CACHE_LOCK:
+        global _CACHE_DIRTY
         if _CACHE_DIRTY:
             _save_cache()
 

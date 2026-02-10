@@ -258,6 +258,10 @@ def copy_frames(
                 str(clip.directory),
                 f"{clip.base_name}{separator}{str(frame).zfill(padding)}.{clip.extension}",
             )
+            # Validate source file exists before adding to copy list
+            if not os.path.isfile(src):
+                raise FileNotFoundError(f"Source frame missing: {src}")
+
             dst_name = f"{ramses_base}.{str(frame).zfill(padding)}.{clip.extension}"
             dst = os.path.join(dest_dir, dst_name)
 
@@ -272,6 +276,10 @@ def copy_frames(
             frames_to_copy.append((src, dst, dst_name, needs_md5, i == 0))
     else:
         src = clip.first_file
+        # Validate source file exists
+        if not os.path.isfile(src):
+            raise FileNotFoundError(f"Source file missing: {src}")
+
         dst_name = f"{ramses_base}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
         frames_to_copy.append((src, dst, dst_name, True, True))
@@ -285,11 +293,12 @@ def copy_frames(
             return checksum, sz, dst_name, is_first
 
         shutil.copy2(src, dst)
-        sz = os.path.getsize(src)
+        sz = os.path.getsize(dst)  # Read destination size for verification
 
         # Force sync on Windows network drives to prevent buffered write issues
         # On SMB/CIFS shares, copy2 can return success while data is still buffered
         if sys.platform == 'win32':
+            handle = -1
             try:
                 import ctypes
                 # Open file handle with write access
@@ -305,10 +314,17 @@ def copy_frames(
                 if handle != -1:
                     # Force flush buffers to disk
                     ctypes.windll.kernel32.FlushFileBuffers(handle)
-                    ctypes.windll.kernel32.CloseHandle(handle)
             except Exception:
                 # If flush fails, proceed anyway - size/MD5 checks will catch issues
                 pass
+            finally:
+                # Always close handle if it was opened successfully
+                if handle != -1:
+                    try:
+                        import ctypes
+                        ctypes.windll.kernel32.CloseHandle(handle)
+                    except Exception:
+                        pass
 
         # 1. Size check (always)
         if sz != os.path.getsize(dst):
@@ -317,11 +333,15 @@ def copy_frames(
         # 2. MD5 check (conditional)
         checksum = ""
         if needs_md5:
-            src_md5 = _calculate_md5(src)
-            dst_md5 = _calculate_md5(dst)
-            if src_md5 != dst_md5:
-                raise OSError(f"Checksum mismatch: {dst}")
-            checksum = src_md5
+            try:
+                src_md5 = _calculate_md5(src)
+                dst_md5 = _calculate_md5(dst)
+                if src_md5 != dst_md5:
+                    raise OSError(f"Checksum mismatch: {dst}")
+                checksum = src_md5
+            except OSError as e:
+                # Preserve original OS error (permission denied, disk full, etc.)
+                raise OSError(f"MD5 verification failed for {dst}: {e}") from e
 
         return checksum, sz, dst_name, is_first
 
@@ -357,6 +377,11 @@ def _get_next_version(publish_root: str) -> int:
     with _VERSION_LOCK:
         publish_root = normalize_path(publish_root)
         if not os.path.isdir(publish_root):
+            # Create folder inside lock to prevent race condition
+            try:
+                os.makedirs(publish_root, exist_ok=True)
+            except OSError:
+                pass
             return 1
 
         max_v = 0
@@ -521,6 +546,17 @@ def resolve_paths(
         shot_id = plan.shot_id.upper()
         step_id = plan.step_id
 
+        # Sanitize IDs to prevent path traversal
+        if '/' in proj_id or '\\' in proj_id or '..' in proj_id:
+            plan.error = f"Invalid project ID contains path separators: {proj_id}"
+            continue
+        if '/' in shot_id or '\\' in shot_id or '..' in shot_id:
+            plan.error = f"Invalid shot ID contains path separators: {shot_id}"
+            continue
+        if '/' in step_id or '\\' in step_id or '..' in step_id:
+            plan.error = f"Invalid step ID contains path separators: {step_id}"
+            continue
+
         # Build standard Shot Root folder name: PROJ_S_SH010
         snm = RamFileInfo()
         snm.project = proj_id
@@ -544,8 +580,16 @@ def resolve_paths(
         publish_root = os.path.join(step_folder, "_published")
         if publish_root not in version_cache:
             version_cache[publish_root] = _get_next_version(publish_root)
-        
+
         plan.version = version_cache[publish_root]
+
+        # Validate version number and state
+        if plan.version <= 0 or plan.version > 999:
+            plan.error = f"Invalid version number: {plan.version}"
+            continue
+        if '/' in plan.state or '\\' in plan.state:
+            plan.error = f"Invalid state contains path separators: {plan.state}"
+            continue
 
         # API COMPLIANT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
         if plan.resource:
@@ -630,7 +674,10 @@ def _write_ramses_metadata(
     comment: str = "",
     timecode: str = "",
 ) -> None:
-    """Write a ``_ramses_data.json`` sidecar file for the published version."""
+    """Write a ``_ramses_data.json`` sidecar file for the published version.
+
+    Uses atomic write pattern (temp file + rename) to prevent corruption.
+    """
     meta_path = os.path.join(folder, "_ramses_data.json")
 
     data = {}
@@ -653,8 +700,22 @@ def _write_ramses_metadata(
     data[filename] = entry
 
     os.makedirs(folder, exist_ok=True)
-    with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+
+    # Atomic write: write to temp file, then rename
+    import tempfile
+    temp_fd, temp_path = tempfile.mkstemp(dir=folder, prefix=".ramses_data_", suffix=".tmp")
+    try:
+        with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+        # Atomic rename (POSIX) or best-effort on Windows
+        os.replace(temp_path, meta_path)
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            os.remove(temp_path)
+        except Exception:
+            pass
+        raise
 
 
 def execute_plan(
@@ -708,6 +769,7 @@ def execute_plan(
         try:
             register_ramses_objects(plan, _log)
         except Exception as exc:
+            # Non-fatal: Log and continue (don't re-raise)
             _log(f"  Ramses API (non-fatal): {exc}")
 
     # --- Transactional Execution (Copy + Metadata) ---
@@ -756,8 +818,10 @@ def execute_plan(
                 shutil.rmtree(plan.target_publish_dir)
                 _log("  Rollback successful: Cleaned up partial files.")
             except Exception as rollback_exc:
-                _log(f"  ROLLBACK FAILED: Could not delete {plan.target_publish_dir}: {rollback_exc}")
-        
+                _log(f"  WARNING: Rollback failed - {plan.target_publish_dir}: {rollback_exc}")
+                result.error = f"Ingest failed AND rollback failed: {error_msg} | Rollback error: {rollback_exc}"
+                return result
+
         result.error = f"Ingest failed (Rolled back): {error_msg}"
         return result
 
@@ -772,13 +836,18 @@ def execute_plan(
             thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
             thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
         else:
+            # Sanitize resource string to prevent path traversal
+            safe_resource = re.sub(r'[/\\:*?"<>|]', '_', plan.resource)
+            if '..' in safe_resource or safe_resource.startswith('.'):
+                safe_resource = safe_resource.replace('..', '_').lstrip('.')
+
             # Auxiliary: temporary storage for report embedding only
             import tempfile
             t_dir = tempfile.gettempdir()
             # Unique name to avoid collisions in system temp
-            t_name = f"ram_tmp_{plan.project_id}_{plan.shot_id}_{plan.resource}_{int(time.time())}.jpg"
+            t_name = f"ram_tmp_{plan.project_id}_{plan.shot_id}_{safe_resource}_{int(time.time())}.jpg"
             thumb_path = os.path.join(t_dir, t_name)
-        
+
         # Store job for batch processing (avoids sequential FFmpeg calls)
         result._thumbnail_job = {
             'clip': clip,
@@ -794,7 +863,7 @@ def execute_plan(
             from ramses_ingest.preview import generate_proxy as gen_proxy
 
             proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"
-            
+
             proxy_path = os.path.join(plan.target_preview_dir, proxy_name)
             _log("  Generating video proxy...")
             gen_proxy(
@@ -804,6 +873,7 @@ def execute_plan(
                 ocio_in=ocio_in,
             )
         except Exception as exc:
+            # Non-fatal: Log and continue (don't re-raise)
             _log(f"  Proxy (non-fatal): {exc}")
 
     # Mark version as complete (prevents zombie detection on next ingest)
