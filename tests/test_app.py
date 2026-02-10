@@ -18,21 +18,35 @@ from ramses_ingest.scanner import Clip
 class TestIngestEngine(unittest.TestCase):
     def setUp(self):
         self.engine = IngestEngine()
-        # Mock connection as True
+        # Mock connection as True with required project properties
         self.engine._connected = True
         self.engine._project_id = "TEST"
         self.engine._project_path = "/tmp/test_project"
+        self.engine._project_fps = 24.0
+        self.engine._project_width = 1920
+        self.engine._project_height = 1080
 
-    @patch("ramses_ingest.app.register_ramses_objects")
+    @patch("ramses_ingest.publisher.register_ramses_objects")
     @patch("ramses_ingest.app.execute_plan")
     @patch("ramses_ingest.reporting.generate_html_report")
     def test_execute_two_phase_flow(self, mock_report, mock_exec, mock_reg):
-        # Setup plans
+        # Setup plans with all required fields for execution
         clip = Clip("shot", "mov", Path("/tmp"))
-        plan = IngestPlan(MatchResult(clip, matched=True), MediaInfo(), "SEQ", "SHOT")
-        
+        match = MatchResult(clip, matched=True, shot_id="SHOT", sequence_id="SEQ")
+        plan = IngestPlan(
+            match=match,
+            media_info=MediaInfo(),
+            sequence_id="SEQ",
+            shot_id="SHOT",
+            project_id="TEST",
+            target_publish_dir="/tmp/test_project/shots/SHOT/PLATE/_published/001_WIP"
+        )
+
         mock_exec.return_value = MagicMock(success=True, plan=plan)
         mock_report.return_value = True
+
+        # Debug: verify plan is executable before calling execute
+        self.assertTrue(plan.can_execute, f"Plan should be executable. Error: {plan.error}")
 
         results = self.engine.execute([plan])
 

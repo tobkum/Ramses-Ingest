@@ -73,6 +73,9 @@ _RAMSES_CACHE_LOCK = threading.Lock()
 # Thread-safe lock for version number generation to prevent race conditions
 _VERSION_LOCK = threading.Lock()
 
+# Thread-safe lock for metadata writes to prevent read-modify-write race conditions
+_METADATA_WRITE_LOCK = threading.Lock()
+
 
 @dataclass
 class IngestPlan:
@@ -292,8 +295,9 @@ def copy_frames(
             checksum = _calculate_md5(src) if needs_md5 else "skipped"
             return checksum, sz, dst_name, is_first
 
+        src_sz = os.path.getsize(src)  # Read source size before copy
         shutil.copy2(src, dst)
-        sz = os.path.getsize(dst)  # Read destination size for verification
+        dst_sz = os.path.getsize(dst)  # Read destination size for verification
 
         # Force sync on Windows network drives to prevent buffered write issues
         # On SMB/CIFS shares, copy2 can return success while data is still buffered
@@ -326,9 +330,9 @@ def copy_frames(
                     except Exception:
                         pass
 
-        # 1. Size check (always)
-        if sz != os.path.getsize(dst):
-            raise OSError(f"Size mismatch: {dst}")
+        # 1. Size check (always) - compare source vs destination
+        if src_sz != dst_sz:
+            raise OSError(f"Size mismatch: {dst} (source: {src_sz} bytes, dest: {dst_sz} bytes)")
 
         # 2. MD5 check (conditional)
         checksum = ""
@@ -343,7 +347,7 @@ def copy_frames(
                 # Preserve original OS error (permission denied, disk full, etc.)
                 raise OSError(f"MD5 verification failed for {dst}: {e}") from e
 
-        return checksum, sz, dst_name, is_first
+        return checksum, dst_sz, dst_name, is_first
 
     copied_count = 0
     total_frames = len(frames_to_copy)
@@ -382,6 +386,14 @@ def _get_next_version(publish_root: str) -> int:
                 os.makedirs(publish_root, exist_ok=True)
             except OSError:
                 pass
+            # Create placeholder for version 1 to prevent race condition
+            placeholder_path = os.path.join(publish_root, "001")
+            try:
+                os.makedirs(placeholder_path, exist_ok=True)
+                marker_path = os.path.join(placeholder_path, ".ramses_reserved")
+                Path(marker_path).touch(exist_ok=True)
+            except (OSError, PermissionError):
+                pass
             return 1
 
         max_v = 0
@@ -398,8 +410,13 @@ def _get_next_version(publish_root: str) -> int:
                     v_path = os.path.join(publish_root, item)
                     is_valid_version = False
 
+                    # Check for completion marker (permanent)
                     if os.path.exists(os.path.join(v_path, ".ramses_complete")):
                         is_valid_version = True
+                    # Check for reservation marker (temporary, prevents race conditions)
+                    elif os.path.exists(os.path.join(v_path, ".ramses_reserved")):
+                        is_valid_version = True
+                    # Fallback: Check mtime (for backwards compatibility with old versions)
                     else:
                         try:
                             mtime = os.path.getmtime(v_path)
@@ -414,7 +431,22 @@ def _get_next_version(publish_root: str) -> int:
                             max_v = v
         except Exception:
             pass
-        return max_v + 1
+
+        next_version = max_v + 1
+
+        # Create placeholder directory with marker file to reserve this version number
+        # This prevents race conditions when multiple threads call this function
+        # The marker ensures the directory is detected by subsequent scans
+        placeholder_path = os.path.join(publish_root, f"{next_version:03d}")
+        try:
+            os.makedirs(placeholder_path, exist_ok=True)
+            # Touch a marker file to explicitly mark this version as reserved
+            marker_path = os.path.join(placeholder_path, ".ramses_reserved")
+            Path(marker_path).touch(exist_ok=True)
+        except (OSError, PermissionError):
+            pass  # Best effort - if it fails, caller will handle conflicts
+
+        return next_version
 
 
 def generate_thumbnail_for_result(
@@ -576,7 +608,7 @@ def resolve_paths(
 
         step_folder = os.path.join(shot_root, step_folder_name)
 
-        # VERSION-UP LOGIC (Optimized with cache)
+        # VERSION-UP LOGIC (Optimized with local cache)
         publish_root = os.path.join(step_folder, "_published")
         if publish_root not in version_cache:
             version_cache[publish_root] = _get_next_version(publish_root)
@@ -651,7 +683,7 @@ def resolve_paths_from_daemon(
             publish_root = f"{step_root}/_published"
             if publish_root not in version_cache:
                 version_cache[publish_root] = _get_next_version(publish_root)
-            
+
             plan.version = version_cache[publish_root]
 
             # API STRICT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
@@ -676,46 +708,48 @@ def _write_ramses_metadata(
 ) -> None:
     """Write a ``_ramses_data.json`` sidecar file for the published version.
 
-    Uses atomic write pattern (temp file + rename) to prevent corruption.
+    Uses atomic write pattern (temp file + rename) + thread-safe lock to prevent corruption.
     """
-    meta_path = os.path.join(folder, "_ramses_data.json")
+    # Protect entire read-modify-write sequence with lock to prevent race conditions
+    with _METADATA_WRITE_LOCK:
+        meta_path = os.path.join(folder, "_ramses_data.json")
 
-    data = {}
-    if os.path.isfile(meta_path):
+        data = {}
+        if os.path.isfile(meta_path):
+            try:
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, OSError):
+                data = {}
+
+        entry = {
+            "version": version,
+            "comment": comment,
+            "state": "wip",
+            "date": int(time.time()),
+        }
+        if timecode:
+            entry["timecode"] = timecode
+
+        data[filename] = entry
+
+        os.makedirs(folder, exist_ok=True)
+
+        # Atomic write: write to temp file, then rename
+        import tempfile
+        temp_fd, temp_path = tempfile.mkstemp(dir=folder, prefix=".ramses_data_", suffix=".tmp")
         try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError):
-            data = {}
-
-    entry = {
-        "version": version,
-        "comment": comment,
-        "state": "wip",
-        "date": int(time.time()),
-    }
-    if timecode:
-        entry["timecode"] = timecode
-
-    data[filename] = entry
-
-    os.makedirs(folder, exist_ok=True)
-
-    # Atomic write: write to temp file, then rename
-    import tempfile
-    temp_fd, temp_path = tempfile.mkstemp(dir=folder, prefix=".ramses_data_", suffix=".tmp")
-    try:
-        with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
-        # Atomic rename (POSIX) or best-effort on Windows
-        os.replace(temp_path, meta_path)
-    except Exception:
-        # Clean up temp file on failure
-        try:
-            os.remove(temp_path)
+            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            # Atomic rename (POSIX) or best-effort on Windows
+            os.replace(temp_path, meta_path)
         except Exception:
-            pass
-        raise
+            # Clean up temp file on failure
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+            raise
 
 
 def execute_plan(

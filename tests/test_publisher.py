@@ -17,7 +17,7 @@ from ramses_ingest.matcher import MatchResult
 from ramses_ingest.prober import MediaInfo
 from ramses_ingest.publisher import (
     build_plans, copy_frames, execute_plan, resolve_paths,
-    _write_ramses_metadata, IngestPlan, IngestResult,
+    _write_ramses_metadata, _calculate_md5, IngestPlan, IngestResult,
 )
 
 
@@ -187,10 +187,11 @@ class TestResolvePaths(unittest.TestCase):
     def test_resolve_paths_fills_directories(self):
         root = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, root)
-        
-        # Create a v001 to force v002
+
+        # Create a 001_WIP to force version 002
         # Standard Ramses path: 05-SHOTS/PROJ_S_SH010/PROJ_S_SH010_PLATE/...
-        v1_path = os.path.join(root, "05-SHOTS", "PROJ_S_SH010", "PROJ_S_SH010_PLATE", "_published", "v001")
+        # API format: [VERSION]_[STATE] (e.g., 001_WIP)
+        v1_path = os.path.join(root, "05-SHOTS", "PROJ_S_SH010", "PROJ_S_SH010_PLATE", "_published", "001_WIP")
         os.makedirs(v1_path, exist_ok=True)
         Path(os.path.join(v1_path, ".ramses_complete")).touch()
 
@@ -211,7 +212,7 @@ class TestResolvePaths(unittest.TestCase):
 
         self.assertIn("PROJ_S_SH010", plan.target_publish_dir)
         self.assertIn("PROJ_S_SH010_PLATE", plan.target_publish_dir)
-        self.assertIn("v002", plan.target_publish_dir)
+        self.assertIn("002_WIP", plan.target_publish_dir)
         self.assertIn("_preview", plan.target_preview_dir)
         self.assertIn("05-SHOTS", plan.target_publish_dir)
         # Verify sequence folder is NOT there
@@ -256,9 +257,8 @@ class TestExecutePlan(unittest.TestCase):
         shutil.rmtree(self.src_dir, ignore_errors=True)
         shutil.rmtree(self.dst_dir, ignore_errors=True)
 
-    @patch("ramses_ingest.preview.generate_thumbnail")
-    @patch("ramses_ingest.preview.generate_proxy")
-    def test_execute_with_ocio(self, mock_proxy, mock_thumb):
+    def test_execute_with_ocio(self):
+        """Verify that OCIO parameters are stored in thumbnail job for batch processing."""
         clip = _make_clip("plate", self.src_dir, frame_count=1)
         match = MatchResult(clip=clip, sequence_id="SEQ010", shot_id="SH010", matched=True)
         info = MediaInfo(width=1920, height=1080, fps=24.0, start_timecode="10:00:00:00")
@@ -273,25 +273,23 @@ class TestExecutePlan(unittest.TestCase):
             target_publish_dir=pub_dir, target_preview_dir=prev_dir,
         )
 
-        mock_thumb.return_value = True
-        mock_proxy.return_value = True
-
         result = execute_plan(
-            plan, 
-            generate_thumbnail=True, 
+            plan,
+            generate_thumbnail=True,
             generate_proxy=True,
             ocio_config="config.ocio",
             ocio_in="ACEScg",
             ocio_out="sRGB"
         )
-        
+
         self.assertTrue(result.success)
-        # Verify OCIO args were passed to preview generators
-        mock_thumb.assert_called_with(
-            clip, unittest.mock.ANY, 
-            ocio_config="config.ocio", 
-            ocio_in="ACEScg"
-        )
+
+        # Verify thumbnail job was stored for batch processing with OCIO params
+        self.assertIsNotNone(result._thumbnail_job)
+        self.assertEqual(result._thumbnail_job['clip'], clip)
+        self.assertEqual(result._thumbnail_job['ocio_config'], "config.ocio")
+        self.assertEqual(result._thumbnail_job['ocio_in'], "ACEScg")
+        self.assertFalse(result._thumbnail_job['is_resource'])  # Hero asset, not auxiliary
 
     def test_execute_copies_frames_parallel(self):
         # Use more frames to exercise the ThreadPoolExecutor

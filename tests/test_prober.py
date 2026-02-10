@@ -269,8 +269,9 @@ class TestProberThreading(unittest.TestCase):
         original_times = prober._CACHE_ACCESS_TIMES.copy()
 
         try:
-            # Add entry with old access time
-            cache_key = "test_file_123456.0:/dummy/file.mov"
+            # Add entry with old access time (format: path|mtime)
+            mtime = 123456.0
+            cache_key = f"/dummy/file.mov|{mtime}"
             prober._METADATA_CACHE[cache_key] = {
                 "width": 1920,
                 "height": 1080,
@@ -280,9 +281,9 @@ class TestProberThreading(unittest.TestCase):
             old_time = 1000.0
             prober._CACHE_ACCESS_TIMES[cache_key] = old_time
 
-            # Mock file exists and mtime
+            # Mock file exists and mtime (must match the mtime in cache key)
             with patch("os.path.isfile", return_value=True):
-                with patch("os.path.getmtime", return_value=123456.0):
+                with patch("os.path.getmtime", return_value=mtime):
                     with patch("subprocess.run") as mock_run:
                         # Should hit cache, not call ffprobe
                         info = probe_file("/dummy/file.mov")
@@ -308,17 +309,23 @@ class TestProberThreading(unittest.TestCase):
             with open(cache_path, "w") as f:
                 f.write("{invalid json content")
 
-            original_path = prober.CACHE_PATH_JSON
+            # Save original paths (need to override both JSON and msgpack)
+            original_json = prober.CACHE_PATH_JSON
+            original_msgpack = prober.CACHE_PATH_MSGPACK
+
+            # Point both cache paths to corrupted file so _load_cache tries to load it
             prober.CACHE_PATH_JSON = cache_path
+            prober.CACHE_PATH_MSGPACK = cache_path + ".msgpack"  # Non-existent, forces JSON fallback
 
             # Load should not crash
             prober._load_cache()
 
-            # Cache should be empty dict
+            # Cache should be empty dict after failed load
             self.assertIsInstance(prober._METADATA_CACHE, dict)
             self.assertEqual(len(prober._METADATA_CACHE), 0)
         finally:
-            prober.CACHE_PATH_JSON = original_path
+            prober.CACHE_PATH_JSON = original_json
+            prober.CACHE_PATH_MSGPACK = original_msgpack
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -359,14 +366,16 @@ class TestProberThreading(unittest.TestCase):
                 "format": {"tags": {}}
             })
 
+            mtime = 999999.0
+            file_path = "/test/new_file.mov"
             with patch("os.path.isfile", return_value=True):
-                with patch("os.path.getmtime", return_value=999999.0):
+                with patch("os.path.getmtime", return_value=mtime):
                     with patch("subprocess.run") as mock_run:
                         mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
-                        info = probe_file("/test/new_file.mov")
+                        info = probe_file(file_path)
 
-            # Both dicts should have entry
-            cache_key = "new_file_999999.0:/test/new_file.mov"
+            # Both dicts should have entry (format: path|mtime)
+            cache_key = f"{file_path}|{mtime}"
             self.assertIn(cache_key, prober._METADATA_CACHE)
             self.assertIn(cache_key, prober._CACHE_ACCESS_TIMES)
         finally:

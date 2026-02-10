@@ -128,9 +128,11 @@ class TestGenerateThumbnail(unittest.TestCase):
         )
 
     @patch("subprocess.run")
-    def test_sequence_default_middle_frame(self, mock_run):
+    @patch("os.path.isfile")
+    def test_sequence_default_middle_frame(self, mock_isfile, mock_run):
         """Default frame_index should pick middle frame."""
         mock_run.return_value = MagicMock(returncode=0)
+        mock_isfile.return_value = True  # Pretend source files exist
         clip = self._make_sequence_clip(frame_count=10)
         output = os.path.join(self.output_dir, "thumb.jpg")
 
@@ -139,8 +141,9 @@ class TestGenerateThumbnail(unittest.TestCase):
         self.assertTrue(result)
         mock_run.assert_called_once()
         cmd = mock_run.call_args[0][0]
-        # Should use frame 5 (middle of 1-10)
-        self.assertIn("test.0005.exr", " ".join(cmd))
+        # Should use frame 6 (index 5, middle of frames 1-10)
+        # len(frames) // 2 = 10 // 2 = 5, frames[5] = 6
+        self.assertIn("test.0006.exr", " ".join(cmd))
 
     @patch("subprocess.run")
     def test_sequence_specific_frame_index(self, mock_run):
@@ -191,9 +194,12 @@ class TestGenerateThumbnail(unittest.TestCase):
         self.assertEqual(cmd[-1], output)  # Output path
 
     @patch("subprocess.run")
-    def test_thumbnail_with_ocio(self, mock_run):
+    @patch("os.path.isfile")
+    def test_thumbnail_with_ocio(self, mock_isfile, mock_run):
         """OCIO config should be included in filter chain."""
+        # Mock both subprocess and file existence check for OCIO config
         mock_run.return_value = MagicMock(returncode=0)
+        mock_isfile.return_value = True  # Pretend OCIO config exists
         clip = self._make_sequence_clip()
         output = os.path.join(self.output_dir, "thumb.jpg")
         ocio_path = "C:\\OCIO\\config.ocio"
@@ -466,9 +472,11 @@ class TestGenerateProxy(unittest.TestCase):
         self.assertIn(f"scale={PROXY_WIDTH}:-2", vf_value)
 
     @patch("subprocess.run")
-    def test_proxy_with_ocio(self, mock_run):
+    @patch("os.path.isfile")
+    def test_proxy_with_ocio(self, mock_isfile, mock_run):
         """Proxy with OCIO should include filter."""
         mock_run.return_value = MagicMock(returncode=0)
+        mock_isfile.return_value = True  # Pretend OCIO config and movie file exist
         clip = self._make_movie_clip()
         output = os.path.join(self.output_dir, "proxy.mp4")
         ocio_path = "D:\\OCIO\\config.ocio"

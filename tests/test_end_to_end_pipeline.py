@@ -133,7 +133,8 @@ class TestEndToEndPipeline(unittest.TestCase):
         resolve_paths(plans, self.project_root)
         for plan in plans:
             self.assertNotEqual(plan.target_publish_dir, "")
-            self.assertIn("v001", plan.target_publish_dir)
+            # API format: [VERSION]_[STATE] (e.g., 001_WIP)
+            self.assertIn("001_WIP", plan.target_publish_dir)
 
         # Step 7: Execute plans
         results = []
@@ -310,7 +311,8 @@ class TestEndToEndPipeline(unittest.TestCase):
         clips = scan_directory(self.source_dir)
         rules = [
             NamingRule(
-                pattern=r"(?P<sequence>SEQ\d+)_(?P<shot>SH\d+)_(?P<step>\w+)(?:_(?P<resource>\w+))?"
+                # Use [^_]+ for step to prevent matching underscores (allows resource capture)
+                pattern=r"(?P<sequence>SEQ\d+)_(?P<shot>SH\d+)_(?P<step>[^_]+)(?:_(?P<resource>\w+))?"
             ),
         ]
         matches = match_clips(clips, rules)

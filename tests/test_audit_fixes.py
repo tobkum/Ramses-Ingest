@@ -78,10 +78,10 @@ class TestAuditFix2_FutureTimeouts(unittest.TestCase):
 
     @patch('concurrent.futures.ThreadPoolExecutor')
     def test_timeout_expired_caught(self, mock_executor):
-        """Verify TimeoutExpired is caught and logged."""
+        """Verify TimeoutError is caught and logged."""
         # Simulate future that times out
         mock_future = MagicMock()
-        mock_future.result.side_effect = concurrent.futures.TimeoutExpired(None, 120)
+        mock_future.result.side_effect = concurrent.futures.TimeoutError()
 
         mock_executor_instance = MagicMock()
         mock_executor_instance.submit.return_value = mock_future
@@ -92,7 +92,7 @@ class TestAuditFix2_FutureTimeouts(unittest.TestCase):
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 future = executor.submit(lambda: None)
                 future.result(timeout=120)
-        except concurrent.futures.TimeoutExpired:
+        except concurrent.futures.TimeoutError:
             pass  # Expected
 
     @patch('concurrent.futures.ThreadPoolExecutor')
@@ -183,14 +183,16 @@ class TestAuditFix6_VersionLockRaceCondition(unittest.TestCase):
         """Folder creation should happen inside lock to prevent race."""
         publish_root = os.path.join(self.temp_dir, "nonexistent")
 
-        # First call should create folder
+        # First call should create folder AND version 1 placeholder
         v1 = _get_next_version(publish_root)
         self.assertEqual(v1, 1)
         self.assertTrue(os.path.isdir(publish_root))
+        # Placeholder should be created to reserve version 1
+        self.assertTrue(os.path.exists(os.path.join(publish_root, "001")))
 
-        # Second call should see existing folder
+        # Second call should see version 1 is taken and return version 2
         v2 = _get_next_version(publish_root)
-        self.assertEqual(v2, 1)  # No versions created yet
+        self.assertEqual(v2, 2)  # Version 1 was reserved by first call
 
 
 class TestAuditFix8_ThreadSafeCacheDirtyFlag(unittest.TestCase):
