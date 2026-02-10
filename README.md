@@ -47,6 +47,8 @@ Launch the GUI:
 python -m ramses_ingest
 ```
 
+<img src="screenshot.png" alt="Ramses-Ingest Main GUI" width="800">
+
 ### Typical Workflow
 1.  **Scan**: Drag and drop delivery folders.
 2.  **Match**: Configure naming rules to extract Shot IDs.
