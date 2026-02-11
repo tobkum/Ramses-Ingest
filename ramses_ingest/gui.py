@@ -1786,7 +1786,7 @@ class IngestWindow(QMainWindow):
             par_val = plan.media_info.pixel_aspect_ratio if plan.media_info else 1.0
             par_text = f"{par_val:.2f}"
             is_par_mismatch = False
-            if par_val != 1.0 and abs(par_val - self._engine._project_par) > 0.001:
+            if abs(par_val - self._engine._project_par) > 0.001:
                 is_par_mismatch = True
 
             par_item = self._table.item(idx, 9)
