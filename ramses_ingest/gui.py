@@ -2076,14 +2076,14 @@ class IngestWindow(QMainWindow):
                 or "sRGB"
             )
 
-        # Show combo box dialog
+        # Show combo box dialog (non-editable - must match OCIO config)
         colorspace, ok = QInputDialog.getItem(
             self,
             "Override Colorspace",
             f"Select colorspace for {len(selected_rows)} clip(s):",
             colorspace_list,
             colorspace_list.index(current_cs) if current_cs in colorspace_list else 0,
-            editable=True,  # Allow custom input
+            editable=False,  # Non-editable - colorspace must exist in OCIO config
         )
 
         if ok and colorspace:
@@ -2098,6 +2098,71 @@ class IngestWindow(QMainWindow):
                         item.setForeground(QColor("#00bff3"))  # Blue to indicate override
 
             self._update_summary()
+
+    def _on_context_clear_overrides(self) -> None:
+        """Clear all overrides for selected clips (reset to auto-detected values)"""
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        for row in selected_rows:
+            plan = self._get_plan_from_row(row)
+            if plan:
+                # Clear colorspace override
+                plan.colorspace_override = ""
+
+                # Restore shot/seq/resource from original pattern match
+                if plan.match and plan.match.matched:
+                    # Re-extract shot and sequence from the original match result
+                    plan.shot_id = plan.match.shot_id or ""
+                    plan.sequence_id = plan.match.sequence_id or ""
+                    # Resource from original match
+                    plan.resource = plan.match.resource or ""
+
+        # Re-resolve paths (recalculates collisions and target paths)
+        self._resolve_all_paths()
+        # Refresh table to show restored values
+        self._populate_table()
+        self._update_summary()
+
+    def _on_context_enable(self) -> None:
+        """Enable selected clips (check them) efficiently."""
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        # 1. Update data and UI state without triggering expensive signals
+        for row in selected_rows:
+            plan = self._get_plan_from_row(row)
+            if plan:
+                plan.enabled = True
+                chk_widget = self._table.cellWidget(row, 0)
+                if chk_widget:
+                    chk = chk_widget.findChild(QCheckBox)
+                    if chk:
+                        chk.blockSignals(True)
+                        chk.setChecked(True)
+                        chk.blockSignals(False)
+
+            # Remove visual dimming
+            for col in range(1, 11):
+                item = self._table.item(row, col)
+                if item:
+                    # Restore default color (light gray)
+                    item.setForeground(QColor("#e0e0e0"))
+
+            # Update status dot
+            status, status_msg = self._get_plan_status(plan)
+            status_widget = self._table.cellWidget(row, 11)
+            if status_widget:
+                indicator = status_widget.findChild(StatusIndicator)
+                if indicator:
+                    indicator.set_status(status)
+                    if status_msg:
+                        indicator.setToolTip(status_msg)
+
+        # 2. Update summary counts
+        self._update_summary()
 
     def _on_context_skip(self) -> None:
         """Skip selected clips (uncheck them) efficiently."""
@@ -2570,6 +2635,18 @@ class IngestWindow(QMainWindow):
         act_override_cs = QAction("Override Colorspace...", self)
         act_override_cs.triggered.connect(self._on_context_override_colorspace)
         menu.addAction(act_override_cs)
+
+        menu.addSeparator()
+
+        act_clear_overrides = QAction("Clear Overrides", self)
+        act_clear_overrides.triggered.connect(self._on_context_clear_overrides)
+        menu.addAction(act_clear_overrides)
+
+        menu.addSeparator()
+
+        act_enable = QAction("Enable Selected", self)
+        act_enable.triggered.connect(self._on_context_enable)
+        menu.addAction(act_enable)
 
         act_skip = QAction("Skip Selected", self)
         act_skip.triggered.connect(self._on_context_skip)
