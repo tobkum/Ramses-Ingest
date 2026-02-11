@@ -301,19 +301,20 @@ def copy_frames(
 
         # Force sync on Windows network drives to prevent buffered write issues
         # On SMB/CIFS shares, copy2 can return success while data is still buffered
-        if sys.platform == 'win32':
+        if sys.platform == "win32":
             handle = -1
             try:
                 import ctypes
+
                 # Open file handle with write access
                 handle = ctypes.windll.kernel32.CreateFileW(
                     dst,
                     0x40000000,  # GENERIC_WRITE
-                    0,           # No sharing
+                    0,  # No sharing
                     None,
-                    3,           # OPEN_EXISTING
+                    3,  # OPEN_EXISTING
                     0,
-                    None
+                    None,
                 )
                 if handle != -1:
                     # Force flush buffers to disk
@@ -326,13 +327,16 @@ def copy_frames(
                 if handle != -1:
                     try:
                         import ctypes
+
                         ctypes.windll.kernel32.CloseHandle(handle)
                     except Exception:
                         pass
 
         # 1. Size check (always) - compare source vs destination
         if src_sz != dst_sz:
-            raise OSError(f"Size mismatch: {dst} (source: {src_sz} bytes, dest: {dst_sz} bytes)")
+            raise OSError(
+                f"Size mismatch: {dst} (source: {src_sz} bytes, dest: {dst_sz} bytes)"
+            )
 
         # 2. MD5 check (conditional)
         checksum = ""
@@ -371,7 +375,7 @@ def copy_frames(
     return copied_count, first_checksum, total_bytes, first_filename
 
 
-def _get_next_version(publish_root: str) -> int:
+def _get_next_version(publish_root: str, reserve: bool = False) -> int:
     """Find the next available version number by scanning API-compliant folders.
 
     Ramses API Spec: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
@@ -381,6 +385,9 @@ def _get_next_version(publish_root: str) -> int:
     with _VERSION_LOCK:
         publish_root = normalize_path(publish_root)
         if not os.path.isdir(publish_root):
+            if not reserve:
+                return 1
+
             # Create folder inside lock to prevent race condition
             try:
                 os.makedirs(publish_root, exist_ok=True)
@@ -401,7 +408,9 @@ def _get_next_version(publish_root: str) -> int:
         # 1. (?:(?P<res>.*)_)?  -> Optional resource block
         # 2. (?P<ver>\d{3})     -> Mandatory 3-digit version
         # 3. (?:_(?P<state>.*))? -> Optional state block
-        version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
+        version_re = re.compile(
+            r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$"
+        )
 
         try:
             for item in os.listdir(publish_root):
@@ -434,17 +443,18 @@ def _get_next_version(publish_root: str) -> int:
 
         next_version = max_v + 1
 
-        # Create placeholder directory with marker file to reserve this version number
-        # This prevents race conditions when multiple threads call this function
-        # The marker ensures the directory is detected by subsequent scans
-        placeholder_path = os.path.join(publish_root, f"{next_version:03d}")
-        try:
-            os.makedirs(placeholder_path, exist_ok=True)
-            # Touch a marker file to explicitly mark this version as reserved
-            marker_path = os.path.join(placeholder_path, ".ramses_reserved")
-            Path(marker_path).touch(exist_ok=True)
-        except (OSError, PermissionError):
-            pass  # Best effort - if it fails, caller will handle conflicts
+        if reserve:
+            # Create placeholder directory with marker file to reserve this version number
+            # This prevents race conditions when multiple threads call this function
+            # The marker ensures the directory is detected by subsequent scans
+            placeholder_path = os.path.join(publish_root, f"{next_version:03d}")
+            try:
+                os.makedirs(placeholder_path, exist_ok=True)
+                # Touch a marker file to explicitly mark this version as reserved
+                marker_path = os.path.join(placeholder_path, ".ramses_reserved")
+                Path(marker_path).touch(exist_ok=True)
+            except (OSError, PermissionError):
+                pass  # Best effort - if it fails, caller will handle conflicts
 
         return next_version
 
@@ -510,9 +520,7 @@ def check_for_duplicates(plans: list[IngestPlan]) -> None:
         existing_versions_dir = os.path.dirname(plan.target_publish_dir)
 
         is_dup, dup_path, dup_version = check_for_duplicate_version(
-            plan.match.clip, 
-            existing_versions_dir,
-            resource=plan.resource
+            plan.match.clip, existing_versions_dir, resource=plan.resource
         )
 
         if is_dup:
@@ -579,13 +587,13 @@ def resolve_paths(
         step_id = plan.step_id
 
         # Sanitize IDs to prevent path traversal
-        if '/' in proj_id or '\\' in proj_id or '..' in proj_id:
+        if "/" in proj_id or "\\" in proj_id or ".." in proj_id:
             plan.error = f"Invalid project ID contains path separators: {proj_id}"
             continue
-        if '/' in shot_id or '\\' in shot_id or '..' in shot_id:
+        if "/" in shot_id or "\\" in shot_id or ".." in shot_id:
             plan.error = f"Invalid shot ID contains path separators: {shot_id}"
             continue
-        if '/' in step_id or '\\' in step_id or '..' in step_id:
+        if "/" in step_id or "\\" in step_id or ".." in step_id:
             plan.error = f"Invalid step ID contains path separators: {step_id}"
             continue
 
@@ -611,7 +619,7 @@ def resolve_paths(
         # VERSION-UP LOGIC (Optimized with local cache)
         publish_root = os.path.join(step_folder, "_published")
         if publish_root not in version_cache:
-            version_cache[publish_root] = _get_next_version(publish_root)
+            version_cache[publish_root] = _get_next_version(publish_root, reserve=False)
 
         plan.version = version_cache[publish_root]
 
@@ -619,7 +627,7 @@ def resolve_paths(
         if plan.version <= 0 or plan.version > 999:
             plan.error = f"Invalid version number: {plan.version}"
             continue
-        if '/' in plan.state or '\\' in plan.state:
+        if "/" in plan.state or "\\" in plan.state:
             plan.error = f"Invalid state contains path separators: {plan.state}"
             continue
 
@@ -682,7 +690,9 @@ def resolve_paths_from_daemon(
             # Find next version (Dry scan of existing folders) with optimization
             publish_root = f"{step_root}/_published"
             if publish_root not in version_cache:
-                version_cache[publish_root] = _get_next_version(publish_root)
+                version_cache[publish_root] = _get_next_version(
+                    publish_root, reserve=False
+                )
 
             plan.version = version_cache[publish_root]
 
@@ -691,7 +701,7 @@ def resolve_paths_from_daemon(
                 version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}"
             else:
                 version_str = f"{plan.version:03d}_{plan.state}"
-            
+
             plan.target_publish_dir = f"{publish_root}/{version_str}"
             plan.target_preview_dir = f"{step_root}/_preview"
 
@@ -737,7 +747,10 @@ def _write_ramses_metadata(
 
         # Atomic write: write to temp file, then rename
         import tempfile
-        temp_fd, temp_path = tempfile.mkstemp(dir=folder, prefix=".ramses_data_", suffix=".tmp")
+
+        temp_fd, temp_path = tempfile.mkstemp(
+            dir=folder, prefix=".ramses_data_", suffix=".tmp"
+        )
         try:
             with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
@@ -822,7 +835,7 @@ def execute_plan(
             dry_run=dry_run,
             fast_verify=fast_verify,
         )
-        
+
         # Update result stats
         if not clip.is_sequence and plan.media_info.frame_count > 0:
             result.frames_copied = plan.media_info.frame_count
@@ -846,13 +859,19 @@ def execute_plan(
     except Exception as exc:
         error_msg = str(exc)
         # Rollback: Delete the partially created version folder
-        if not dry_run and plan.target_publish_dir and os.path.exists(plan.target_publish_dir):
+        if (
+            not dry_run
+            and plan.target_publish_dir
+            and os.path.exists(plan.target_publish_dir)
+        ):
             try:
                 _log(f"  CRITICAL ERROR: {error_msg}. Rolling back...")
                 shutil.rmtree(plan.target_publish_dir)
                 _log("  Rollback successful: Cleaned up partial files.")
             except Exception as rollback_exc:
-                _log(f"  WARNING: Rollback failed - {plan.target_publish_dir}: {rollback_exc}")
+                _log(
+                    f"  WARNING: Rollback failed - {plan.target_publish_dir}: {rollback_exc}"
+                )
                 result.error = f"Ingest failed AND rollback failed: {error_msg} | Rollback error: {rollback_exc}"
                 return result
 
@@ -871,12 +890,13 @@ def execute_plan(
             thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
         else:
             # Sanitize resource string to prevent path traversal
-            safe_resource = re.sub(r'[/\\:*?"<>|]', '_', plan.resource)
-            if '..' in safe_resource or safe_resource.startswith('.'):
-                safe_resource = safe_resource.replace('..', '_').lstrip('.')
+            safe_resource = re.sub(r'[/\\:*?"<>|]', "_", plan.resource)
+            if ".." in safe_resource or safe_resource.startswith("."):
+                safe_resource = safe_resource.replace("..", "_").lstrip(".")
 
             # Auxiliary: temporary storage for report embedding only
             import tempfile
+
             t_dir = tempfile.gettempdir()
             # Unique name to avoid collisions in system temp
             t_name = f"ram_tmp_{plan.project_id}_{plan.shot_id}_{safe_resource}_{int(time.time())}.jpg"
@@ -884,11 +904,11 @@ def execute_plan(
 
         # Store job for batch processing (avoids sequential FFmpeg calls)
         result._thumbnail_job = {
-            'clip': clip,
-            'path': thumb_path,
-            'ocio_config': ocio_config,
-            'ocio_in': ocio_in,
-            'is_resource': bool(plan.resource)
+            "clip": clip,
+            "path": thumb_path,
+            "ocio_config": ocio_config,
+            "ocio_in": ocio_in,
+            "is_resource": bool(plan.resource),
         }
 
     # --- Generate video proxy (HERO ONLY) ---
@@ -998,7 +1018,7 @@ def register_ramses_objects(
                 if current_data.get(key) != val:
                     needs_update = True
                     break
-            
+
             if needs_update:
                 log(f"  Updating sequence {plan.sequence_id} metadata...")
                 seq_obj.setData(seq_data)
@@ -1044,7 +1064,7 @@ def register_ramses_objects(
             "project": project_uuid,
             "duration": duration,
         }
-        
+
         # HERO SOVEREIGNTY: Only 'No Resource' clips define the source media identity
         if not plan.resource:
             shot_data["sourceMedia"] = plan.match.clip.base_name
@@ -1074,7 +1094,7 @@ def register_ramses_objects(
                 if current_data.get(key) != val:
                     needs_update = True
                     break
-            
+
             if needs_update:
                 log(f"  Updating shot {plan.shot_id} metadata...")
                 shot_obj.setData(shot_data)

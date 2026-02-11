@@ -16,10 +16,25 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import Qt, Signal, QMimeData
 from PySide6.QtGui import QFont, QColor, QDrag, QAction
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
-    QPushButton, QLineEdit, QScrollArea, QDialog,
-    QSplitter, QTableWidget, QTableWidgetItem, QHeaderView,
-    QMenu, QCheckBox, QSpinBox, QTextEdit, QApplication, QComboBox
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QFrame,
+    QPushButton,
+    QLineEdit,
+    QScrollArea,
+    QDialog,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
+    QHeaderView,
+    QMenu,
+    QCheckBox,
+    QSpinBox,
+    QTextEdit,
+    QApplication,
+    QComboBox,
 )
 
 from ramses_ingest.gui import STYLESHEET
@@ -42,10 +57,11 @@ class TokenType(Enum):
 @dataclass
 class ArchitectToken:
     """A discrete block in the naming rule blueprint."""
+
     type: TokenType
     value: str = ""  # For separators or custom wildcards
-    padding: int = 0 # For digits (e.g. 3 -> \d{3})
-    prefix: str = "" # e.g. "v" for version
+    padding: int = 0  # For digits (e.g. 3 -> \d{3})
+    prefix: str = ""  # e.g. "v" for version
     is_uppercase: bool = False
     is_required: bool = True
 
@@ -53,14 +69,14 @@ class ArchitectToken:
         """Convert this token into a Python Regex fragment."""
         if self.type == TokenType.SEPARATOR:
             return re.escape(self.value)
-        
+
         # Build the capture group logic
         pattern = ""
         prefix_part = ""
         if self.type == TokenType.VERSION:
             if self.prefix:
                 prefix_part = re.escape(self.prefix)
-            pattern = r"\d+" if self.padding <= 0 else fr"\d{{{self.padding}}}"
+            pattern = r"\d+" if self.padding <= 0 else rf"\d{{{self.padding}}}"
         elif self.type == TokenType.SHOT or self.type == TokenType.SEQUENCE:
             # Common pattern: alphanumeric but must contain a digit
             pattern = r"[A-Za-z0-9]+"
@@ -71,9 +87,15 @@ class ArchitectToken:
         else:
             pattern = r"[A-Za-z0-9]+"
 
-        if self.type in [TokenType.SEQUENCE, TokenType.SHOT, TokenType.VERSION, TokenType.STEP, TokenType.PROJECT]:
+        if self.type in [
+            TokenType.SEQUENCE,
+            TokenType.SHOT,
+            TokenType.VERSION,
+            TokenType.STEP,
+            TokenType.PROJECT,
+        ]:
             return f"{prefix_part}(?P<{self.type.value}>{pattern})"
-        
+
         return pattern
 
 
@@ -85,7 +107,7 @@ class TokenEngine:
         """Generate a full regex pattern from tokens."""
         if not tokens:
             return ""
-        
+
         parts = [t.to_regex() for t in tokens]
         # Anchor to start if requested (usually expected for filenames)
         return "^" + "".join(parts) + ".*$"
@@ -110,6 +132,7 @@ class TokenEngine:
             return []
 
         import os
+
         # 0. Clean samples: Filenames only + Strip common trailing frame numbers
         def _clean_for_guess(s: str) -> str:
             # Handle sequence frames: shot_010.0001.exr -> shot_010
@@ -121,18 +144,20 @@ class TokenEngine:
         filenames = [_clean_for_guess(s) for s in samples]
         if not filenames:
             return []
-        
+
         first = filenames[0]
-        
+
         # 1. Detect most likely separator
         seps = ["_", ".", "-"]
         sep_counts = {s: first.count(s) for s in seps}
-        best_sep = max(sep_counts, key=sep_counts.get) if any(sep_counts.values()) else "_"
-        
+        best_sep = (
+            max(sep_counts, key=sep_counts.get) if any(sep_counts.values()) else "_"
+        )
+
         # 2. Split samples by best separator
         parts_matrix = [s.rsplit(".", 1)[0].split(best_sep) for s in filenames]
         n_parts = len(parts_matrix[0])
-        
+
         guessed_tokens = []
         assigned_types = set()
 
@@ -141,7 +166,7 @@ class TokenEngine:
             val = column[0]
             is_static = all(v == val for v in column)
             is_numeric = all(re.search(r"\d+", v) for v in column if v)
-            
+
             ttype = TokenType.IGNORE
             padding = 0
             prefix = ""
@@ -154,7 +179,7 @@ class TokenEngine:
                     m = re.search(r"(\d+)", val)
                     padding = len(m.group(1)) if m else 0
                 else:
-                    ttype = TokenType.SHOT # Fallback for alpha shots
+                    ttype = TokenType.SHOT  # Fallback for alpha shots
             else:
                 # Static parts
                 if i == 0:
@@ -176,9 +201,13 @@ class TokenEngine:
                 else:
                     assigned_types.add(ttype)
 
-            guessed_tokens.append(ArchitectToken(type=ttype, padding=padding, prefix=prefix))
+            guessed_tokens.append(
+                ArchitectToken(type=ttype, padding=padding, prefix=prefix)
+            )
             if i < n_parts - 1:
-                guessed_tokens.append(ArchitectToken(type=TokenType.SEPARATOR, value=best_sep))
+                guessed_tokens.append(
+                    ArchitectToken(type=TokenType.SEPARATOR, value=best_sep)
+                )
 
         return guessed_tokens
 
@@ -187,9 +216,10 @@ class TokenEngine:
 # UI Components
 # ---------------------------------------------------------------------------
 
+
 class VisualTokenWidget(QFrame):
     """A pill-shaped interactive token with professional pipeline styling."""
-    
+
     clicked = Signal(ArchitectToken)
     deleted = Signal(object)
 
@@ -202,19 +232,21 @@ class VisualTokenWidget(QFrame):
 
     def _setup_layout(self) -> None:
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(28) # Tighter, professional height
+        self.setFixedHeight(28)  # Tighter, professional height
         self.setMinimumWidth(80)
-        
+
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 10, 0) # Margin for the accent bar
+        layout.setContentsMargins(0, 0, 10, 0)  # Margin for the accent bar
         layout.setSpacing(8)
-        
+
         # Color Accent Bar (Tier 1 Aesthetic)
         self.accent = QFrame()
         self.accent.setFixedWidth(4)
-        self.accent.setStyleSheet("border-top-left-radius: 4px; border-bottom-left-radius: 4px;")
+        self.accent.setStyleSheet(
+            "border-top-left-radius: 4px; border-bottom-left-radius: 4px;"
+        )
         layout.addWidget(self.accent)
-        
+
         self.label = QLabel()
         self.label.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold))
         self.label.setStyleSheet("color: #eee; border: none; background: transparent;")
@@ -223,19 +255,19 @@ class VisualTokenWidget(QFrame):
     def update_visuals(self, has_collision: bool = False) -> None:
         """Apply a professional matte theme with color-coded accents."""
         colors = {
-            TokenType.SEQUENCE: "#27ae60", # Emerald
-            TokenType.SHOT:     "#00bff3", # Standard Cyan
-            TokenType.VERSION:  "#f39c12", # Amber
-            TokenType.SEPARATOR:"#555555", # Muted Gray
-            TokenType.WILDCARD: "#8e44ad", # Purple
-            TokenType.IGNORE:   "#333333", # Dark
+            TokenType.SEQUENCE: "#27ae60",  # Emerald
+            TokenType.SHOT: "#00bff3",  # Standard Cyan
+            TokenType.VERSION: "#f39c12",  # Amber
+            TokenType.SEPARATOR: "#555555",  # Muted Gray
+            TokenType.WILDCARD: "#8e44ad",  # Purple
+            TokenType.IGNORE: "#333333",  # Dark
         }
         accent_color = colors.get(self.token.type, "#444")
         if has_collision:
-            accent_color = "#f44747" # Red collision
-        
+            accent_color = "#f44747"  # Red collision
+
         self.accent.setStyleSheet(f"background-color: {accent_color};")
-        
+
         text = self.token.type.name.capitalize()
         if self.token.type == TokenType.SEPARATOR:
             text = f"'{self.token.value or ' '}'"
@@ -280,7 +312,9 @@ class VisualTokenWidget(QFrame):
             return
         if self._drag_start_pos is None:  # Safety check
             return
-        if (event.pos() - self._drag_start_pos).manhattanLength() < QApplication.startDragDistance():
+        if (
+            event.pos() - self._drag_start_pos
+        ).manhattanLength() < QApplication.startDragDistance():
             return
 
         drag = QDrag(self)
@@ -288,12 +322,12 @@ class VisualTokenWidget(QFrame):
         # Store widget pointer for internal move
         mime.setData("application/x-ramses-token", str(id(self)).encode())
         drag.setMimeData(mime)
-        
+
         # Create a preview of the token being dragged
         pixmap = self.grab()
         drag.setPixmap(pixmap)
         drag.setHotSpot(event.pos())
-        
+
         drag.exec(Qt.DropAction.MoveAction)
 
     def _show_context_menu(self, pos) -> None:
@@ -306,17 +340,19 @@ class VisualTokenWidget(QFrame):
 
 class TokenDropZone(QFrame):
     """The assembly bar where tokens are placed and reordered."""
-    
+
     changed = Signal()
     token_clicked = Signal(ArchitectToken)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
-        self.setMinimumHeight(80) # Stabilize height
+        self.setMinimumHeight(80)  # Stabilize height
         self.setFrameShape(QFrame.Shape.StyledPanel)
-        self.setStyleSheet("background-color: #1a1a1a; border: 1px dashed #333; border-radius: 6px;")
-        
+        self.setStyleSheet(
+            "background-color: #1a1a1a; border: 1px dashed #333; border-radius: 6px;"
+        )
+
         self.layout = QHBoxLayout(self)
         self.layout.setContentsMargins(10, 5, 10, 5)
         self.layout.setSpacing(8)
@@ -335,6 +371,7 @@ class TokenDropZone(QFrame):
         widget.deleteLater()
         # Delay check to ensure widget is removed from layout
         from PySide6.QtCore import QTimer
+
         QTimer.singleShot(10, self._check_collisions)
         QTimer.singleShot(10, self.changed.emit)
 
@@ -345,22 +382,26 @@ class TokenDropZone(QFrame):
             w = self.layout.itemAt(i).widget()
             if isinstance(w, VisualTokenWidget):
                 widgets.append(w)
-        
+
         for i in range(len(widgets)):
             w1 = widgets[i]
             clash = False
-            
+
             # Check adjacency with next widget
             if i < len(widgets) - 1:
-                w2 = widgets[i+1]
+                w2 = widgets[i + 1]
                 # If both are capture groups (not separators/ignore) they clash
-                if (w1.token.type not in [TokenType.SEPARATOR, TokenType.IGNORE] and 
-                    w2.token.type not in [TokenType.SEPARATOR, TokenType.IGNORE]):
+                if w1.token.type not in [
+                    TokenType.SEPARATOR,
+                    TokenType.IGNORE,
+                ] and w2.token.type not in [TokenType.SEPARATOR, TokenType.IGNORE]:
                     clash = True
-            
+
             w1.update_visuals(has_collision=clash)
             if clash:
-                w1.setToolTip("Collision Risk: Add a separator to prevent greedy matching.")
+                w1.setToolTip(
+                    "Collision Risk: Add a separator to prevent greedy matching."
+                )
             else:
                 w1.setToolTip("")
 
@@ -389,8 +430,10 @@ class TokenDropZone(QFrame):
 
     def dropEvent(self, event) -> None:
         if event.mimeData().hasFormat("application/x-ramses-token"):
-            source_id = int(event.mimeData().data("application/x-ramses-token").data().decode())
-            
+            source_id = int(
+                event.mimeData().data("application/x-ramses-token").data().decode()
+            )
+
             # Find source widget
             source_widget = None
             for i in range(self.layout.count()):
@@ -398,21 +441,21 @@ class TokenDropZone(QFrame):
                 if id(w) == source_id:
                     source_widget = w
                     break
-            
+
             if not source_widget:
                 return
 
             # Find target index based on mouse position
             drop_pos = event.position().x()
-            target_idx = self.layout.count() - 1 # Default to before the stretch
-            
+            target_idx = self.layout.count() - 1  # Default to before the stretch
+
             for i in range(self.layout.count()):
                 w = self.layout.itemAt(i).widget()
                 if w and w != source_widget and isinstance(w, VisualTokenWidget):
                     if drop_pos < w.geometry().center().x():
                         target_idx = i
                         break
-            
+
             # Re-insert
             self.layout.removeWidget(source_widget)
             self.layout.insertWidget(target_idx, source_widget)
@@ -428,26 +471,28 @@ class SimulationTable(QTableWidget):
         super().__init__(parent)
         self.setColumnCount(4)
         self.setHorizontalHeaderLabels(["X-Ray Filename", "Sequence", "Shot", "Status"])
-        
+
         hdr = self.horizontalHeader()
         hdr.setSectionsMovable(True)
         hdr.setSectionsClickable(True)
-        
+
         # Interactive Resizing (Tier 1 Logic)
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive) # Filename
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)  # Filename
         hdr.resizeSection(0, 300)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive) # Seq
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)  # Seq
         hdr.resizeSection(1, 100)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive) # Shot
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)  # Shot
         hdr.resizeSection(2, 100)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)     # Status
-        
-        self.setStyleSheet("background-color: #1a1a1a; color: #ccc; gridline-color: #333;")
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)  # Status
+
+        self.setStyleSheet(
+            "background-color: #1a1a1a; color: #ccc; gridline-color: #333;"
+        )
         self.verticalHeader().setVisible(False)
 
     def refresh(self, samples: list[str], tokens: list[ArchitectToken]) -> None:
         self.setRowCount(len(samples))
-        
+
         # Color mapping for X-Ray (matching Token colors)
         colors = {
             "sequence": "#27ae60",
@@ -466,7 +511,7 @@ class SimulationTable(QTableWidget):
         for row, original_path in enumerate(samples):
             # 1. Clean filename only
             filename = os.path.basename(original_path)
-            
+
             # 2. Perform simulation
             res = {}
             if regex:
@@ -487,31 +532,33 @@ class SimulationTable(QTableWidget):
                             spans.append((start, end, color))
                     except IndexError:
                         continue
-                
+
                 spans.sort(key=lambda x: x[0], reverse=True)
-                
+
                 temp_text = filename
                 for start, end, color in spans:
                     snippet = temp_text[start:end]
                     if snippet:
                         temp_text = (
-                            temp_text[:start] + 
-                            f'<span style="color:{color}; font-weight:bold;">{snippet}</span>' + 
-                            temp_text[end:]
+                            temp_text[:start]
+                            + f'<span style="color:{color}; font-weight:bold;">{snippet}</span>'
+                            + temp_text[end:]
                         )
                 xray_html = temp_text
 
             # --- Table Items ---
-            lbl = QLabel(f'<html><body style="font-family:Consolas, monospace; font-size:11px;">{xray_html}</body></html>')
+            lbl = QLabel(
+                f'<html><body style="font-family:Consolas, monospace; font-size:11px;">{xray_html}</body></html>'
+            )
             lbl.setStyleSheet("padding-left: 5px; background: transparent;")
             self.setCellWidget(row, 0, lbl)
 
             it_seq = QTableWidgetItem(res.get("sequence", "—"))
             it_shot = QTableWidgetItem(res.get("shot", "—"))
-            
+
             status = "MATCHED" if res.get("shot") else "FAILED"
             it_status = QTableWidgetItem(status)
-            
+
             if status == "MATCHED":
                 it_status.setForeground(QColor("#27ae60"))
             else:
@@ -524,7 +571,7 @@ class SimulationTable(QTableWidget):
 
 class TokenInspector(QFrame):
     """Side panel for editing token constraints (padding, prefix, etc.)."""
-    
+
     changed = Signal()
 
     def __init__(self, parent=None) -> None:
@@ -535,16 +582,18 @@ class TokenInspector(QFrame):
 
     def _setup_ui(self) -> None:
         self.setFixedWidth(240)
-        self.setStyleSheet("background-color: #252526; border-left: 1px solid #333; padding: 10px;")
-        
+        self.setStyleSheet(
+            "background-color: #252526; border-left: 1px solid #333; padding: 10px;"
+        )
+
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(10, 10, 10, 10)
         self.layout.setSpacing(12)
-        
+
         self.title = QLabel("TOKEN INSPECTOR")
         self.title.setStyleSheet("color: #888; font-weight: bold; font-size: 10px;")
         self.layout.addWidget(self.title)
-        
+
         # --- Value (for Separators) ---
         self.val_box = QWidget()
         v_lay = QVBoxLayout(self.val_box)
@@ -554,7 +603,7 @@ class TokenInspector(QFrame):
         self.edit_val.textChanged.connect(self._on_val_changed)
         v_lay.addWidget(self.edit_val)
         self.layout.addWidget(self.val_box)
-        
+
         # --- Prefix (for Version) ---
         self.pre_box = QWidget()
         p_lay = QVBoxLayout(self.pre_box)
@@ -564,7 +613,7 @@ class TokenInspector(QFrame):
         self.edit_pre.textChanged.connect(self._on_pre_changed)
         p_lay.addWidget(self.edit_pre)
         self.layout.addWidget(self.pre_box)
-        
+
         # --- Padding ---
         self.pad_box = QWidget()
         pd_lay = QVBoxLayout(self.pad_box)
@@ -575,28 +624,30 @@ class TokenInspector(QFrame):
         self.spin_pad.valueChanged.connect(self._on_pad_changed)
         pd_lay.addWidget(self.spin_pad)
         self.layout.addWidget(self.pad_box)
-        
+
         self.layout.addStretch()
 
     def inspect(self, token: ArchitectToken) -> None:
         self._token = token
         self.setVisible(True)
         self.title.setText(f"INSPECTING: {token.type.name}")
-        
+
         # Show/Hide relevant controls
         self.val_box.setVisible(token.type == TokenType.SEPARATOR)
         self.pre_box.setVisible(token.type == TokenType.VERSION)
-        self.pad_box.setVisible(token.type in [TokenType.VERSION, TokenType.SHOT, TokenType.SEQUENCE])
-        
+        self.pad_box.setVisible(
+            token.type in [TokenType.VERSION, TokenType.SHOT, TokenType.SEQUENCE]
+        )
+
         # Block signals to prevent feedback loop
         self.edit_val.blockSignals(True)
         self.edit_pre.blockSignals(True)
         self.spin_pad.blockSignals(True)
-        
+
         self.edit_val.setText(token.value)
         self.edit_pre.setText(token.prefix)
         self.spin_pad.setValue(token.padding)
-        
+
         self.edit_val.blockSignals(False)
         self.edit_pre.blockSignals(False)
         self.spin_pad.blockSignals(False)
@@ -626,6 +677,8 @@ class NamingArchitectDialog(QDialog):
         self.resize(1100, 650)
         self.setStyleSheet(STYLESHEET)
         self._samples = []
+        self._mode = "token"  # "token" or "smart"
+        self._smart_pattern: Optional[str] = None  # Pattern from smart builder
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -653,11 +706,22 @@ class NamingArchitectDialog(QDialog):
         header.addStretch()
 
         self.btn_magic = QPushButton("✨ Magic Wand")
-        self.btn_magic.setStyleSheet("background-color: #4a4a4a; color: white; font-weight: bold; padding: 8px 16px;")
+        self.btn_magic.setStyleSheet(
+            "background-color: #4a4a4a; color: white; font-weight: bold; padding: 8px 16px;"
+        )
         self.btn_magic.clicked.connect(self._on_magic_wand)
         self.btn_magic.setEnabled(False)
         self.btn_magic.setToolTip("Auto-detect pattern from sample filenames")
         header.addWidget(self.btn_magic)
+
+        self.btn_smart = QPushButton("🧠 Smart Pattern Builder")
+        self.btn_smart.setStyleSheet(
+            "background-color: #00677a; color: white; font-weight: bold; padding: 8px 16px;"
+        )
+        self.btn_smart.clicked.connect(self._on_launch_smart_pattern)
+        self.btn_smart.setEnabled(False)
+        self.btn_smart.setToolTip("Generate pattern by annotating examples")
+        header.addWidget(self.btn_smart)
 
         main_layout.addLayout(header)
 
@@ -772,7 +836,9 @@ class NamingArchitectDialog(QDialog):
         result_header.addStretch()
 
         self.match_stats = QLabel("0/0 matched (0%)")
-        self.match_stats.setStyleSheet("color: #00bff3; font-size: 10px; font-weight: bold;")
+        self.match_stats.setStyleSheet(
+            "color: #00bff3; font-size: 10px; font-weight: bold;"
+        )
         result_header.addWidget(self.match_stats)
 
         right_lay.addLayout(result_header)
@@ -791,14 +857,18 @@ class NamingArchitectDialog(QDialog):
 
         # Regex display (collapsible)
         regex_container = QFrame()
-        regex_container.setStyleSheet("background-color: #1e1e1e; border-radius: 4px; padding: 8px;")
+        regex_container.setStyleSheet(
+            "background-color: #1e1e1e; border-radius: 4px; padding: 8px;"
+        )
         regex_lay = QVBoxLayout(regex_container)
         regex_lay.setContentsMargins(8, 8, 8, 8)
         regex_lay.setSpacing(4)
 
         regex_header = QHBoxLayout()
         self.regex_toggle = QPushButton("▼ Generated Regex")
-        self.regex_toggle.setStyleSheet("text-align: left; background: transparent; border: none; color: #888;")
+        self.regex_toggle.setStyleSheet(
+            "text-align: left; background: transparent; border: none; color: #888;"
+        )
         self.regex_toggle.clicked.connect(self._toggle_regex)
         regex_header.addWidget(self.regex_toggle)
         regex_header.addStretch()
@@ -835,7 +905,9 @@ class NamingArchitectDialog(QDialog):
         btn_apply = QPushButton("Apply to Project")
         btn_apply.setMinimumWidth(140)
         btn_apply.setMinimumHeight(36)
-        btn_apply.setStyleSheet("background-color: #094771; color: white; font-weight: bold;")
+        btn_apply.setStyleSheet(
+            "background-color: #094771; color: white; font-weight: bold;"
+        )
         btn_apply.clicked.connect(self.accept)
         btn_row.addWidget(btn_apply)
 
@@ -852,8 +924,20 @@ class NamingArchitectDialog(QDialog):
 
         presets = {
             1: [TokenType.SEQUENCE, "_", TokenType.SHOT],  # Standard Shot
-            2: [TokenType.SEQUENCE, "_", TokenType.SHOT, "_", TokenType.VERSION],  # Shot & Version
-            3: [TokenType.PROJECT, "_", TokenType.SEQUENCE, "_", TokenType.SHOT],  # Technicolor
+            2: [
+                TokenType.SEQUENCE,
+                "_",
+                TokenType.SHOT,
+                "_",
+                TokenType.VERSION,
+            ],  # Shot & Version
+            3: [
+                TokenType.PROJECT,
+                "_",
+                TokenType.SEQUENCE,
+                "_",
+                TokenType.SHOT,
+            ],  # Technicolor
             4: [TokenType.SHOT],  # Flat Delivery
         }
 
@@ -900,9 +984,7 @@ class NamingArchitectDialog(QDialog):
 
         if token.type == TokenType.SEPARATOR:
             value, ok = QInputDialog.getText(
-                self, "Edit Separator",
-                "Separator character:",
-                text=token.value
+                self, "Edit Separator", "Separator character:", text=token.value
             )
             if ok:
                 token.value = value
@@ -917,9 +999,12 @@ class NamingArchitectDialog(QDialog):
                 current = items[2]
 
             item, ok = QInputDialog.getItem(
-                self, "Version Prefix",
+                self,
+                "Version Prefix",
                 "Select version prefix:",
-                items, items.index(current), False
+                items,
+                items.index(current),
+                False,
             )
             if ok:
                 if item == items[1]:
@@ -934,23 +1019,33 @@ class NamingArchitectDialog(QDialog):
         """Toggle regex display visibility"""
         is_visible = self.regex_label.isVisible()
         self.regex_label.setVisible(not is_visible)
-        self.regex_toggle.setText("▲ Generated Regex" if not is_visible else "▼ Generated Regex")
+        self.regex_toggle.setText(
+            "▲ Generated Regex" if not is_visible else "▼ Generated Regex"
+        )
 
     def _copy_regex(self) -> None:
         """Copy regex to clipboard"""
         from PySide6.QtWidgets import QApplication
+
         pattern = TokenEngine.compile(self.drop_zone.get_tokens())
         QApplication.clipboard().setText(pattern)
 
     def _on_samples_changed(self) -> None:
         """Update samples list and enable Magic Wand"""
         text = self.sample_edit.toPlainText()
-        self._samples = [line.strip() for line in text.splitlines() if line.strip()]
+        self._samples = [
+            os.path.basename(line.strip()) for line in text.splitlines() if line.strip()
+        ]
         self.btn_magic.setEnabled(len(self._samples) > 0)
-        self._on_rule_changed()
+        self.btn_smart.setEnabled(len(self._samples) > 0)
+        if self._mode == "smart" and self._smart_pattern:
+            self._refresh_simulation_with_pattern(self._smart_pattern)
+        else:
+            self._on_rule_changed()
 
     def _on_rule_changed(self) -> None:
         """Update regex display and simulation results"""
+        self._mode = "token"
         tokens = self.drop_zone.get_tokens()
         pattern = TokenEngine.compile(tokens)
 
@@ -960,23 +1055,32 @@ class NamingArchitectDialog(QDialog):
         # Update match stats
         if self._samples:
             import re
+
             try:
                 regex = re.compile(pattern, re.IGNORECASE)
                 matched = sum(1 for s in self._samples if regex.match(s))
                 total = len(self._samples)
                 pct = int(matched / total * 100) if total > 0 else 0
 
-                color = "#4ec9b0" if pct >= 80 else "#f39c12" if pct >= 50 else "#f44747"
+                color = (
+                    "#4ec9b0" if pct >= 80 else "#f39c12" if pct >= 50 else "#f44747"
+                )
                 self.match_stats.setText(f"{matched}/{total} matched ({pct}%)")
-                self.match_stats.setStyleSheet(f"color: {color}; font-size: 10px; font-weight: bold;")
+                self.match_stats.setStyleSheet(
+                    f"color: {color}; font-size: 10px; font-weight: bold;"
+                )
             except re.error:
                 # Invalid regex pattern
                 self.match_stats.setText("Invalid pattern")
-                self.match_stats.setStyleSheet("color: #f44747; font-size: 10px; font-weight: bold;")
+                self.match_stats.setStyleSheet(
+                    "color: #f44747; font-size: 10px; font-weight: bold;"
+                )
             except Exception as e:
                 # Unexpected error (memory, encoding issues, etc.)
                 self.match_stats.setText(f"Error: {type(e).__name__}")
-                self.match_stats.setStyleSheet("color: #f44747; font-size: 10px; font-weight: bold;")
+                self.match_stats.setStyleSheet(
+                    "color: #f44747; font-size: 10px; font-weight: bold;"
+                )
         else:
             self.match_stats.setText("0/0 matched (0%)")
 
@@ -985,11 +1089,12 @@ class NamingArchitectDialog(QDialog):
         self.drop_zone.clear()
         for item in pattern:
             if isinstance(item, str):
-                self.drop_zone.add_token(ArchitectToken(type=TokenType.SEPARATOR, value=item))
+                self.drop_zone.add_token(
+                    ArchitectToken(type=TokenType.SEPARATOR, value=item)
+                )
             else:
                 self.drop_zone.add_token(ArchitectToken(type=item))
         self._on_rule_changed()
-
 
     def _on_magic_wand(self) -> None:
         """Heuristically guess tokens from samples and populate the drop zone."""
@@ -1003,5 +1108,105 @@ class NamingArchitectDialog(QDialog):
                 self.drop_zone.add_token(t)
             self._on_rule_changed()
 
+    def _on_launch_smart_pattern(self) -> None:
+        """Launch the Smart Pattern Builder dialog."""
+        from ramses_ingest.smart_pattern_dialog import SmartPatternDialog
+
+        dlg = SmartPatternDialog(parent=self)
+
+        # Pre-populate with samples
+        dlg.sample_edit.setPlainText("\n".join(self._samples))
+        dlg._on_samples_changed()
+
+        if dlg.exec():
+            # User selected a pattern - store it
+            pattern = dlg.get_final_regex()
+            if pattern:
+                self._smart_pattern = pattern
+                self._mode = "smart"
+
+                # Clear token zone and show the pattern
+                self.drop_zone.blockSignals(True)
+                self.drop_zone.clear()
+                self.drop_zone.blockSignals(False)
+                self.regex_label.setText(pattern)
+                self.regex_label.setVisible(True)
+                self.regex_toggle.setText("▲ Generated Regex (Smart Pattern)")
+
+                # Update simulation with the smart pattern
+                self._refresh_simulation_with_pattern(pattern)
+
+                # Show success message
+                from PySide6.QtWidgets import QMessageBox
+
+                QMessageBox.information(
+                    self,
+                    "Pattern Generated",
+                    f"Smart pattern generated successfully!\n\n"
+                    f"The pattern has been loaded and tested against your examples.\n"
+                    f"Review the results below, then click 'Apply to Project' to use it.",
+                )
+
+    def _refresh_simulation_with_pattern(self, pattern: str) -> None:
+        """Refresh simulation table with a raw regex pattern."""
+        if not self._samples:
+            return
+
+        try:
+            regex = re.compile(pattern, re.IGNORECASE)
+            matched = sum(1 for s in self._samples if regex.match(os.path.basename(s)))
+            total = len(self._samples)
+            pct = int(matched / total * 100) if total > 0 else 0
+
+            color = "#4ec9b0" if pct >= 80 else "#f39c12" if pct >= 50 else "#f44747"
+            self.match_stats.setText(f"{matched}/{total} matched ({pct}%)")
+            self.match_stats.setStyleSheet(
+                f"color: {color}; font-size: 10px; font-weight: bold;"
+            )
+
+            # Update simulation table (it can handle raw regex)
+            # We'll pass empty tokens, but override with raw pattern
+            self.sim_table.setRowCount(len(self._samples))
+
+            for row, full_path in enumerate(self._samples):
+                filename = os.path.basename(full_path)
+                match = regex.match(filename)
+                res = match.groupdict() if match else {}
+
+                # Filename
+                lbl = QLabel(
+                    f'<html><body style="font-family:Consolas, monospace; font-size:11px;">{filename}</body></html>'
+                )
+                lbl.setStyleSheet("padding-left: 5px; background: transparent;")
+                self.sim_table.setCellWidget(row, 0, lbl)
+
+                # Extracted values
+                from PySide6.QtWidgets import QTableWidgetItem
+                from PySide6.QtGui import QColor
+
+                it_seq = QTableWidgetItem(res.get("sequence", "—"))
+                it_shot = QTableWidgetItem(res.get("shot", "—"))
+
+                status = "MATCHED" if res.get("shot") else "FAILED"
+                it_status = QTableWidgetItem(status)
+
+                if status == "MATCHED":
+                    it_status.setForeground(QColor("#27ae60"))
+                else:
+                    it_status.setForeground(QColor("#c0392b"))
+
+                self.sim_table.setItem(row, 1, it_seq)
+                self.sim_table.setItem(row, 2, it_shot)
+                self.sim_table.setItem(row, 3, it_status)
+
+        except re.error:
+            self.match_stats.setText("Invalid pattern")
+            self.match_stats.setStyleSheet(
+                "color: #f44747; font-size: 10px; font-weight: bold;"
+            )
+
     def get_final_regex(self) -> str:
+        # If smart pattern was generated, use that; otherwise use tokens
+        if self._mode == "smart" and self._smart_pattern:
+            return self._smart_pattern
         return TokenEngine.compile(self.drop_zone.get_tokens())

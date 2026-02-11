@@ -9,7 +9,16 @@ import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal, QThread, QUrl, QTimer, QSize
-from PySide6.QtGui import QFont, QDragEnterEvent, QDropEvent, QColor, QPalette, QAction, QShortcut, QKeySequence
+from PySide6.QtGui import (
+    QFont,
+    QDragEnterEvent,
+    QDropEvent,
+    QColor,
+    QPalette,
+    QAction,
+    QShortcut,
+    QKeySequence,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -47,7 +56,11 @@ from ramses_ingest.prober import check_ffprobe
 
 # Import reusable components
 from ramses_ingest.gui_widgets import (
-    GuiLogHandler, DropZone, StatusIndicator, EditableDelegate, RulesEditorDialog
+    GuiLogHandler,
+    DropZone,
+    StatusIndicator,
+    EditableDelegate,
+    RulesEditorDialog,
 )
 
 
@@ -469,7 +482,7 @@ class IngestWindow(QMainWindow):
         self._selected_plan: IngestPlan | None = None  # For detail panel
 
         self._reconnect_timer = QTimer(self)
-        self._reconnect_timer.setInterval(5000) # Check every 5 seconds
+        self._reconnect_timer.setInterval(5000)  # Check every 5 seconds
         self._reconnect_timer.timeout.connect(self._try_connect)
 
         # Initialize logging handler
@@ -484,7 +497,7 @@ class IngestWindow(QMainWindow):
         self._build_ui()
         # Connect asynchronously on startup
         QTimer.singleShot(100, self._try_connect)
-        
+
         # Maximize on startup
         self.showMaximized()
 
@@ -495,7 +508,7 @@ class IngestWindow(QMainWindow):
             "ffprobe could not be found in your system PATH.\n\n"
             "Metadata extraction (resolution, frame count) will be unavailable, "
             "and ingest may fail or produce incomplete data.\n\n"
-            "Please install FFmpeg and restart the application."
+            "Please install FFmpeg and restart the application.",
         )
 
     def _setup_logging(self) -> None:
@@ -505,7 +518,7 @@ class IngestWindow(QMainWindow):
         logging.getLogger("ramses_ingest").addHandler(handler)
         # Ensure we capture at least INFO level
         if logging.getLogger("ramses_ingest").level == logging.NOTSET:
-             logging.getLogger("ramses_ingest").setLevel(logging.INFO)
+            logging.getLogger("ramses_ingest").setLevel(logging.INFO)
 
     def _on_resolve_timeout(self) -> None:
         """Called after debounce period to resolve paths and update UI."""
@@ -558,7 +571,9 @@ class IngestWindow(QMainWindow):
         # Project
         header_lay.addWidget(QLabel("Project:"))
         self._project_label_display = QLabel("—")
-        self._project_label_display.setStyleSheet("color: #ffffff; font-weight: 800; font-size: 13px;")
+        self._project_label_display.setStyleSheet(
+            "color: #ffffff; font-weight: 800; font-size: 13px;"
+        )
         header_lay.addWidget(self._project_label_display)
 
         # Step
@@ -573,7 +588,9 @@ class IngestWindow(QMainWindow):
 
         # Standards
         self._standards_label = QLabel("—")
-        self._standards_label.setStyleSheet("color: #888; font-family: 'Consolas', monospace; font-size: 10px;")
+        self._standards_label.setStyleSheet(
+            "color: #888; font-family: 'Consolas', monospace; font-size: 10px;"
+        )
         header_lay.addWidget(self._standards_label)
 
         header_lay.addStretch()
@@ -697,7 +714,18 @@ class IngestWindow(QMainWindow):
         self._table = QTableWidget()
         self._table.setColumnCount(10)
         self._table.setHorizontalHeaderLabels(
-            ["", "Filename", "Ver", "Shot", "Seq", "Resource", "Frames", "Res", "FPS", "Status"]
+            [
+                "",
+                "Filename",
+                "Ver",
+                "Shot",
+                "Seq",
+                "Resource",
+                "Frames",
+                "Res",
+                "FPS",
+                "Status",
+            ]
         )
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
@@ -714,10 +742,14 @@ class IngestWindow(QMainWindow):
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         header.resizeSection(0, 28)  # Checkbox
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Filename stretches
+        header.setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )  # Filename stretches
         for col in [2, 3, 4, 5, 6, 7, 8]:  # Ver, Shot, Seq, Resource, Frames, Res, FPS
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
-            header.resizeSection(col, 65 if col in [2, 8] else 88)  # Slightly wider than original
+            header.resizeSection(
+                col, 65 if col in [2, 8] else 88
+            )  # Slightly wider than original
         header.setSectionResizeMode(9, QHeaderView.ResizeMode.Interactive)
         header.resizeSection(9, 70)  # Status - wider to prevent header cut-off
 
@@ -749,7 +781,9 @@ class IngestWindow(QMainWindow):
         self._detail_widget.setReadOnly(True)
         self._detail_widget.setMinimumHeight(300)
         self._detail_widget.setPlaceholderText("Select a clip to view details...")
-        self._detail_widget.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._detail_widget.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
         right_lay.addWidget(self._detail_widget)
 
         right_lay.addSpacing(20)
@@ -808,7 +842,9 @@ class IngestWindow(QMainWindow):
         action_bar_lay.addWidget(self._btn_clear)
 
         self._summary_label = QLabel("No delivery loaded.")
-        self._summary_label.setStyleSheet("font-size: 13px; font-weight: 600; color: #888888;")
+        self._summary_label.setStyleSheet(
+            "font-size: 13px; font-weight: 600; color: #888888;"
+        )
         action_bar_lay.addWidget(self._summary_label)
 
         action_bar_lay.addStretch()
@@ -865,7 +901,9 @@ class IngestWindow(QMainWindow):
         log_header.addStretch()
 
         # Overmind Studios credit
-        credit_label = QLabel('<a href="https://www.overmind-studios.de/" style="color: #666666; text-decoration: none;">Made by Overmind Studios</a>')
+        credit_label = QLabel(
+            '<a href="https://www.overmind-studios.de/" style="color: #666666; text-decoration: none;">Made by Overmind Studios</a>'
+        )
         credit_label.setStyleSheet("font-size: 10px; font-style: italic;")
         credit_label.setOpenExternalLinks(True)
         credit_label.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -886,7 +924,9 @@ class IngestWindow(QMainWindow):
         self._log_edit.setReadOnly(True)
         self._log_edit.setMaximumHeight(160)
         self._log_edit.setVisible(False)
-        self._log_edit.setStyleSheet("QTextEdit { font-family: 'Consolas', monospace; font-size: 11px; }")
+        self._log_edit.setStyleSheet(
+            "QTextEdit { font-family: 'Consolas', monospace; font-size: 11px; }"
+        )
         root.addWidget(self._log_edit)
 
         # Keyboard shortcuts
@@ -896,6 +936,9 @@ class IngestWindow(QMainWindow):
         self._rule_combo = QComboBox()
         self._rule_combo.addItem("Auto-detect")
         self._populate_rule_combo()
+        self._rule_combo.currentIndexChanged.connect(
+            lambda _: self._rematch_all_clips()
+        )
 
         # Initialize options checkboxes
         self._chk_thumb = QCheckBox()
@@ -929,7 +972,7 @@ class IngestWindow(QMainWindow):
 
     def _setup_shortcuts(self) -> None:
         """Setup keyboard shortcuts for professional workflow"""
-        
+
         # Ctrl+F = Focus search
         QShortcut(QKeySequence("Ctrl+F"), self, lambda: self._search_edit.setFocus())
 
@@ -1002,8 +1045,8 @@ class IngestWindow(QMainWindow):
             # 3. Search filter
             if show and search_text:
                 shot_item = self._table.item(row, 3)  # Shot column
-                seq_item = self._table.item(row, 4)   # Seq column
-                res_item = self._table.item(row, 5)   # Resource column
+                seq_item = self._table.item(row, 4)  # Seq column
+                res_item = self._table.item(row, 5)  # Resource column
                 file_item = self._table.item(row, 1)  # Filename column
 
                 match = False
@@ -1029,7 +1072,7 @@ class IngestWindow(QMainWindow):
             self._override_shot.blockSignals(True)
             self._override_seq.blockSignals(True)
             self._override_res.blockSignals(True)
-            
+
             self._detail_widget.clear()
             self._override_shot.clear()
             self._override_shot.setEnabled(False)
@@ -1037,11 +1080,11 @@ class IngestWindow(QMainWindow):
             self._override_seq.setEnabled(False)
             self._override_res.clear()
             self._override_res.setEnabled(False)
-            
+
             self._override_shot.blockSignals(False)
             self._override_seq.blockSignals(False)
             self._override_res.blockSignals(False)
-            
+
             self._selected_plan = None
             return
 
@@ -1143,7 +1186,7 @@ class IngestWindow(QMainWindow):
             # Update the data model immediately
             plan = self._selected_plan
             plan.shot_id = text
-            
+
             # Debounce the expensive resolution/update cycle
             self._resolve_timer.start()
 
@@ -1238,7 +1281,7 @@ class IngestWindow(QMainWindow):
         # Ingest Options Group
         ingest_options_group = QGroupBox("Ingest Processing Options")
         ingest_options_lay = QVBoxLayout(ingest_options_group)
-        
+
         # Thumbnails
         chk_thumb = QCheckBox("Generate thumbnails")
         chk_thumb.setChecked(self._chk_thumb.isChecked())
@@ -1261,7 +1304,7 @@ class IngestWindow(QMainWindow):
         )
         chk_fast.setChecked(self._chk_fast_verify.isChecked())
         ingest_options_lay.addWidget(chk_fast)
-        
+
         lay.addWidget(ingest_options_group)
         lay.addSpacing(10)
 
@@ -1285,16 +1328,19 @@ class IngestWindow(QMainWindow):
         rule_lay = QVBoxLayout(rule_group)
 
         rule_combo = QComboBox()
-        rule_combo.addItem("Auto-detect")
-        # Copy existing rules to dialog
-        for i in range(1, self._rule_combo.count()):
-            rule_combo.addItem(self._rule_combo.itemText(i))
+        self._populate_rule_combo(rule_combo)
         rule_combo.setCurrentIndex(self._rule_combo.currentIndex())
         rule_lay.addWidget(rule_combo)
 
         rule_btns = QHBoxLayout()
         btn_architect = QPushButton("Architect...")
-        btn_architect.clicked.connect(self._on_launch_architect)
+
+        def _launch_and_refresh():
+            self._on_launch_architect()
+            self._populate_rule_combo(rule_combo)
+            rule_combo.setCurrentIndex(self._rule_combo.currentIndex())
+
+        btn_architect.clicked.connect(_launch_and_refresh)
         rule_btns.addWidget(btn_architect)
 
         btn_edl = QPushButton("Load EDL...")
@@ -1318,6 +1364,7 @@ class IngestWindow(QMainWindow):
 
         # Daemon Settings
         from ramses.ram_settings import RamSettings
+
         ram_settings = RamSettings.instance()
 
         daemon_group = QGroupBox("Daemon Connection")
@@ -1385,10 +1432,7 @@ class IngestWindow(QMainWindow):
             file_filter = "All Files (*)"
 
         path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Ramses Client Executable",
-            "",
-            file_filter
+            self, "Select Ramses Client Executable", "", file_filter
         )
 
         if path:
@@ -1416,6 +1460,7 @@ class IngestWindow(QMainWindow):
 
         # Apply daemon settings
         from ramses.ram_settings import RamSettings
+
         ram_settings = RamSettings.instance()
 
         try:
@@ -1434,8 +1479,64 @@ class IngestWindow(QMainWindow):
             if new_path:
                 self._log(f"Ramses client path updated to {new_path}")
 
+        # Re-match clips with potentially new rules/settings
+        self._rematch_all_clips()
+
         self._update_summary()
         dialog.accept()
+
+    def _rematch_all_clips(self) -> None:
+        """Re-run matching on all loaded clips using current engine rules."""
+        if not self._plans:
+            return
+
+        # Extract clips from current plans (deduplicated by first file)
+        clips = []
+        seen = set()
+        for p in self._plans:
+            if p.match.clip.first_file not in seen:
+                clips.append(p.match.clip)
+                seen.add(p.match.clip.first_file)
+
+        # Re-match
+        from ramses_ingest.matcher import match_clips
+        from ramses_ingest.publisher import build_plans
+
+        # Determine rules to use based on combo box selection
+        # Index 0 is "Auto-detect" (all rules)
+        # Index 1 is Rule 1 (self._engine.rules[0])
+        selected_idx = self._rule_combo.currentIndex()
+        if selected_idx > 0:
+            rule_idx = selected_idx - 1
+            if 0 <= rule_idx < len(self._engine.rules):
+                rules_to_use = [self._engine.rules[rule_idx]]
+            else:
+                rules_to_use = self._engine.rules
+        else:
+            rules_to_use = self._engine.rules
+
+        matches = match_clips(clips, rules_to_use)
+
+        # Reuse media info from existing plans
+        media_infos = {p.match.clip.first_file: p.media_info for p in self._plans}
+
+        # Re-build plans
+        new_plans = build_plans(
+            matches,
+            media_infos,
+            project_id=self._engine.project_id or "PROJ",
+            project_name=self._engine.project_name
+            or self._engine.project_id
+            or "Project",
+            step_id=self._engine.step_id,
+            existing_sequences=self._engine.existing_sequences,
+            existing_shots=self._engine.existing_shots,
+        )
+
+        # Re-resolve paths and check for collisions
+        self._plans = new_plans
+        self._resolve_all_paths()
+        self._populate_table()
 
     def _update_filter_counts(self) -> None:
         """Update the count badges on filter buttons"""
@@ -1465,7 +1566,7 @@ class IngestWindow(QMainWindow):
         """Populate or update the table with current plans."""
         # CRITICAL: Disable sorting while we modify items to prevent row-jumping
         self._table.setSortingEnabled(False)
-        
+
         # Block signals to prevent triggering itemSelectionChanged or itemChanged
         self._table.blockSignals(True)
         self._override_shot.blockSignals(True)
@@ -1506,7 +1607,7 @@ class IngestWindow(QMainWindow):
             else:
                 # Update existing
                 chk = chk_widget.findChild(QCheckBox)
-            
+
             if chk:
                 chk.blockSignals(True)
                 chk.setChecked(plan.enabled)
@@ -1516,23 +1617,23 @@ class IngestWindow(QMainWindow):
             filename = f"{clip.base_name}.{clip.extension}"
             if clip.is_sequence:
                 filename = f"{clip.base_name}{clip.separator}####.{clip.extension}"
-            
+
             file_item = self._table.item(idx, 1)
             if not file_item:
                 file_item = QTableWidgetItem()
                 file_item.setFlags(file_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self._table.setItem(idx, 1, file_item)
-            
+
             if file_item.text() != filename:
                 file_item.setText(filename)
-            
+
             # Update data/color
             file_item.setData(Qt.ItemDataRole.UserRole, plan)
             if "COLLISION" in (plan.error or ""):
                 file_item.setBackground(QColor(180, 50, 50, 150))
                 file_item.setToolTip(plan.error)
             else:
-                file_item.setBackground(QColor(0, 0, 0, 0)) # Clear background
+                file_item.setBackground(QColor(0, 0, 0, 0))  # Clear background
                 file_item.setToolTip(filename)
 
             # --- Column 2: Version ---
@@ -1543,13 +1644,15 @@ class IngestWindow(QMainWindow):
                 ver_item.setFlags(ver_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 ver_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self._table.setItem(idx, 2, ver_item)
-            
+
             if ver_item.text() != ver_text:
                 ver_item.setText(ver_text)
 
             if plan.match.version and plan.match.version != plan.version:
                 ver_item.setBackground(QColor(120, 100, 0, 100))
-                ver_item.setToolTip(f"Mismatch: v{plan.match.version:03d} -> v{plan.version:03d}")
+                ver_item.setToolTip(
+                    f"Mismatch: v{plan.match.version:03d} -> v{plan.version:03d}"
+                )
             else:
                 ver_item.setBackground(QColor(0, 0, 0, 0))
                 ver_item.setToolTip("")
@@ -1560,14 +1663,14 @@ class IngestWindow(QMainWindow):
             if not shot_item:
                 shot_item = QTableWidgetItem()
                 self._table.setItem(idx, 3, shot_item)
-            
+
             if shot_item.text() != shot_text:
                 shot_item.setText(shot_text)
-            
+
             if not plan.shot_id:
                 shot_item.setForeground(QColor("#f44747"))
             else:
-                shot_item.setForeground(QColor("#e0e0e0")) # Default text color
+                shot_item.setForeground(QColor("#e0e0e0"))  # Default text color
 
             # --- Column 4: Sequence ---
             seq_text = plan.sequence_id or "—"
@@ -1576,7 +1679,7 @@ class IngestWindow(QMainWindow):
                 seq_item = QTableWidgetItem()
                 seq_item.setFlags(seq_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self._table.setItem(idx, 4, seq_item)
-            
+
             if seq_item.text() != seq_text:
                 seq_item.setText(seq_text)
 
@@ -1586,7 +1689,7 @@ class IngestWindow(QMainWindow):
             if not res_item:
                 res_item = QTableWidgetItem()
                 self._table.setItem(idx, 5, res_item)
-            
+
             if res_item.text() != res_val:
                 res_item.setText(res_val)
 
@@ -1594,8 +1697,12 @@ class IngestWindow(QMainWindow):
             if clip.is_sequence:
                 fc = clip.frame_count
             else:
-                fc = plan.media_info.frame_count if plan.media_info.frame_count > 0 else 1
-            
+                fc = (
+                    plan.media_info.frame_count
+                    if plan.media_info.frame_count > 0
+                    else 1
+                )
+
             frames_text = str(fc)
             frames_item = self._table.item(idx, 6)
             if not frames_item:
@@ -1608,7 +1715,9 @@ class IngestWindow(QMainWindow):
 
             if clip.missing_frames:
                 frames_item.setBackground(QColor(150, 50, 0, 150))
-                frames_item.setToolTip(f"Gaps detected: {len(clip.missing_frames)} frames")
+                frames_item.setToolTip(
+                    f"Gaps detected: {len(clip.missing_frames)} frames"
+                )
             else:
                 frames_item.setBackground(QColor(0, 0, 0, 0))
                 frames_item.setToolTip("")
@@ -1635,7 +1744,9 @@ class IngestWindow(QMainWindow):
 
             if is_res_mismatch:
                 res_item.setBackground(QColor(120, 100, 0, 100))
-                res_item.setToolTip(f"Mismatch: Project is {self._engine._project_width}x{self._engine._project_height}")
+                res_item.setToolTip(
+                    f"Mismatch: Project is {self._engine._project_width}x{self._engine._project_height}"
+                )
             else:
                 res_item.setBackground(QColor(0, 0, 0, 0))
                 res_item.setToolTip("")
@@ -1652,13 +1763,15 @@ class IngestWindow(QMainWindow):
                 fps_item = QTableWidgetItem()
                 fps_item.setFlags(fps_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self._table.setItem(idx, 8, fps_item)
-            
+
             if fps_item.text() != fps_text:
                 fps_item.setText(fps_text)
 
             if is_fps_mismatch:
                 fps_item.setBackground(QColor(120, 100, 0, 100))
-                fps_item.setToolTip(f"Mismatch: Project is {self._engine._project_fps:.3f}")
+                fps_item.setToolTip(
+                    f"Mismatch: Project is {self._engine._project_fps:.3f}"
+                )
             else:
                 fps_item.setBackground(QColor(0, 0, 0, 0))
                 fps_item.setToolTip("")
@@ -1692,8 +1805,9 @@ class IngestWindow(QMainWindow):
         # This clears stale red backgrounds from rows that were previously colliding.
         for row in range(self._table.rowCount()):
             p = self._get_plan_from_row(row)
-            if not p: continue
-            
+            if not p:
+                continue
+
             f_item = self._table.item(row, 1)
             if f_item:
                 if "COLLISION" in (p.error or ""):
@@ -1706,7 +1820,11 @@ class IngestWindow(QMainWindow):
                     f_item.setBackground(QColor(0, 0, 0, 0))
                     # Restore standard filename tooltip
                     clip = p.match.clip
-                    fname = f"{clip.base_name}{clip.separator}####.{clip.extension}" if clip.is_sequence else f"{clip.base_name}.{clip.extension}"
+                    fname = (
+                        f"{clip.base_name}{clip.separator}####.{clip.extension}"
+                        if clip.is_sequence
+                        else f"{clip.base_name}.{clip.extension}"
+                    )
                     f_item.setToolTip(fname)
 
         self._update_filter_counts()
@@ -1722,11 +1840,13 @@ class IngestWindow(QMainWindow):
         # Resources (Auxiliary) are allowed to deviate from project specs without warnings.
         is_res_mismatch = False
         is_fps_mismatch = False
-        
+
         if not plan.resource:
             if self._engine._project_width > 0 and plan.media_info.width > 0:
-                if (plan.media_info.width != self._engine._project_width or 
-                    plan.media_info.height != self._engine._project_height):
+                if (
+                    plan.media_info.width != self._engine._project_width
+                    or plan.media_info.height != self._engine._project_height
+                ):
                     is_res_mismatch = True
 
             if self._engine._project_fps > 0 and plan.media_info.fps > 0:
@@ -1734,8 +1854,11 @@ class IngestWindow(QMainWindow):
                     is_fps_mismatch = True
 
         if plan.match.clip.missing_frames:
-            return "warning", f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
-        
+            return (
+                "warning",
+                f"GAPS: {len(plan.match.clip.missing_frames)} missing frames",
+            )
+
         if is_res_mismatch or is_fps_mismatch:
             return "warning", "Technical mismatch (Res/FPS)"
 
@@ -1768,7 +1891,7 @@ class IngestWindow(QMainWindow):
             if chk_widget and chk_widget.findChild(QCheckBox) == sender:
                 target_row = row
                 break
-        
+
         if target_row == -1:
             return
 
@@ -1776,7 +1899,7 @@ class IngestWindow(QMainWindow):
         if not plan:
             return
 
-        is_checked = (state == Qt.CheckState.Checked.value)
+        is_checked = state == Qt.CheckState.Checked.value
         plan.enabled = is_checked
 
         # 1. Update status dot immediately
@@ -1802,8 +1925,8 @@ class IngestWindow(QMainWindow):
                 if not is_checked:
                     item.setForeground(QColor(120, 120, 120))
                 else:
-                     # Restore colors based on simple logic (could be more complex if we stored state)
-                    if col == 3 and not plan.shot_id: # Shot column
+                    # Restore colors based on simple logic (could be more complex if we stored state)
+                    if col == 3 and not plan.shot_id:  # Shot column
                         item.setForeground(QColor("#f44747"))
                     else:
                         item.setForeground(QColor("#e0e0e0"))
@@ -1811,17 +1934,19 @@ class IngestWindow(QMainWindow):
         # 3. Re-resolve collisions (expensive, so maybe debounce? For now, direct)
         # We need to re-check collisions because unchecking a file might resolve a collision for another
         self._resolve_all_paths()
-        
+
         # 4. Refresh other rows that might have changed status due to collision resolution
-        # This is the "Ghost Collision" fix. 
+        # This is the "Ghost Collision" fix.
         # We iterate all rows to update their status dots if they were collisions.
         for row in range(self._table.rowCount()):
-            if row == target_row: 
+            if row == target_row:
                 continue
-                
+
             p = self._get_plan_from_row(row)
-            if p and p.enabled: # Only care about enabled ones potentially changing state
-                 # Update status dot
+            if (
+                p and p.enabled
+            ):  # Only care about enabled ones potentially changing state
+                # Update status dot
                 s, msg = self._get_plan_status(p)
                 w = self._table.cellWidget(row, 9)
                 if w:
@@ -1829,7 +1954,7 @@ class IngestWindow(QMainWindow):
                     if ind and ind.status_type != s:
                         ind.set_status(s)
                         ind.setToolTip(msg)
-                        
+
                 # Update collision highlighting in Filename column (Col 1)
                 file_item = self._table.item(row, 1)
                 if file_item:
@@ -1840,7 +1965,11 @@ class IngestWindow(QMainWindow):
                         file_item.setBackground(QColor(0, 0, 0, 0))
                         # Restore filename tooltip
                         clip = p.match.clip
-                        fname = f"{clip.base_name}.####.{clip.extension}" if clip.is_sequence else f"{clip.base_name}.{clip.extension}"
+                        fname = (
+                            f"{clip.base_name}.####.{clip.extension}"
+                            if clip.is_sequence
+                            else f"{clip.base_name}.{clip.extension}"
+                        )
                         file_item.setToolTip(fname)
 
         self._update_summary()
@@ -1863,7 +1992,7 @@ class IngestWindow(QMainWindow):
                 plan = self._get_plan_from_row(row)
                 if plan:
                     plan.shot_id = shot_id
-                    item = self._table.item(row, 3) # Shot column (was 2)
+                    item = self._table.item(row, 3)  # Shot column (was 2)
                     if item:
                         item.setText(shot_id)
 
@@ -1913,7 +2042,7 @@ class IngestWindow(QMainWindow):
                 plan = self._get_plan_from_row(row)
                 if plan:
                     plan.resource = res
-            
+
             # Re-resolve paths (this triggers re-calc and table refresh for collision status)
             self._on_resolve_timeout()
 
@@ -1935,15 +2064,15 @@ class IngestWindow(QMainWindow):
                         chk.blockSignals(True)
                         chk.setChecked(False)
                         chk.blockSignals(False)
-            
+
             # Apply visual dimming immediately
             for col in range(1, 9):
                 item = self._table.item(row, col)
                 if item:
                     item.setForeground(QColor(120, 120, 120))
-            
+
             # Update status dot
-            status, status_msg = self._get_plan_status(plan) # Should be 'skipped'
+            status, status_msg = self._get_plan_status(plan)  # Should be 'skipped'
             status_widget = self._table.cellWidget(row, 9)
             if status_widget:
                 indicator = status_widget.findChild(StatusIndicator)
@@ -1968,7 +2097,7 @@ class IngestWindow(QMainWindow):
                     if ind and ind.status_type != s:
                         ind.set_status(s)
                         ind.setToolTip(msg)
-                
+
                 # Refresh filename background (collision warning)
                 file_item = self._table.item(row, 1)
                 if file_item:
@@ -1978,7 +2107,11 @@ class IngestWindow(QMainWindow):
                     else:
                         file_item.setBackground(QColor(0, 0, 0, 0))
                         clip = p.match.clip
-                        fname = f"{clip.base_name}.####.{clip.extension}" if clip.is_sequence else f"{clip.base_name}.{clip.extension}"
+                        fname = (
+                            f"{clip.base_name}.####.{clip.extension}"
+                            if clip.is_sequence
+                            else f"{clip.base_name}.{clip.extension}"
+                        )
                         file_item.setToolTip(fname)
 
         self._update_summary()
@@ -1989,32 +2122,49 @@ class IngestWindow(QMainWindow):
     def _log(self, msg: str) -> None:
         """Add syntax highlighting for log messages and append to log edit."""
         msg_upper = msg.upper()
-        
+
         # 1. Error Check (Highest Priority)
-        # We check errors first because a message like "Complete: 1 failed" 
+        # We check errors first because a message like "Complete: 1 failed"
         # should be red, even though it contains "Complete".
-        has_error = any(k in msg_upper for k in ["ERROR", "FAILED", "CRITICAL", "FAIL", "✖", ": FAILED"])
-        
+        has_error = any(
+            k in msg_upper
+            for k in ["ERROR", "FAILED", "CRITICAL", "FAIL", "✖", ": FAILED"]
+        )
+
         # Exception: "0 FAILED" or "0 FAIL" usually means success in a summary context
         if has_error and ("0 FAILED" in msg_upper or "0 FAIL" in msg_upper):
             # Only downgrade if it doesn't contain actual ERROR or CRITICAL labels elsewhere
-            if not any(k in msg_upper for k in ["ERROR", "CRITICAL", "✖", "INGEST ERROR"]):
+            if not any(
+                k in msg_upper for k in ["ERROR", "CRITICAL", "✖", "INGEST ERROR"]
+            ):
                 has_error = False
 
         if has_error:
-            colored_msg = f'<span style="color: #f44747; font-weight: bold;">{msg}</span>'
-            
+            colored_msg = (
+                f'<span style="color: #f44747; font-weight: bold;">{msg}</span>'
+            )
+
         # 2. Success Check
-        elif any(k in msg_upper for k in [
-            "SUCCEEDED", "COMPLETE", "SUCCESS", "DONE", "✓", ": OK", 
-            "MAPPED", "READY:", "MATCHED"
-        ]):
+        elif any(
+            k in msg_upper
+            for k in [
+                "SUCCEEDED",
+                "COMPLETE",
+                "SUCCESS",
+                "DONE",
+                "✓",
+                ": OK",
+                "MAPPED",
+                "READY:",
+                "MATCHED",
+            ]
+        ):
             colored_msg = f'<span style="color: #27ae60;">{msg}</span>'
-            
+
         # 3. Warning Check
         elif "WARNING" in msg_upper or "WARN" in msg_upper:
             colored_msg = f'<span style="color: #f39c12;">{msg}</span>'
-            
+
         # 4. Default / Info
         else:
             colored_msg = msg
@@ -2078,10 +2228,12 @@ class IngestWindow(QMainWindow):
         # UI Feedback: Connecting state
         self._status_label.setText("CONNECTING...")
         self._status_label.setObjectName("statusConnecting")
-        self._status_label.setStyleSheet("") # Clear inline style to let objectName take over
+        self._status_label.setStyleSheet(
+            ""
+        )  # Clear inline style to let objectName take over
         self._status_label.style().unpolish(self._status_label)
         self._status_label.style().polish(self._status_label)
-        
+
         self._btn_reconnect.setVisible(False)
         self._btn_refresh.setEnabled(False)  # Disable while connecting
 
@@ -2102,7 +2254,7 @@ class IngestWindow(QMainWindow):
 
             self._status_label.setText("DAEMON ONLINE")
             self._status_label.setObjectName("statusConnected")
-            self._status_label.setStyleSheet("") # Clear any inline styles
+            self._status_label.setStyleSheet("")  # Clear any inline styles
             pid = self._engine.project_id
             pname = self._engine.project_name
             self._project_label_display.setText(f"{pid} - {pname}")
@@ -2118,32 +2270,34 @@ class IngestWindow(QMainWindow):
             self._step_combo.clear()
             for s in self._engine.steps:
                 self._step_combo.addItem(s)
-            
+
             # Select "PLATE" if it exists, otherwise select the current engine step
             if "PLATE" in self._engine.steps:
                 self._step_combo.setCurrentText("PLATE")
             else:
                 self._step_combo.setCurrentText(self._engine.step_id)
-            
+
             # CRITICAL: Re-sync engine state with whatever was actually selected
             self._engine.step_id = self._step_combo.currentText()
             self._step_combo.blockSignals(False)
-            
+
             # If we were already working, refresh paths now that we're connected
             if self._plans:
                 self._resolve_all_paths()
                 self._populate_table()
-                
+
         else:
             self._status_label.setText("OFFLINE")
             self._status_label.setObjectName("statusDisconnected")
-            self._status_label.setStyleSheet("") # Clear any inline styles
+            self._status_label.setStyleSheet("")  # Clear any inline styles
             self._project_label_display.setText("— (Connection Required)")
             self._btn_ingest.setToolTip("Ramses connection required to ingest.")
-            
+
             self._btn_reconnect.setVisible(True)
-            self._btn_refresh.setVisible(False) # Only show Refresh when connected (manual reload)
-            
+            self._btn_refresh.setVisible(
+                False
+            )  # Only show Refresh when connected (manual reload)
+
             if not self._reconnect_timer.isActive():
                 self._reconnect_timer.start()
 
@@ -2152,12 +2306,24 @@ class IngestWindow(QMainWindow):
         self._status_label.style().polish(self._status_label)
         self._update_summary()
 
-    def _populate_rule_combo(self) -> None:
-        # Use in-memory rules from engine (already loaded/updated)
+    def _populate_rule_combo(self, combo: QComboBox | None = None) -> None:
+        target = combo or self._rule_combo
+        was_blocked = target.blockSignals(True)
+        target.clear()
+        target.addItem("Auto-detect")
+
+        from ramses_ingest.matcher import BUILTIN_RULES
+
+        builtin_patterns = {r.pattern for r in BUILTIN_RULES}
+
         rules = self._engine.rules
         for i, rule in enumerate(rules):
-            label = rule.pattern[:40] + ("..." if len(rule.pattern) > 40 else "")
-            self._rule_combo.addItem(f"Rule {i + 1}: {label}")
+            label = rule.pattern
+            if len(label) > 50:
+                label = label[:50] + "..."
+
+            prefix = "Default" if rule.pattern in builtin_patterns else "Custom"
+            target.addItem(f"{prefix} {i + 1}: {label}")
 
     def _update_summary(self) -> None:
         if not self._plans:
@@ -2176,23 +2342,39 @@ class IngestWindow(QMainWindow):
 
         # Count status types (only for enabled plans)
         ready_count = sum(1 for p in enabled_plans if p.can_execute and not p.error)
-        warning_count = sum(1 for p in enabled_plans if p.can_execute and p.error and "warning" in p.error.lower())
-        
+        warning_count = sum(
+            1
+            for p in enabled_plans
+            if p.can_execute and p.error and "warning" in p.error.lower()
+        )
+
         # Errors: Enabled plans that cannot execute OR have an explicit error
-        error_count = sum(1 for p in enabled_plans if not p.can_execute or (p.error and "error" in p.error.lower()))
+        error_count = sum(
+            1
+            for p in enabled_plans
+            if not p.can_execute or (p.error and "error" in p.error.lower())
+        )
 
         # Build summary with color coding
         summary_parts = [f"<b>{total} clips</b>"]
-        
+
         if n_skipped > 0:
-             summary_parts.append(f"<span style='color: #888;'>({n_enabled} selected)</span>")
+            summary_parts.append(
+                f"<span style='color: #888;'>({n_enabled} selected)</span>"
+            )
 
         if ready_count > 0:
-            summary_parts.append(f"<span style='color: #27ae60;'>{ready_count} ready</span>")
+            summary_parts.append(
+                f"<span style='color: #27ae60;'>{ready_count} ready</span>"
+            )
         if warning_count > 0:
-            summary_parts.append(f"<span style='color: #f39c12;'>{warning_count} warnings</span>")
+            summary_parts.append(
+                f"<span style='color: #f39c12;'>{warning_count} warnings</span>"
+            )
         if error_count > 0:
-            summary_parts.append(f"<span style='color: #f44747;'>{error_count} errors</span>")
+            summary_parts.append(
+                f"<span style='color: #f44747;'>{error_count} errors</span>"
+            )
 
         if new_shots > 0:
             summary_parts.append(f"{new_shots} new shots")
@@ -2209,7 +2391,9 @@ class IngestWindow(QMainWindow):
         else:
             label_color = "#888888"
 
-        self._summary_label.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {label_color};")
+        self._summary_label.setStyleSheet(
+            f"font-size: 13px; font-weight: 600; color: {label_color};"
+        )
 
         is_dry = self._chk_dry_run.isChecked()
         btn_text = "Simulate" if is_dry else "Ingest"
@@ -2233,7 +2417,9 @@ class IngestWindow(QMainWindow):
                     "background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #094771, stop:1 #06314d); color: white; border: none; font-weight: bold;"
                 )
             else:
-                self._btn_ingest.setStyleSheet("")  # Revert to stylesheet default (muted)
+                self._btn_ingest.setStyleSheet(
+                    ""
+                )  # Revert to stylesheet default (muted)
 
         # Strict enforcement: Connection AND valid plans AND a defined pipeline step
         has_step = bool(self._step_combo.currentText())
@@ -2380,7 +2566,7 @@ class IngestWindow(QMainWindow):
     def _on_scan_done(self, plans: list[IngestPlan]) -> None:
         # Deduplicate: only add clips that aren't already in the list
         existing_paths = {p.match.clip.first_file for p in self._plans}
-        
+
         to_add = []
         skipped = 0
         for p in plans:
@@ -2393,9 +2579,9 @@ class IngestWindow(QMainWindow):
         if to_add:
             self._plans.extend(to_add)
             self._populate_table()
-        
+
         self._drop_zone._label.setText("Drop Footage Here\nAccepts folders and files")
-        
+
         msg = f"Scan complete: {len(to_add)} new clip(s) detected."
         if skipped > 0:
             msg += f" ({skipped} duplicates skipped)"
@@ -2478,8 +2664,6 @@ class IngestWindow(QMainWindow):
             self._studio_edit.setText(studio)
 
             # Then refresh the UI with the updated rules
-            self._rule_combo.clear()
-            self._rule_combo.addItem("Auto-detect")
             self._populate_rule_combo()
             self._log("Rules and Studio name reloaded.")
 
@@ -2494,7 +2678,7 @@ class IngestWindow(QMainWindow):
             "This will restore the default built-in naming rules and discard all custom rules.\n\n"
             "Are you sure you want to continue?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No
+            QMessageBox.StandardButton.No,
         )
 
         if reply == QMessageBox.StandardButton.Yes:
@@ -2511,8 +2695,6 @@ class IngestWindow(QMainWindow):
             )
 
             # Refresh UI
-            self._rule_combo.clear()
-            self._rule_combo.addItem("Auto-detect")
             self._populate_rule_combo()
             self._log("Rules reset to default built-in patterns.")
 
@@ -2527,19 +2709,25 @@ class IngestWindow(QMainWindow):
             if regex:
                 # Add to engine's rules and persist
                 new_rule = NamingRule(pattern=regex)
-                self._engine.rules.insert(0, new_rule)
-                save_rules(
-                    self._engine.rules,
-                    DEFAULT_RULES_PATH,
-                    studio_name=self._engine.studio_name,
-                )
+                # FIX: self._engine.rules returns a copy, so we must set it back
+                current_rules = self._engine.rules
+                current_rules.insert(0, new_rule)
+                self._engine.rules = current_rules
+                try:
+                    save_rules(
+                        self._engine.rules,
+                        DEFAULT_RULES_PATH,
+                        studio_name=self._engine.studio_name,
+                    )
+                except Exception as e:
+                    self._log(f"Warning: Could not save rules to config: {e}")
 
                 # Refresh UI
-                self._rule_combo.clear()
-                self._rule_combo.addItem("Auto-detect")
                 self._populate_rule_combo()
                 self._rule_combo.setCurrentIndex(1)  # Select the newly created rule
                 self._log(f"New rule created via Architect: {regex}")
+            else:
+                self._log("Architect returned empty rule - skipping.")
 
     def _on_load_edl(self, _=None) -> None:
         from PySide6.QtWidgets import QFileDialog
