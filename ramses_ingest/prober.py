@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 import logging
 import time
@@ -23,6 +24,9 @@ import OpenImageIO as oiio
 
 # Image formats where OIIO reads PAR from the file header (ffprobe can't)
 _OIIO_PAR_EXTENSIONS = {".exr", ".dpx", ".tif", ".tiff", ".hdr"}
+
+# Subprocess creation flags to hide console windows on Windows
+_SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +167,8 @@ def check_ffprobe() -> bool:
             ["ffprobe", "-version"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            check=True
+            check=True,
+            creationflags=_SUBPROCESS_FLAGS
         )
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
@@ -288,6 +293,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
             cmd,
             capture_output=True,
             text=True,
+            creationflags=_SUBPROCESS_FLAGS,
             timeout=15,
         )
     except FileNotFoundError:

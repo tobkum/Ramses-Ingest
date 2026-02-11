@@ -13,9 +13,13 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from ramses_ingest.scanner import Clip
+
+# Subprocess creation flags to hide console windows on Windows
+_SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 
 def _escape_ffmpeg_filter_path(path: str) -> str:
@@ -130,7 +134,7 @@ def generate_proxy(
         ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS, timeout=600)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -171,7 +175,7 @@ def _thumbnail_from_sequence(
 
     try:
         # 90s timeout for 8K footage, network storage, and heavy codecs (H.265, ProRes RAW)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS, timeout=90)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
@@ -217,7 +221,7 @@ def _thumbnail_from_movie(
 
     try:
         # 90s timeout for 8K footage, network storage, and heavy codecs (H.265, ProRes RAW)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS, timeout=90)
         return result.returncode == 0
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
