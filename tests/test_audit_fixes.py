@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "lib"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from ramses_ingest.matcher import _validate_id, NamingRule, match_clip

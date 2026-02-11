@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)), "lib"))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "lib"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING
