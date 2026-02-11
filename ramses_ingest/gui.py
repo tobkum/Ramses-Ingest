@@ -1966,7 +1966,7 @@ class IngestWindow(QMainWindow):
                         # Restore filename tooltip
                         clip = p.match.clip
                         fname = (
-                            f"{clip.base_name}.####.{clip.extension}"
+                            f"{clip.base_name}{clip.separator}####.{clip.extension}"
                             if clip.is_sequence
                             else f"{clip.base_name}.{clip.extension}"
                         )
@@ -2108,7 +2108,7 @@ class IngestWindow(QMainWindow):
                         file_item.setBackground(QColor(0, 0, 0, 0))
                         clip = p.match.clip
                         fname = (
-                            f"{clip.base_name}.####.{clip.extension}"
+                            f"{clip.base_name}{clip.separator}####.{clip.extension}"
                             if clip.is_sequence
                             else f"{clip.base_name}.{clip.extension}"
                         )
@@ -2324,6 +2324,8 @@ class IngestWindow(QMainWindow):
 
             prefix = "Default" if rule.pattern in builtin_patterns else "Custom"
             target.addItem(f"{prefix} {i + 1}: {label}")
+
+        target.blockSignals(was_blocked)
 
     def _update_summary(self) -> None:
         if not self._plans:

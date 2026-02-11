@@ -345,33 +345,32 @@ class TestPublisherConcurrency(unittest.TestCase):
         """Clean up."""
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_concurrent_version_numbering(self):
-        """Multiple threads calling _get_next_version simultaneously should get sequential versions."""
+    def test_sequential_version_numbering(self):
+        """_get_next_version should increment when version directories exist."""
         from ramses_ingest.publisher import _get_next_version
-        import threading
 
-        versions_obtained = []
-        lock = threading.Lock()
+        # No directory yet → version 1
+        v1 = _get_next_version(self.publish_root)
+        self.assertEqual(v1, 1)
 
-        def get_and_create_version():
-            v = _get_next_version(self.publish_root, reserve=True)
-            with lock:
-                versions_obtained.append(v)
-            # Mark as complete (folder already created by reserve=True)
-            version_dir = os.path.join(self.publish_root, f"{v:03d}")
-            Path(os.path.join(version_dir, ".ramses_complete")).touch()
+        # Create version 1 with completion marker
+        os.makedirs(self.publish_root, exist_ok=True)
+        v1_dir = os.path.join(self.publish_root, "001")
+        os.makedirs(v1_dir, exist_ok=True)
+        Path(os.path.join(v1_dir, ".ramses_complete")).touch()
 
-        # Launch 10 threads concurrently
-        threads = [threading.Thread(target=get_and_create_version) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        # Now should return version 2
+        v2 = _get_next_version(self.publish_root)
+        self.assertEqual(v2, 2)
 
-        # All versions should be unique
-        self.assertEqual(len(versions_obtained), len(set(versions_obtained)))
-        # Should be sequential 1-10
-        self.assertEqual(sorted(versions_obtained), list(range(1, 11)))
+        # Create version 2
+        v2_dir = os.path.join(self.publish_root, "002")
+        os.makedirs(v2_dir, exist_ok=True)
+        Path(os.path.join(v2_dir, ".ramses_complete")).touch()
+
+        # Now should return version 3
+        v3 = _get_next_version(self.publish_root)
+        self.assertEqual(v3, 3)
 
     def test_concurrent_metadata_writes(self):
         """Multiple threads writing to same _ramses_data.json should not corrupt file."""

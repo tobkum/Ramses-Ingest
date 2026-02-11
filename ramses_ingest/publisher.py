@@ -375,32 +375,17 @@ def copy_frames(
     return copied_count, first_checksum, total_bytes, first_filename
 
 
-def _get_next_version(publish_root: str, reserve: bool = False) -> int:
+def _get_next_version(publish_root: str) -> int:
     """Find the next available version number by scanning API-compliant folders.
 
     Ramses API Spec: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
 
     Thread-safe: Uses _VERSION_LOCK to prevent race conditions in parallel execution.
+    Callers are responsible for creating the version directory after obtaining the number.
     """
     with _VERSION_LOCK:
         publish_root = normalize_path(publish_root)
         if not os.path.isdir(publish_root):
-            if not reserve:
-                return 1
-
-            # Create folder inside lock to prevent race condition
-            try:
-                os.makedirs(publish_root, exist_ok=True)
-            except OSError:
-                pass
-            # Create placeholder for version 1 to prevent race condition
-            placeholder_path = os.path.join(publish_root, "001")
-            try:
-                os.makedirs(placeholder_path, exist_ok=True)
-                marker_path = os.path.join(placeholder_path, ".ramses_reserved")
-                Path(marker_path).touch(exist_ok=True)
-            except (OSError, PermissionError):
-                pass
             return 1
 
         max_v = 0
@@ -422,9 +407,6 @@ def _get_next_version(publish_root: str, reserve: bool = False) -> int:
                     # Check for completion marker (permanent)
                     if os.path.exists(os.path.join(v_path, ".ramses_complete")):
                         is_valid_version = True
-                    # Check for reservation marker (temporary, prevents race conditions)
-                    elif os.path.exists(os.path.join(v_path, ".ramses_reserved")):
-                        is_valid_version = True
                     # Fallback: Check mtime (for backwards compatibility with old versions)
                     else:
                         try:
@@ -441,22 +423,7 @@ def _get_next_version(publish_root: str, reserve: bool = False) -> int:
         except Exception:
             pass
 
-        next_version = max_v + 1
-
-        if reserve:
-            # Create placeholder directory with marker file to reserve this version number
-            # This prevents race conditions when multiple threads call this function
-            # The marker ensures the directory is detected by subsequent scans
-            placeholder_path = os.path.join(publish_root, f"{next_version:03d}")
-            try:
-                os.makedirs(placeholder_path, exist_ok=True)
-                # Touch a marker file to explicitly mark this version as reserved
-                marker_path = os.path.join(placeholder_path, ".ramses_reserved")
-                Path(marker_path).touch(exist_ok=True)
-            except (OSError, PermissionError):
-                pass  # Best effort - if it fails, caller will handle conflicts
-
-        return next_version
+        return max_v + 1
 
 
 def generate_thumbnail_for_result(
@@ -619,7 +586,7 @@ def resolve_paths(
         # VERSION-UP LOGIC (Optimized with local cache)
         publish_root = os.path.join(step_folder, "_published")
         if publish_root not in version_cache:
-            version_cache[publish_root] = _get_next_version(publish_root, reserve=False)
+            version_cache[publish_root] = _get_next_version(publish_root)
 
         plan.version = version_cache[publish_root]
 
@@ -690,9 +657,7 @@ def resolve_paths_from_daemon(
             # Find next version (Dry scan of existing folders) with optimization
             publish_root = f"{step_root}/_published"
             if publish_root not in version_cache:
-                version_cache[publish_root] = _get_next_version(
-                    publish_root, reserve=False
-                )
+                version_cache[publish_root] = _get_next_version(publish_root)
 
             plan.version = version_cache[publish_root]
 

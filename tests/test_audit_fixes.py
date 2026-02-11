@@ -152,45 +152,32 @@ class TestAuditFix6_VersionLockRaceCondition(unittest.TestCase):
         import shutil
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    def test_concurrent_version_numbering(self):
-        """Multiple threads should get sequential version numbers."""
+    def test_sequential_version_numbering(self):
+        """Version numbers should increment as version directories are created."""
         publish_root = os.path.join(self.temp_dir, "_published")
-        versions_obtained = []
-        lock = threading.Lock()
 
-        def get_version():
-            v = _get_next_version(publish_root, reserve=True)
-            with lock:
-                versions_obtained.append(v)
-            # Mark as complete (the folder is already created by reserve=True)
-            Path(os.path.join(publish_root, f"{v:03d}", ".ramses_complete")).touch()
+        # No directory yet → version 1
+        v1 = _get_next_version(publish_root)
+        self.assertEqual(v1, 1)
 
-        # Run 10 threads concurrently
-        threads = [threading.Thread(target=get_version) for _ in range(10)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
+        # Create version 1 with completion marker
+        os.makedirs(publish_root, exist_ok=True)
+        v1_dir = os.path.join(publish_root, "001")
+        os.makedirs(v1_dir, exist_ok=True)
+        Path(os.path.join(v1_dir, ".ramses_complete")).touch()
 
-        # All versions should be unique
-        self.assertEqual(len(versions_obtained), len(set(versions_obtained)))
-        # Should be sequential 1-10
-        self.assertEqual(sorted(versions_obtained), list(range(1, 11)))
+        # Now should return version 2
+        v2 = _get_next_version(publish_root)
+        self.assertEqual(v2, 2)
 
-    def test_folder_creation_inside_lock(self):
-        """Folder creation should happen inside lock to prevent race."""
+    def test_nonexistent_publish_root(self):
+        """Non-existent publish root should return version 1 without creating dirs."""
         publish_root = os.path.join(self.temp_dir, "nonexistent")
 
-        # First call should create folder AND version 1 placeholder
-        v1 = _get_next_version(publish_root, reserve=True)
-        self.assertEqual(v1, 1)
-        self.assertTrue(os.path.isdir(publish_root))
-        # Placeholder should be created to reserve version 1
-        self.assertTrue(os.path.exists(os.path.join(publish_root, "001")))
-
-        # Second call should see version 1 is taken and return version 2
-        v2 = _get_next_version(publish_root, reserve=True)
-        self.assertEqual(v2, 2)  # Version 1 was reserved by first call
+        v = _get_next_version(publish_root)
+        self.assertEqual(v, 1)
+        # Should NOT create any directories
+        self.assertFalse(os.path.exists(publish_root))
 
 
 class TestAuditFix8_ThreadSafeCacheDirtyFlag(unittest.TestCase):
