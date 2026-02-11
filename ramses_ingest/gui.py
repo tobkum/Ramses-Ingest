@@ -712,7 +712,7 @@ class IngestWindow(QMainWindow):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(10)
+        self._table.setColumnCount(11)
         self._table.setHorizontalHeaderLabels(
             [
                 "",
@@ -724,6 +724,7 @@ class IngestWindow(QMainWindow):
                 "Frames",
                 "Res",
                 "FPS",
+                "PAR",
                 "Status",
             ]
         )
@@ -745,13 +746,13 @@ class IngestWindow(QMainWindow):
         header.setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )  # Filename stretches
-        for col in [2, 3, 4, 5, 6, 7, 8]:  # Ver, Shot, Seq, Resource, Frames, Res, FPS
+        for col in [2, 3, 4, 5, 6, 7, 8, 9]:  # Ver, Shot, Seq, Resource, Frames, Res, FPS, PAR
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
             header.resizeSection(
-                col, 65 if col in [2, 8] else 88
+                col, 65 if col in [2, 8, 9] else 88
             )  # Slightly wider than original
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Interactive)
-        header.resizeSection(9, 70)  # Status - wider to prevent header cut-off
+        header.setSectionResizeMode(10, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(10, 70)  # Status - wider to prevent header cut-off
 
         # Set delegate for inline editing
         delegate = EditableDelegate(self._table)
@@ -1023,7 +1024,7 @@ class IngestWindow(QMainWindow):
             # 1. Status filter
             if self._current_filter_status != "all":
                 # Check status column (index 9)
-                status_container = self._table.cellWidget(row, 9)
+                status_container = self._table.cellWidget(row, 10)
                 if status_container:
                     # Find the StatusIndicator inside the container
                     status_indicator = status_container.findChild(StatusIndicator)
@@ -1138,11 +1139,10 @@ class IngestWindow(QMainWindow):
 
             details.append(f"<b>FPS:</b> {fps_val}")
 
-        if plan.media_info.pixel_aspect_ratio != 1.0:
-            par_val = f"{plan.media_info.pixel_aspect_ratio:.3f}"
-            if abs(plan.media_info.pixel_aspect_ratio - self._engine._project_par) > 0.001:
-                par_val = f"<b style='color:#f44747'>{par_val} (Project: {self._engine._project_par:.3f})</b>"
-            details.append(f"<b>Pixel Aspect:</b> {par_val}")
+        par_val = f"{plan.media_info.pixel_aspect_ratio:.3f}"
+        if abs(plan.media_info.pixel_aspect_ratio - self._engine._project_par) > 0.001:
+            par_val = f"<b style='color:#f44747'>{par_val} (Project: {self._engine._project_par:.3f})</b>"
+        details.append(f"<b>Pixel Aspect:</b> {par_val}")
 
         if plan.media_info.codec:
             details.append(f"<b>Codec:</b> {plan.media_info.codec}")
@@ -1782,7 +1782,32 @@ class IngestWindow(QMainWindow):
                 fps_item.setBackground(QColor(0, 0, 0, 0))
                 fps_item.setToolTip("")
 
-            # --- Column 9: Status ---
+            # --- Column 9: PAR ---
+            par_val = plan.media_info.pixel_aspect_ratio if plan.media_info else 1.0
+            par_text = f"{par_val:.2f}"
+            is_par_mismatch = False
+            if par_val != 1.0 and abs(par_val - self._engine._project_par) > 0.001:
+                is_par_mismatch = True
+
+            par_item = self._table.item(idx, 9)
+            if not par_item:
+                par_item = QTableWidgetItem()
+                par_item.setFlags(par_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(idx, 9, par_item)
+
+            if par_item.text() != par_text:
+                par_item.setText(par_text)
+
+            if is_par_mismatch:
+                par_item.setBackground(QColor(120, 100, 0, 100))
+                par_item.setToolTip(
+                    f"Mismatch: Project is {self._engine._project_par:.2f}"
+                )
+            else:
+                par_item.setBackground(QColor(0, 0, 0, 0))
+                par_item.setToolTip("")
+
+            # --- Column 10: Status ---
             status, status_msg = self._get_plan_status(plan)
 
             # Always replace status widget as it's cheap and stateful logic is complex to update
@@ -1798,7 +1823,7 @@ class IngestWindow(QMainWindow):
             status_layout.setContentsMargins(0, 0, 0, 0)
             status_layout.setSpacing(0)
 
-            self._table.setCellWidget(idx, 9, status_container)
+            self._table.setCellWidget(idx, 10, status_container)
 
         self._table.blockSignals(False)
         self._override_shot.blockSignals(False)
@@ -1910,7 +1935,7 @@ class IngestWindow(QMainWindow):
 
         # 1. Update status dot immediately
         status, status_msg = self._get_plan_status(plan)
-        status_widget = self._table.cellWidget(target_row, 9)
+        status_widget = self._table.cellWidget(target_row, 10)
         if status_widget:
             indicator = status_widget.findChild(StatusIndicator)
             if indicator:
@@ -1920,8 +1945,8 @@ class IngestWindow(QMainWindow):
 
         # 2. Visual dimming for the whole row
         opacity = 255 if is_checked else 100
-        # Columns 1 through 8 (Filename -> FPS)
-        for col in range(1, 9):
+        # Columns 1 through 9 (Filename -> PAR)
+        for col in range(1, 10):
             item = self._table.item(target_row, col)
             if item:
                 # Keep existing color but change alpha
@@ -1954,7 +1979,7 @@ class IngestWindow(QMainWindow):
             ):  # Only care about enabled ones potentially changing state
                 # Update status dot
                 s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 9)
+                w = self._table.cellWidget(row, 10)
                 if w:
                     ind = w.findChild(StatusIndicator)
                     if ind and ind.status_type != s:
@@ -2072,14 +2097,14 @@ class IngestWindow(QMainWindow):
                         chk.blockSignals(False)
 
             # Apply visual dimming immediately
-            for col in range(1, 9):
+            for col in range(1, 10):
                 item = self._table.item(row, col)
                 if item:
                     item.setForeground(QColor(120, 120, 120))
 
             # Update status dot
             status, status_msg = self._get_plan_status(plan)  # Should be 'skipped'
-            status_widget = self._table.cellWidget(row, 9)
+            status_widget = self._table.cellWidget(row, 10)
             if status_widget:
                 indicator = status_widget.findChild(StatusIndicator)
                 if indicator:
@@ -2097,7 +2122,7 @@ class IngestWindow(QMainWindow):
             if p and p.enabled:
                 # Refresh status dot
                 s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 9)
+                w = self._table.cellWidget(row, 10)
                 if w:
                     ind = w.findChild(StatusIndicator)
                     if ind and ind.status_type != s:
@@ -2270,8 +2295,7 @@ class IngestWindow(QMainWindow):
             w = self._engine._project_width or 0
             h = self._engine._project_height or 0
             par = self._engine._project_par
-            par_str = f" | PAR: {par}" if par != 1.0 else ""
-            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.3f} FPS{par_str}")
+            self._standards_label.setText(f"PROJECT SETTINGS: {w}x{h} @ {fps:.3f} FPS | PAR: {par}")
 
             # Populate steps
             self._step_combo.blockSignals(True)
