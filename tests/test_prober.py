@@ -415,5 +415,42 @@ class TestProberThreading(unittest.TestCase):
             prober._CACHE_ACCESS_TIMES = original_times
 
 
+class TestOIIOProbing(unittest.TestCase):
+    """Test OIIO-based probing with a real EXR fixture."""
+
+    FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "test_1x1_par180.exr")
+
+    @unittest.skipUnless(os.path.isfile(FIXTURE), "Test EXR fixture not found")
+    def test_probe_exr_par(self):
+        """OIIO should extract PAR=1.8 from the EXR header."""
+        info = probe_file(self.FIXTURE)
+        self.assertTrue(info.is_valid)
+        self.assertEqual(info.width, 1)
+        self.assertEqual(info.height, 1)
+        self.assertAlmostEqual(info.pixel_aspect_ratio, 1.8, places=2)
+
+    @unittest.skipUnless(os.path.isfile(FIXTURE), "Test EXR fixture not found")
+    def test_probe_exr_colorspace(self):
+        """OIIO should extract the colorspace attribute from the EXR header."""
+        info = probe_file(self.FIXTURE)
+        # OIIO normalizes "ACEScg" to "lin_ap1_scene"
+        self.assertIn(info.color_space, ("ACEScg", "lin_ap1_scene"))
+
+    @unittest.skipUnless(os.path.isfile(FIXTURE), "Test EXR fixture not found")
+    def test_probe_exr_format(self):
+        """OIIO should report the codec as 'openexr' and pixel format as 'half'."""
+        info = probe_file(self.FIXTURE)
+        self.assertEqual(info.codec, "openexr")
+        self.assertEqual(info.pix_fmt, "half")
+
+    @unittest.skipUnless(os.path.isfile(FIXTURE), "Test EXR fixture not found")
+    def test_probe_exr_no_ffprobe(self):
+        """EXR files should NOT call ffprobe — OIIO handles them entirely."""
+        with patch("subprocess.run") as mock_run:
+            info = probe_file(self.FIXTURE)
+            mock_run.assert_not_called()
+        self.assertTrue(info.is_valid)
+
+
 if __name__ == "__main__":
     unittest.main()
