@@ -14,6 +14,7 @@ from __future__ import annotations
 import concurrent.futures
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -32,6 +33,8 @@ from ramses_ingest.path_utils import normalize_path, join_normalized
 from ramses.file_info import RamFileInfo
 from ramses.constants import FolderNames
 from ramses.constants import ItemType
+
+logger = logging.getLogger(__name__)
 
 
 def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
@@ -296,7 +299,14 @@ def copy_frames(
             return checksum, sz, dst_name, is_first
 
         src_sz = os.path.getsize(src)  # Read source size before copy
-        shutil.copy2(src, dst)
+        try:
+            shutil.copy2(src, dst)
+        except OSError as e:
+            if e.errno == 28 or "No space" in str(e):  # ENOSPC
+                raise OSError(
+                    f"Disk full while copying {dst_name} (need {src_sz} bytes)"
+                ) from e
+            raise
         dst_sz = os.path.getsize(dst)  # Read destination size for verification
 
         # Force sync on Windows network drives to prevent buffered write issues
@@ -317,8 +327,16 @@ def copy_frames(
                     None,
                 )
                 if handle != -1:
-                    # Force flush buffers to disk
-                    ctypes.windll.kernel32.FlushFileBuffers(handle)
+                    # Force flush buffers to disk (with timeout to prevent hangs on slow NAS)
+                    import threading
+                    flush_done = threading.Event()
+                    def _flush():
+                        ctypes.windll.kernel32.FlushFileBuffers(handle)
+                        flush_done.set()
+                    t = threading.Thread(target=_flush, daemon=True)
+                    t.start()
+                    if not flush_done.wait(timeout=15):
+                        logger.warning(f"FlushFileBuffers timed out for {dst_name}")
             except Exception:
                 # If flush fails, proceed anyway - size/MD5 checks will catch issues
                 pass
@@ -335,7 +353,9 @@ def copy_frames(
         # 1. Size check (always) - compare source vs destination
         if src_sz != dst_sz:
             raise OSError(
-                f"Size mismatch: {dst} (source: {src_sz} bytes, dest: {dst_sz} bytes)"
+                f"Size mismatch after copy: {dst_name} "
+                f"(source: {src_sz} bytes, dest: {dst_sz} bytes). "
+                f"Possible disk full or network write error."
             )
 
         # 2. MD5 check (conditional)

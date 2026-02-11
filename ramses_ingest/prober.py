@@ -45,7 +45,7 @@ except ImportError:
 
 def _load_cache():
     """Load cache from disk, auto-migrating from JSON to msgpack if needed."""
-    global _METADATA_CACHE, _CACHE_ACCESS_TIMES
+    global _METADATA_CACHE, _CACHE_ACCESS_TIMES, _CACHE_DIRTY
 
     # Initialize to safe defaults to prevent crashes on load failure
     _METADATA_CACHE = {}
@@ -79,7 +79,6 @@ def _load_cache():
             if _USE_MSGPACK and _METADATA_CACHE:
                 logger.info(f"Migrating cache from JSON to msgpack ({len(_METADATA_CACHE)} entries)")
                 with _CACHE_LOCK:
-                    global _CACHE_DIRTY
                     _CACHE_DIRTY = True
                     _save_cache()  # This will save in msgpack format
                 # Clean up old JSON file after successful migration
@@ -141,8 +140,8 @@ def _save_cache():
 
 def flush_cache():
     """Flush dirty cache to disk. Call this at the end of processing."""
+    global _CACHE_DIRTY
     with _CACHE_LOCK:
-        global _CACHE_DIRTY
         if _CACHE_DIRTY:
             _save_cache()
 
@@ -242,6 +241,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     Uses OIIO for image formats (EXR, DPX, TIFF, HDR) and ffprobe for video.
     Checks persistent cache first (Key = Path + MTime).
     """
+    global _CACHE_DIRTY
     file_path = str(file_path)
     if not os.path.isfile(file_path):
         return MediaInfo()
@@ -267,7 +267,6 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         if info.is_valid and cache_key:
             import time
             with _CACHE_LOCK:
-                global _CACHE_DIRTY
                 _METADATA_CACHE[cache_key] = asdict(info)
                 _CACHE_ACCESS_TIMES[cache_key] = time.time()
                 _CACHE_DIRTY = True
@@ -366,7 +365,6 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     if info.is_valid and cache_key:
         import time
         with _CACHE_LOCK:
-            global _CACHE_DIRTY
             _METADATA_CACHE[cache_key] = asdict(info)
             _CACHE_ACCESS_TIMES[cache_key] = time.time()
             _CACHE_DIRTY = True

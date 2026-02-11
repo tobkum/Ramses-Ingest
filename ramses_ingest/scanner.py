@@ -115,7 +115,8 @@ def scan_directory(root: str | Path) -> list[Clip]:
         # Use frame_pattern to require 2+ digits (matches our RE_FRAME_PADDING)
         try:
             seqs = pyseq.get_sequences(str(dir_path), frame_pattern=r'\d{2,}')
-        except OSError:
+        except OSError as e:
+            logger.warning(f"Failed to scan directory {dir_path}: {e}")
             return
 
         for s in seqs:
