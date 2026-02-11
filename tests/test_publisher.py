@@ -354,13 +354,11 @@ class TestPublisherConcurrency(unittest.TestCase):
         lock = threading.Lock()
 
         def get_and_create_version():
-            v = _get_next_version(self.publish_root)
+            v = _get_next_version(self.publish_root, reserve=True)
             with lock:
                 versions_obtained.append(v)
-            # Create version folder to simulate real usage
+            # Mark as complete (folder already created by reserve=True)
             version_dir = os.path.join(self.publish_root, f"{v:03d}")
-            os.makedirs(version_dir, exist_ok=True)
-            # Mark as complete
             Path(os.path.join(version_dir, ".ramses_complete")).touch()
 
         # Launch 10 threads concurrently
@@ -478,9 +476,9 @@ class TestPublisherConcurrency(unittest.TestCase):
         call_count = []
         original_get_version = __import__('ramses_ingest.publisher', fromlist=['_get_next_version'])._get_next_version
 
-        def mock_get_version(path):
+        def mock_get_version(path, **kwargs):
             call_count.append(path)
-            return original_get_version(path)
+            return original_get_version(path, **kwargs)
 
         with patch('ramses_ingest.publisher._get_next_version', side_effect=mock_get_version):
             resolve_paths(plans, self.temp_dir)

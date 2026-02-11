@@ -278,7 +278,8 @@ class EDLValidator:
                     if line.startswith("* FROM CLIP NAME:"):
                         last_clip = line.split(":")[-1].strip().upper()
                     elif line.startswith("* COMMENT:") and last_clip:
-                        comment = line.split(":")[-1].strip()
+                        # Extract everything after the first "* COMMENT:"
+                        comment = line[len("* COMMENT:"):].strip()
                         # Parse: "SH010 1001-1096" or "SH010: 1001-1096"
                         m = re.match(r"^([A-Za-z0-9_-]+)[:\s]+(\d+)-(\d+)$", comment)
                         if m:

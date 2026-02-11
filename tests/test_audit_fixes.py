@@ -159,12 +159,10 @@ class TestAuditFix6_VersionLockRaceCondition(unittest.TestCase):
         lock = threading.Lock()
 
         def get_version():
-            v = _get_next_version(publish_root)
+            v = _get_next_version(publish_root, reserve=True)
             with lock:
                 versions_obtained.append(v)
-            # Create the version folder to simulate real usage
-            os.makedirs(os.path.join(publish_root, f"{v:03d}"), exist_ok=True)
-            # Mark as complete
+            # Mark as complete (the folder is already created by reserve=True)
             Path(os.path.join(publish_root, f"{v:03d}", ".ramses_complete")).touch()
 
         # Run 10 threads concurrently
@@ -184,14 +182,14 @@ class TestAuditFix6_VersionLockRaceCondition(unittest.TestCase):
         publish_root = os.path.join(self.temp_dir, "nonexistent")
 
         # First call should create folder AND version 1 placeholder
-        v1 = _get_next_version(publish_root)
+        v1 = _get_next_version(publish_root, reserve=True)
         self.assertEqual(v1, 1)
         self.assertTrue(os.path.isdir(publish_root))
         # Placeholder should be created to reserve version 1
         self.assertTrue(os.path.exists(os.path.join(publish_root, "001")))
 
         # Second call should see version 1 is taken and return version 2
-        v2 = _get_next_version(publish_root)
+        v2 = _get_next_version(publish_root, reserve=True)
         self.assertEqual(v2, 2)  # Version 1 was reserved by first call
 
 
