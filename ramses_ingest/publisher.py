@@ -94,6 +94,7 @@ class IngestPlan:
     step_id: str = "PLATE"
     resource: str = ""
     state: str = "WIP"
+    colorspace_override: str = ""  # Per-clip colorspace override (takes precedence over global OCIO setting)
 
     is_new_sequence: bool = False
     is_new_shot: bool = False

@@ -579,13 +579,15 @@ class IngestEngine:
 
         # Helper for thread pool
         def _run_one(plan: IngestPlan) -> IngestResult:
+            # Use per-clip colorspace override if set, otherwise fall back to global setting
+            colorspace = plan.colorspace_override or self.ocio_in
             return execute_plan(
                 plan,
                 generate_thumbnail=generate_thumbnails,
                 generate_proxy=generate_proxies,
                 progress_callback=None,
                 ocio_config=self.ocio_config,
-                ocio_in=self.ocio_in,
+                ocio_in=colorspace,
                 ocio_out="sRGB",
                 skip_ramses_registration=True,
                 dry_run=dry_run,  # Enhancement #8: Dry-run mode

@@ -712,7 +712,7 @@ class IngestWindow(QMainWindow):
 
         # Table
         self._table = QTableWidget()
-        self._table.setColumnCount(11)
+        self._table.setColumnCount(12)
         self._table.setHorizontalHeaderLabels(
             [
                 "",
@@ -725,6 +725,7 @@ class IngestWindow(QMainWindow):
                 "Res",
                 "FPS",
                 "PAR",
+                "Colorspace",
                 "Status",
             ]
         )
@@ -746,13 +747,13 @@ class IngestWindow(QMainWindow):
         header.setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )  # Filename stretches
-        for col in [2, 3, 4, 5, 6, 7, 8, 9]:  # Ver, Shot, Seq, Resource, Frames, Res, FPS, PAR
+        for col in [2, 3, 4, 5, 6, 7, 8, 9, 10]:  # Ver, Shot, Seq, Resource, Frames, Res, FPS, PAR, Colorspace
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.Interactive)
             header.resizeSection(
-                col, 65 if col in [2, 8, 9] else 88
-            )  # Slightly wider than original
-        header.setSectionResizeMode(10, QHeaderView.ResizeMode.Interactive)
-        header.resizeSection(10, 70)  # Status - wider to prevent header cut-off
+                col, 65 if col in [2, 8, 9] else (90 if col == 10 else 88)
+            )  # 65px for Ver/FPS/PAR, 90px for Colorspace, 88px for others
+        header.setSectionResizeMode(11, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(11, 70)  # Status - wider to prevent header cut-off
 
         # Set delegate for inline editing
         delegate = EditableDelegate(self._table)
@@ -786,37 +787,6 @@ class IngestWindow(QMainWindow):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         right_lay.addWidget(self._detail_widget)
-
-        right_lay.addSpacing(20)
-
-        # Override controls
-        override_label = QLabel("OVERRIDE")
-        override_label.setStyleSheet("color: #888; font-size: 9px; font-weight: bold;")
-        right_lay.addWidget(override_label)
-
-        right_lay.addWidget(QLabel("Shot ID:"))
-        self._override_shot = QLineEdit()
-        self._override_shot.setPlaceholderText("Override shot ID...")
-        self._override_shot.setClearButtonEnabled(True)
-        self._override_shot.setEnabled(False)
-        self._override_shot.textChanged.connect(self._on_override_changed)
-        right_lay.addWidget(self._override_shot)
-
-        right_lay.addWidget(QLabel("Sequence ID:"))
-        self._override_seq = QLineEdit()
-        self._override_seq.setPlaceholderText("Override sequence ID...")
-        self._override_seq.setClearButtonEnabled(True)
-        self._override_seq.setEnabled(False)
-        self._override_seq.textChanged.connect(self._on_override_seq_changed)
-        right_lay.addWidget(self._override_seq)
-
-        right_lay.addWidget(QLabel("Resource:"))
-        self._override_res = QLineEdit()
-        self._override_res.setPlaceholderText("Resource (e.g. PLATE, BG)...")
-        self._override_res.setClearButtonEnabled(True)
-        self._override_res.setEnabled(False)
-        self._override_res.textChanged.connect(self._on_override_res_changed)
-        right_lay.addWidget(self._override_res)
 
         right_lay.addStretch()
         main_splitter.addWidget(right_panel)
@@ -951,10 +921,73 @@ class IngestWindow(QMainWindow):
         self._chk_fast_verify = QCheckBox()
         self._chk_fast_verify.setChecked(False)
         self._ocio_in = QComboBox()
-        self._ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
+        # Expanded list of production-standard colorspaces
+        self._populate_ocio_dropdown(self._ocio_in)
         self._btn_edl = QPushButton("Load EDL...")
 
     # -- Professional UI Methods ---------------------------------------------
+
+    def _populate_ocio_dropdown(self, combo: QComboBox, detected_colorspace: str = "") -> None:
+        """Populate OCIO dropdown with standard colorspaces plus detected value
+
+        Args:
+            combo: The QComboBox to populate
+            detected_colorspace: Optional colorspace detected from file metadata
+        """
+        # Standard production colorspaces (expanded from original 6)
+        standard_colorspaces = [
+            "sRGB",
+            "Linear",
+            "Rec.709",
+            "Rec.2020",
+            "ACEScg",
+            "ACES - ACEScct",
+            "ACES - ACEScc",
+            "LogC",
+            "S-Log3",
+            "V-Log",
+            "Cineon",
+            "Gamma 2.2",
+            "Gamma 2.4",
+        ]
+
+        # Build final list
+        items = []
+
+        # If we have a detected colorspace, add it first with indicator
+        if detected_colorspace:
+            # Normalize the detected colorspace (remove common prefixes/suffixes)
+            normalized = detected_colorspace.strip()
+
+            # Check if it's already in our standard list (case-insensitive)
+            is_standard = any(cs.lower() == normalized.lower() for cs in standard_colorspaces)
+
+            if is_standard:
+                # Use the standard name but mark it as auto-detected
+                standard_match = next(cs for cs in standard_colorspaces if cs.lower() == normalized.lower())
+                items.append(f"[Auto] {standard_match}")
+            else:
+                # Custom/unknown colorspace - add it with auto indicator
+                items.append(f"[Auto] {normalized}")
+
+            items.append("---")  # Separator
+
+        # Add all standard colorspaces
+        items.extend(standard_colorspaces)
+
+        # Update combo box
+        current_text = combo.currentText()
+        combo.clear()
+        combo.addItems(items)
+
+        # Try to restore previous selection if it exists
+        if current_text:
+            idx = combo.findText(current_text)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            elif detected_colorspace:
+                # Set to auto-detected value
+                combo.setCurrentIndex(0)
 
     def _open_folder(self, path: str) -> None:
         """Open folder in system file manager (cross-platform)"""
@@ -1023,8 +1056,8 @@ class IngestWindow(QMainWindow):
 
             # 1. Status filter
             if self._current_filter_status != "all":
-                # Check status column (index 9)
-                status_container = self._table.cellWidget(row, 10)
+                # Check status column (index 11)
+                status_container = self._table.cellWidget(row, 11)
                 if status_container:
                     # Find the StatusIndicator inside the container
                     status_indicator = status_container.findChild(StatusIndicator)
@@ -1069,23 +1102,7 @@ class IngestWindow(QMainWindow):
         """Update detail panel when selection changes"""
         selected = self._table.selectedItems()
         if not selected:
-            # Block signals while clearing to prevent triggering overrides
-            self._override_shot.blockSignals(True)
-            self._override_seq.blockSignals(True)
-            self._override_res.blockSignals(True)
-
             self._detail_widget.clear()
-            self._override_shot.clear()
-            self._override_shot.setEnabled(False)
-            self._override_seq.clear()
-            self._override_seq.setEnabled(False)
-            self._override_res.clear()
-            self._override_res.setEnabled(False)
-
-            self._override_shot.blockSignals(False)
-            self._override_seq.blockSignals(False)
-            self._override_res.blockSignals(False)
-
             self._selected_plan = None
             return
 
@@ -1167,64 +1184,9 @@ class IngestWindow(QMainWindow):
 
         self._detail_widget.setHtml("<br>".join(details))
 
-        # --- Update Overrides (SIGNAL PROTECTED) ---
-        # Block signals so that setting text from data doesn't trigger a "change" back to data
-        self._override_shot.blockSignals(True)
-        self._override_seq.blockSignals(True)
-        self._override_res.blockSignals(True)
-
-        self._override_shot.setEnabled(True)
-        self._override_shot.setText(plan.shot_id or "")
-
-        self._override_seq.setEnabled(True)
-        self._override_seq.setText(plan.sequence_id or "")
-
-        self._override_res.setEnabled(True)
-        self._override_res.setText(plan.resource or "")
-
-        self._override_shot.blockSignals(False)
-        self._override_seq.blockSignals(False)
-        self._override_res.blockSignals(False)
-
-    def _on_override_changed(self, text: str) -> None:
-        """Apply shot ID override to selected plan"""
-        if self._selected_plan:
-            # Update the data model immediately
-            plan = self._selected_plan
-            plan.shot_id = text
-
-            # Debounce the expensive resolution/update cycle
-            self._resolve_timer.start()
-
-    def _on_override_seq_changed(self, text: str) -> None:
-        """Apply sequence ID override to selected plan"""
-        if self._selected_plan:
-            plan = self._selected_plan
-            plan.sequence_id = text
-
-            # Update table
-            row = self._table.currentRow()
-            item = self._table.item(row, 4)  # Seq column
-            if item:
-                blocked = self._table.blockSignals(True)
-                item.setText(text or "—")
-                self._table.blockSignals(blocked)
-            self._update_summary()
-
-    def _on_override_res_changed(self, text: str) -> None:
-        """Apply resource override to selected plan"""
-        if self._selected_plan:
-            plan = self._selected_plan
-            plan.resource = text
-
-            # Debounce the expensive resolution/update cycle (re-calc paths)
-            self._resolve_timer.start()
-
-            if item:
-                blocked = self._table.blockSignals(True)
-                item.setText(text or "—")
-                self._table.blockSignals(blocked)
-            self._update_summary()
+        # Update OCIO dropdown with detected colorspace
+        detected_cs = plan.media_info.color_space if plan.media_info else ""
+        self._populate_ocio_dropdown(self._ocio_in, detected_cs)
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         """Handle inline edits in table"""
@@ -1233,30 +1195,16 @@ class IngestWindow(QMainWindow):
             plan = self._get_plan_from_row(row)
             if plan:
                 plan.shot_id = item.text()
-
                 # Debounce the expensive resolution/update cycle
                 self._resolve_timer.start()
-
-                # Update the detail panel immediately if this is the selected plan
-                if self._selected_plan == plan:
-                    self._override_shot.blockSignals(True)
-                    self._override_shot.setText(item.text())
-                    self._override_shot.blockSignals(False)
 
         elif item.column() == 5:  # Resource column
             row = item.row()
             plan = self._get_plan_from_row(row)
             if plan:
                 plan.resource = item.text()
-
                 # Debounce the expensive resolution/update cycle
                 self._resolve_timer.start()
-
-                # Update the detail panel immediately if this is the selected plan
-                if self._selected_plan == plan:
-                    self._override_res.blockSignals(True)
-                    self._override_res.setText(item.text())
-                    self._override_res.blockSignals(False)
 
     def _on_remove_selected(self, _=None) -> None:
         """Remove selected clips from table"""
@@ -1320,7 +1268,11 @@ class IngestWindow(QMainWindow):
 
         ocio_lay.addWidget(QLabel("Source Colorspace:"))
         ocio_in = QComboBox()
-        ocio_in.addItems(["sRGB", "Linear", "Rec.709", "LogC", "S-Log3", "V-Log"])
+        # Populate with same colorspaces as main dropdown
+        detected_cs = ""
+        if self._selected_plan and self._selected_plan.media_info:
+            detected_cs = self._selected_plan.media_info.color_space
+        self._populate_ocio_dropdown(ocio_in, detected_cs)
         ocio_in.setCurrentText(self._ocio_in.currentText())
         ocio_in.currentTextChanged.connect(self._on_ocio_in_changed)
         ocio_lay.addWidget(ocio_in)
@@ -1575,8 +1527,6 @@ class IngestWindow(QMainWindow):
 
         # Block signals to prevent triggering itemSelectionChanged or itemChanged
         self._table.blockSignals(True)
-        self._override_shot.blockSignals(True)
-        self._override_seq.blockSignals(True)
 
         current_row_count = self._table.rowCount()
         target_row_count = len(self._plans)
@@ -1588,10 +1538,6 @@ class IngestWindow(QMainWindow):
         # to avoid losing selection during simple updates (e.g. checkbox toggle)
         if current_row_count != target_row_count:
             self._selected_plan = None
-            self._override_shot.clear()
-            self._override_seq.clear()
-            self._override_shot.setEnabled(False)
-            self._override_seq.setEnabled(False)
 
         for idx, plan in enumerate(self._plans):
             clip = plan.match.clip
@@ -1807,7 +1753,28 @@ class IngestWindow(QMainWindow):
                 par_item.setBackground(QColor(0, 0, 0, 0))
                 par_item.setToolTip("")
 
-            # --- Column 10: Status ---
+            # --- Column 10: Colorspace ---
+            # Show override if set, otherwise detected colorspace
+            if plan.colorspace_override:
+                colorspace = f"[Override] {plan.colorspace_override}"
+                colorspace_color = QColor("#00bff3")  # Blue for override
+            else:
+                colorspace = plan.media_info.color_space if plan.media_info else ""
+                if not colorspace:
+                    colorspace = "—"
+                colorspace_color = QColor("#e0e0e0")  # Default text color
+
+            cs_item = self._table.item(idx, 10)
+            if not cs_item:
+                cs_item = QTableWidgetItem()
+                cs_item.setFlags(cs_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(idx, 10, cs_item)
+
+            if cs_item.text() != colorspace:
+                cs_item.setText(colorspace)
+            cs_item.setForeground(colorspace_color)
+
+            # --- Column 11: Status ---
             status, status_msg = self._get_plan_status(plan)
 
             # Always replace status widget as it's cheap and stateful logic is complex to update
@@ -1823,12 +1790,9 @@ class IngestWindow(QMainWindow):
             status_layout.setContentsMargins(0, 0, 0, 0)
             status_layout.setSpacing(0)
 
-            self._table.setCellWidget(idx, 10, status_container)
+            self._table.setCellWidget(idx, 11, status_container)
 
         self._table.blockSignals(False)
-        self._override_shot.blockSignals(False)
-        self._override_seq.blockSignals(False)
-        self._override_res.blockSignals(False)
         self._table.setSortingEnabled(True)
 
         # 5. Visual Reconciliation (HERO FIX for Ghost Collisions)
@@ -1935,7 +1899,7 @@ class IngestWindow(QMainWindow):
 
         # 1. Update status dot immediately
         status, status_msg = self._get_plan_status(plan)
-        status_widget = self._table.cellWidget(target_row, 10)
+        status_widget = self._table.cellWidget(target_row, 11)
         if status_widget:
             indicator = status_widget.findChild(StatusIndicator)
             if indicator:
@@ -1945,8 +1909,8 @@ class IngestWindow(QMainWindow):
 
         # 2. Visual dimming for the whole row
         opacity = 255 if is_checked else 100
-        # Columns 1 through 9 (Filename -> PAR)
-        for col in range(1, 10):
+        # Columns 1 through 10 (Filename -> Colorspace)
+        for col in range(1, 11):
             item = self._table.item(target_row, col)
             if item:
                 # Keep existing color but change alpha
@@ -1979,7 +1943,7 @@ class IngestWindow(QMainWindow):
             ):  # Only care about enabled ones potentially changing state
                 # Update status dot
                 s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 10)
+                w = self._table.cellWidget(row, 11)
                 if w:
                     ind = w.findChild(StatusIndicator)
                     if ind and ind.status_type != s:
@@ -2077,6 +2041,64 @@ class IngestWindow(QMainWindow):
             # Re-resolve paths (this triggers re-calc and table refresh for collision status)
             self._on_resolve_timeout()
 
+    def _on_context_override_colorspace(self) -> None:
+        """Override colorspace for selected clips"""
+        from PySide6.QtWidgets import QInputDialog
+
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        # Build colorspace list (same as dropdown)
+        colorspace_list = [
+            "sRGB",
+            "Linear",
+            "Rec.709",
+            "Rec.2020",
+            "ACEScg",
+            "ACES - ACEScct",
+            "ACES - ACEScc",
+            "LogC",
+            "S-Log3",
+            "V-Log",
+            "Cineon",
+            "Gamma 2.2",
+            "Gamma 2.4",
+        ]
+
+        # Get current colorspace from first selected clip (if any)
+        first_plan = self._get_plan_from_row(selected_rows[0])
+        current_cs = ""
+        if first_plan:
+            current_cs = (
+                first_plan.colorspace_override
+                or (first_plan.media_info.color_space if first_plan.media_info else "")
+                or "sRGB"
+            )
+
+        # Show combo box dialog
+        colorspace, ok = QInputDialog.getItem(
+            self,
+            "Override Colorspace",
+            f"Select colorspace for {len(selected_rows)} clip(s):",
+            colorspace_list,
+            colorspace_list.index(current_cs) if current_cs in colorspace_list else 0,
+            editable=True,  # Allow custom input
+        )
+
+        if ok and colorspace:
+            for row in selected_rows:
+                plan = self._get_plan_from_row(row)
+                if plan:
+                    plan.colorspace_override = colorspace
+                    # Update Colorspace column (10) with override indicator
+                    item = self._table.item(row, 10)
+                    if item:
+                        item.setText(f"[Override] {colorspace}")
+                        item.setForeground(QColor("#00bff3"))  # Blue to indicate override
+
+            self._update_summary()
+
     def _on_context_skip(self) -> None:
         """Skip selected clips (uncheck them) efficiently."""
         selected_rows = list(set(item.row() for item in self._table.selectedItems()))
@@ -2097,14 +2119,14 @@ class IngestWindow(QMainWindow):
                         chk.blockSignals(False)
 
             # Apply visual dimming immediately
-            for col in range(1, 10):
+            for col in range(1, 11):
                 item = self._table.item(row, col)
                 if item:
                     item.setForeground(QColor(120, 120, 120))
 
             # Update status dot
             status, status_msg = self._get_plan_status(plan)  # Should be 'skipped'
-            status_widget = self._table.cellWidget(row, 10)
+            status_widget = self._table.cellWidget(row, 11)
             if status_widget:
                 indicator = status_widget.findChild(StatusIndicator)
                 if indicator:
@@ -2122,7 +2144,7 @@ class IngestWindow(QMainWindow):
             if p and p.enabled:
                 # Refresh status dot
                 s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 10)
+                w = self._table.cellWidget(row, 11)
                 if w:
                     ind = w.findChild(StatusIndicator)
                     if ind and ind.status_type != s:
@@ -2544,6 +2566,10 @@ class IngestWindow(QMainWindow):
         act_override_res = QAction("Override Resource...", self)
         act_override_res.triggered.connect(self._on_context_override_res)
         menu.addAction(act_override_res)
+
+        act_override_cs = QAction("Override Colorspace...", self)
+        act_override_cs.triggered.connect(self._on_context_override_colorspace)
+        menu.addAction(act_override_cs)
 
         act_skip = QAction("Skip Selected", self)
         act_skip.triggered.connect(self._on_context_skip)
