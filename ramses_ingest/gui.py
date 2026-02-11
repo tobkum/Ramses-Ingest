@@ -2705,12 +2705,17 @@ class IngestWindow(QMainWindow):
         from ramses_ingest.architect import NamingArchitectDialog
         from ramses_ingest.matcher import NamingRule
 
-        dlg = NamingArchitectDialog(parent=self)
+        # Get existing patterns for duplicate detection
+        existing_patterns = [rule.pattern for rule in self._engine.rules]
+
+        dlg = NamingArchitectDialog(parent=self, existing_patterns=existing_patterns)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             regex = dlg.get_final_regex()
+            rule_name = dlg.get_rule_name()
+
             if regex:
                 # Add to engine's rules and persist
-                new_rule = NamingRule(pattern=regex)
+                new_rule = NamingRule(pattern=regex, name=rule_name)
                 # FIX: self._engine.rules returns a copy, so we must set it back
                 current_rules = self._engine.rules
                 current_rules.insert(0, new_rule)
@@ -2721,6 +2726,11 @@ class IngestWindow(QMainWindow):
                         DEFAULT_RULES_PATH,
                         studio_name=self._engine.studio_name,
                     )
+                    # Log success with name if provided
+                    if rule_name:
+                        self._log(f"Added naming rule '{rule_name}' to project.")
+                    else:
+                        self._log("Added naming rule to project.")
                 except Exception as e:
                     self._log(f"Warning: Could not save rules to config: {e}")
 

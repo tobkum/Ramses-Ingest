@@ -35,9 +35,17 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QApplication,
     QComboBox,
+    QStackedWidget,
 )
+from PySide6.QtGui import QTextCharFormat, QTextCursor
 
 from ramses_ingest.gui import STYLESHEET
+from ramses_ingest.pattern_inference import (
+    PatternInferenceEngine,
+    Annotation,
+    PatternCandidate,
+    test_pattern,
+)
 
 if TYPE_CHECKING:
     from ramses_ingest.matcher import NamingRule
@@ -668,17 +676,543 @@ class TokenInspector(QFrame):
             self.changed.emit()
 
 
+# ---------------------------------------------------------------------------
+# Annotation Mode Widgets
+# ---------------------------------------------------------------------------
+
+
+class AnnotatableTextEdit(QTextEdit):
+    """Text edit that allows user to select text and annotate it."""
+
+    annotation_requested = Signal(str, int, int)  # selected_text, start_pos, end_pos
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setMaximumHeight(60)
+        self.setStyleSheet("""
+            QTextEdit {
+                background-color: #1e1e1e;
+                border: 2px solid #00bff3;
+                border-radius: 4px;
+                padding: 8px;
+                font-family: 'Consolas', monospace;
+                font-size: 12px;
+                color: #ffffff;
+            }
+        """)
+
+    def mouseReleaseEvent(self, event):
+        """Emit annotation request when user selects text."""
+        super().mouseReleaseEvent(event)
+        cursor = self.textCursor()
+        if cursor.hasSelection():
+            selected_text = cursor.selectedText()
+            start = cursor.selectionStart()
+            end = cursor.selectionEnd()
+            self.annotation_requested.emit(selected_text, start, end)
+
+
+class AnnotationChip(QFrame):
+    """A small colored chip showing one annotation."""
+
+    removed = Signal(str)  # field_name
+
+    def __init__(self, field_name: str, selected_text: str, color: str, parent=None):
+        super().__init__(parent)
+        self.field_name = field_name
+        self.selected_text = selected_text
+        self.color = color
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setFixedHeight(24)
+        self.setStyleSheet(f"""
+            AnnotationChip {{
+                background-color: #252526;
+                border-left: 3px solid {self.color};
+                border-radius: 3px;
+                padding: 2px 6px;
+            }}
+        """)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(6)
+
+        # Field name label
+        field_label = QLabel(self.field_name.capitalize())
+        field_label.setStyleSheet(f"color: {self.color}; font-weight: bold; font-size: 10px;")
+        layout.addWidget(field_label)
+
+        # Selected text
+        text_label = QLabel(f'"{self.selected_text}"')
+        text_label.setStyleSheet("color: #ccc; font-size: 10px;")
+        layout.addWidget(text_label)
+
+        # Remove button
+        btn_remove = QPushButton("✕")
+        btn_remove.setFixedSize(16, 16)
+        btn_remove.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #888;
+                border: none;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                color: #f44747;
+            }
+        """)
+        btn_remove.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_remove.clicked.connect(lambda: self.removed.emit(self.field_name))
+        layout.addWidget(btn_remove)
+
+
+class AnnotationSummaryStrip(QWidget):
+    """Horizontal row of AnnotationChip widgets."""
+
+    annotation_removed = Signal(str)  # field_name
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._chips = {}  # field_name -> AnnotationChip
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.layout = QHBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(6)
+        self.layout.addWidget(QLabel("Annotations:"))
+        self.layout.addStretch()
+
+    def add_annotation(self, field_name: str, selected_text: str, color: str):
+        """Add or update an annotation chip."""
+        # Remove existing chip if present
+        if field_name in self._chips:
+            self.remove_annotation(field_name)
+
+        # Create new chip
+        chip = AnnotationChip(field_name, selected_text, color)
+        chip.removed.connect(self._on_chip_removed)
+        self._chips[field_name] = chip
+
+        # Insert before stretch
+        self.layout.insertWidget(self.layout.count() - 1, chip)
+
+    def remove_annotation(self, field_name: str):
+        """Remove an annotation chip."""
+        if field_name in self._chips:
+            chip = self._chips[field_name]
+            self.layout.removeWidget(chip)
+            chip.deleteLater()
+            del self._chips[field_name]
+
+    def _on_chip_removed(self, field_name: str):
+        """Handle chip removal."""
+        self.remove_annotation(field_name)
+        self.annotation_removed.emit(field_name)
+
+    def clear(self):
+        """Remove all annotation chips."""
+        for field_name in list(self._chips.keys()):
+            self.remove_annotation(field_name)
+
+
+class InlineCandidateList(QWidget):
+    """Shows top pattern candidates inline."""
+
+    candidate_selected = Signal(PatternCandidate)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._setup_ui()
+
+    def _setup_ui(self):
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(6)
+
+        self.title_label = QLabel("Best Patterns:")
+        self.title_label.setStyleSheet("color: #888; font-size: 10px; font-weight: bold;")
+        main_layout.addWidget(self.title_label)
+
+        # Scrollable area for candidates
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        scroll_content = QWidget()
+        self.layout = QVBoxLayout(scroll_content)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(6)
+
+        scroll.setWidget(scroll_content)
+        main_layout.addWidget(scroll)
+
+    def set_candidates(self, candidates: list[PatternCandidate], examples: list[str], field_names: list[str]):
+        """Display top 3 candidates."""
+        # Clear existing candidates from scroll layout
+        while self.layout.count() > 0:
+            item = self.layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        if not candidates:
+            no_cand_label = QLabel("No patterns generated yet.")
+            no_cand_label.setStyleSheet("color: #888; font-style: italic; font-size: 10px;")
+            self.layout.addWidget(no_cand_label)
+            return
+
+        # Show top 3
+        for cand in candidates[:3]:
+            widget = self._create_candidate_widget(cand, examples, field_names)
+            self.layout.addWidget(widget)
+
+        # Add stretch at the end to push candidates to top
+        self.layout.addStretch()
+
+    def _create_candidate_widget(self, candidate: PatternCandidate, examples: list[str], field_names: list[str]) -> QFrame:
+        """Create a candidate widget with extraction preview."""
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.StyledPanel)
+        frame.setStyleSheet("""
+            QFrame {
+                background-color: #252526;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 6px;
+            }
+            QFrame:hover {
+                background-color: #2d2d30;
+                border-color: #00bff3;
+            }
+        """)
+        frame.setCursor(Qt.CursorShape.PointingHandCursor)
+        frame.mousePressEvent = lambda e: self.candidate_selected.emit(candidate)
+
+        layout = QVBoxLayout(frame)
+        layout.setSpacing(4)
+
+        # Confidence
+        conf_label = QLabel(f"{candidate.confidence:.0%}")
+        conf_color = (
+            "#4ec9b0" if candidate.confidence >= 0.7
+            else "#f39c12" if candidate.confidence >= 0.5
+            else "#f44747"
+        )
+        conf_label.setStyleSheet(f"color: {conf_color}; font-weight: bold; font-size: 11px;")
+        layout.addWidget(conf_label)
+
+        # Pattern
+        pattern_label = QLabel(candidate.pattern)
+        pattern_label.setStyleSheet("font-family: 'Consolas', monospace; color: #4ec9b0; font-size: 9px;")
+        pattern_label.setWordWrap(True)
+        layout.addWidget(pattern_label)
+
+        # Description
+        desc_label = QLabel(candidate.description)
+        desc_label.setStyleSheet("color: #888; font-size: 9px;")
+        desc_label.setWordWrap(True)
+        layout.addWidget(desc_label)
+
+        # Preview of extractions (first 3 examples)
+        if examples:
+            preview_label = QLabel("Preview:")
+            preview_label.setStyleSheet("color: #888; font-size: 9px; margin-top: 4px;")
+            layout.addWidget(preview_label)
+
+            for example in examples[:3]:
+                filename = os.path.basename(example)
+                display_name = filename[:35] + "..." if len(filename) > 35 else filename
+
+                # Test pattern against this example
+                match = re.search(candidate.pattern, filename)
+                if match and field_names:
+                    groups = match.groupdict()
+                    # Build extraction display for all fields
+                    extractions = []
+                    for field in field_names:
+                        if field in groups and groups[field]:
+                            extractions.append(f"{field}={groups[field]}")
+
+                    if extractions:
+                        val_str = ", ".join(extractions)
+                        val_color = "#4ec9b0"
+                    else:
+                        val_str = "None"
+                        val_color = "#888"
+                else:
+                    val_str = "None"
+                    val_color = "#888"
+
+                ex_label = QLabel(f"  {display_name} → {val_str}")
+                ex_label.setStyleSheet(
+                    f"color: {val_color}; font-family: 'Consolas', monospace; font-size: 9px;"
+                )
+                layout.addWidget(ex_label)
+
+        return frame
+
+
+class AnnotationWorkspaceWidget(QWidget):
+    """Composite widget for annotation mode."""
+
+    pattern_selected = Signal(str)  # pattern
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._engine = PatternInferenceEngine()
+        self._annotations = {}  # field_name -> Annotation
+        self._samples = []
+        self._current_example = ""
+        self._selected_text = ""
+        self._selected_start = 0
+        self._selected_end = 0
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        # Example selector
+        example_row = QHBoxLayout()
+        example_row.addWidget(QLabel("SELECT EXAMPLE:"))
+        self.example_combo = QComboBox()
+        self.example_combo.setMinimumWidth(300)
+        self.example_combo.currentTextChanged.connect(self._on_example_changed)
+        example_row.addWidget(self.example_combo)
+        example_row.addStretch()
+        layout.addLayout(example_row)
+
+        # Annotatable text edit
+        self.text_edit = AnnotatableTextEdit()
+        self.text_edit.annotation_requested.connect(self._on_annotation_requested)
+        layout.addWidget(self.text_edit)
+
+        # Field buttons
+        button_row = QHBoxLayout()
+        self.field_buttons = {}
+        for field_name in ["shot", "sequence", "version", "resource"]:
+            btn = QPushButton(field_name.capitalize())
+            btn.setMinimumHeight(32)
+            btn.setEnabled(False)
+            btn.clicked.connect(lambda checked, f=field_name: self._on_field_button_clicked(f))
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #4a4a4a;
+                    color: white;
+                    font-weight: bold;
+                }
+                QPushButton:disabled {
+                    background-color: #2a2a2a;
+                    color: #666;
+                }
+                QPushButton:hover:enabled {
+                    background-color: #00677a;
+                }
+            """)
+            self.field_buttons[field_name] = btn
+            button_row.addWidget(btn)
+
+        button_row.addStretch()
+
+        # Clear button
+        btn_clear = QPushButton("Clear Annotations")
+        btn_clear.clicked.connect(self._on_clear_annotations)
+        btn_clear.setStyleSheet("background-color: #6a3a3a; color: white;")
+        button_row.addWidget(btn_clear)
+
+        layout.addLayout(button_row)
+
+        # Annotation summary
+        self.summary_strip = AnnotationSummaryStrip()
+        self.summary_strip.annotation_removed.connect(self._on_annotation_removed)
+        layout.addWidget(self.summary_strip)
+
+        # Candidate list (with fixed height to prevent resize jumps)
+        self.candidate_list = InlineCandidateList()
+        self.candidate_list.candidate_selected.connect(self._on_candidate_selected)
+        self.candidate_list.setMinimumHeight(400)  # Prevent jarring resize
+        self.candidate_list.setMaximumHeight(400)  # Keep it consistent
+        layout.addWidget(self.candidate_list)
+
+        layout.addStretch()
+
+    def set_samples(self, samples: list[str]):
+        """Populate the example combo with samples."""
+        self._samples = samples
+        self.example_combo.clear()
+        if samples:
+            self.example_combo.addItems([os.path.basename(s) for s in samples])
+
+    def _on_example_changed(self, example: str):
+        """Update the text edit when example changes."""
+        if example and example != self._current_example:
+            # Warn if annotations exist
+            if self._annotations:
+                from PySide6.QtWidgets import QMessageBox
+                reply = QMessageBox.question(
+                    self,
+                    "Change Example",
+                    "Changing examples will clear existing annotations. Continue?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                if reply == QMessageBox.StandardButton.No:
+                    # Revert to current example
+                    self.example_combo.setCurrentText(os.path.basename(self._current_example))
+                    return
+                self._clear_annotations()
+
+            self._current_example = example
+            self.text_edit.setPlainText(example)
+
+    def _on_annotation_requested(self, selected_text: str, start: int, end: int):
+        """Enable field buttons when text is selected."""
+        self._selected_text = selected_text
+        self._selected_start = start
+        self._selected_end = end
+
+        # Enable all field buttons
+        for btn in self.field_buttons.values():
+            btn.setEnabled(True)
+
+    def _on_field_button_clicked(self, field_name: str):
+        """Add annotation for the selected field."""
+        if not self._selected_text:
+            return
+
+        # Create annotation
+        annotation = Annotation(
+            example=self._current_example,
+            selected_text=self._selected_text,
+            field_name=field_name,
+            start_pos=self._selected_start,
+            end_pos=self._selected_end
+        )
+
+        self._annotations[field_name] = annotation
+
+        # Color mapping
+        colors = {
+            "sequence": "#27ae60",
+            "shot": "#00bff3",
+            "version": "#f39c12",
+            "resource": "#8e44ad"
+        }
+        color = colors.get(field_name, "#888")
+
+        # Add to summary strip
+        self.summary_strip.add_annotation(field_name, self._selected_text, color)
+
+        # Apply highlighting to text edit
+        self._apply_highlights()
+
+        # Generate patterns
+        self._generate_patterns()
+
+        # Disable field buttons until next selection
+        for btn in self.field_buttons.values():
+            btn.setEnabled(False)
+
+    def _on_annotation_removed(self, field_name: str):
+        """Remove annotation when chip is removed."""
+        if field_name in self._annotations:
+            del self._annotations[field_name]
+
+        # Re-apply highlights
+        self._apply_highlights()
+
+        # Regenerate patterns
+        if self._annotations:
+            self._generate_patterns()
+        else:
+            self.candidate_list.set_candidates([], [], [])
+
+    def _on_clear_annotations(self):
+        """Clear all annotations."""
+        self._clear_annotations()
+
+    def _clear_annotations(self):
+        """Clear all annotations and reset state."""
+        self._annotations.clear()
+        self.summary_strip.clear()
+        self.text_edit.setPlainText(self._current_example)
+        self.candidate_list.set_candidates([], [], [])
+
+    def _apply_highlights(self):
+        """Apply colored highlights to annotated text."""
+        # Clear all formatting first
+        cursor = QTextCursor(self.text_edit.document())
+        cursor.select(QTextCursor.SelectionType.Document)
+        default_format = QTextCharFormat()
+        cursor.setCharFormat(default_format)
+
+        # Apply highlights for each annotation
+        colors = {
+            "sequence": "#27ae60",
+            "shot": "#00bff3",
+            "version": "#f39c12",
+            "resource": "#8e44ad"
+        }
+
+        for field_name, annotation in self._annotations.items():
+            cursor = QTextCursor(self.text_edit.document())
+            cursor.setPosition(annotation.start_pos)
+            cursor.setPosition(annotation.end_pos, QTextCursor.MoveMode.KeepAnchor)
+
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor(colors.get(field_name, "#888")))
+            fmt.setForeground(QColor("#000000"))
+            cursor.setCharFormat(fmt)
+
+    def _generate_patterns(self):
+        """Generate pattern candidates from current annotations."""
+        if not self._annotations:
+            self.candidate_list.set_candidates([], [], [])
+            return
+
+        field_names = list(self._annotations.keys())
+
+        if len(self._annotations) == 1:
+            # Single field - use normal inference
+            field_name = field_names[0]
+            annotation = self._annotations[field_name]
+            candidates = self._engine.infer_pattern([annotation], test_examples=self._samples)
+        else:
+            # Multiple fields - use combined inference
+            try:
+                candidates = self._engine.infer_combined_pattern(
+                    self._annotations,
+                    test_examples=self._samples
+                )
+            except ValueError as e:
+                # Show error if annotations span different examples
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Pattern Error", str(e))
+                return
+
+        self.candidate_list.set_candidates(candidates, self._samples, field_names)
+
+    def _on_candidate_selected(self, candidate: PatternCandidate):
+        """Emit the selected pattern."""
+        self.pattern_selected.emit(candidate.pattern)
+
+
 class NamingArchitectDialog(QDialog):
     """The professional 'Slide-over' style rule builder."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, existing_patterns: list[str] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Ramses Naming Architect")
         self.resize(1100, 650)
         self.setStyleSheet(STYLESHEET)
         self._samples = []
-        self._mode = "token"  # "token" or "smart"
-        self._smart_pattern: Optional[str] = None  # Pattern from smart builder
+        self._mode = "token"  # "token" or "annotate"
+        self._smart_pattern: str | None = None  # Pattern from annotation workspace
+        self._rule_name: str = ""  # User-provided name for the rule
+        self._existing_patterns = existing_patterns or []  # For duplicate detection
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -688,9 +1222,32 @@ class NamingArchitectDialog(QDialog):
         main_layout.setSpacing(12)
 
         # ═══════════════════════════════════════════════════════════════════════
-        # HEADER - Presets Dropdown (Not Sidebar)
+        # HEADER - Mode Toggle + Quick Actions
         # ═══════════════════════════════════════════════════════════════════════
         header = QHBoxLayout()
+
+        # Mode toggle buttons
+        mode_label = QLabel("Build Mode:")
+        mode_label.setStyleSheet("color: #888; font-weight: bold;")
+        header.addWidget(mode_label)
+
+        self.btn_token_mode = QPushButton("Token Mode")
+        self.btn_token_mode.setCheckable(True)
+        self.btn_token_mode.setChecked(True)
+        self.btn_token_mode.setMinimumHeight(32)
+        self.btn_token_mode.clicked.connect(lambda: self._on_mode_toggle("token"))
+        header.addWidget(self.btn_token_mode)
+
+        self.btn_annotate_mode = QPushButton("Annotate Mode")
+        self.btn_annotate_mode.setCheckable(True)
+        self.btn_annotate_mode.setChecked(False)
+        self.btn_annotate_mode.setMinimumHeight(32)
+        self.btn_annotate_mode.clicked.connect(lambda: self._on_mode_toggle("annotate"))
+        header.addWidget(self.btn_annotate_mode)
+
+        header.addSpacing(20)
+
+        # Quick Start presets (token mode only)
         header.addWidget(QLabel("Quick Start:"))
 
         self.preset_combo = QComboBox()
@@ -714,26 +1271,32 @@ class NamingArchitectDialog(QDialog):
         self.btn_magic.setToolTip("Auto-detect pattern from sample filenames")
         header.addWidget(self.btn_magic)
 
-        self.btn_smart = QPushButton("🧠 Smart Pattern Builder")
-        self.btn_smart.setStyleSheet(
-            "background-color: #00677a; color: white; font-weight: bold; padding: 8px 16px;"
-        )
-        self.btn_smart.clicked.connect(self._on_launch_smart_pattern)
-        self.btn_smart.setEnabled(False)
-        self.btn_smart.setToolTip("Generate pattern by annotating examples")
-        header.addWidget(self.btn_smart)
-
         main_layout.addLayout(header)
 
+        # Update mode toggle styling
+        self._update_mode_toggle_styling()
+
         # ═══════════════════════════════════════════════════════════════════════
-        # BLUEPRINT AREA - Large, Prominent (80px height)
+        # WORKSPACE - Stacked Widget (Token Mode / Annotate Mode)
         # ═══════════════════════════════════════════════════════════════════════
+        self.workspace_stack = QStackedWidget()
+
+        # ───────────────────────────────────────────────────────────────────────
+        # PAGE 0: TOKEN MODE
+        # ───────────────────────────────────────────────────────────────────────
+        token_page = QWidget()
+        token_layout = QVBoxLayout(token_page)
+        token_layout.setContentsMargins(0, 0, 0, 0)
+        token_layout.setSpacing(8)
+
+        # Blueprint label
         lbl_blue = QLabel("PATTERN BLUEPRINT")
         lbl_blue.setStyleSheet("color: #888; font-size: 10px; font-weight: bold;")
-        main_layout.addWidget(lbl_blue)
+        token_layout.addWidget(lbl_blue)
 
+        # Blueprint container
         self.blueprint_container = QFrame()
-        self.blueprint_container.setFixedHeight(80)  # Larger for easier drag-drop
+        self.blueprint_container.setFixedHeight(80)
         self.blueprint_container.setStyleSheet("""
             background-color: #1a1a1a;
             border: 2px dashed #444;
@@ -748,11 +1311,9 @@ class NamingArchitectDialog(QDialog):
         self.drop_zone.token_clicked.connect(self._on_token_clicked)
         blueprint_lay.addWidget(self.drop_zone)
 
-        main_layout.addWidget(self.blueprint_container)
+        token_layout.addWidget(self.blueprint_container)
 
-        # ═══════════════════════════════════════════════════════════════════════
-        # TOKEN PALETTE - Compact Dropdown (Not Buttons)
-        # ═══════════════════════════════════════════════════════════════════════
+        # Token palette
         palette_row = QHBoxLayout()
         palette_row.addWidget(QLabel("Add Token:"))
 
@@ -775,7 +1336,18 @@ class NamingArchitectDialog(QDialog):
         palette_row.addWidget(QLabel("Click token in blueprint to edit properties"))
         palette_row.addStretch()
 
-        main_layout.addLayout(palette_row)
+        token_layout.addLayout(palette_row)
+
+        self.workspace_stack.addWidget(token_page)
+
+        # ───────────────────────────────────────────────────────────────────────
+        # PAGE 1: ANNOTATE MODE
+        # ───────────────────────────────────────────────────────────────────────
+        self.annotate_workspace = AnnotationWorkspaceWidget()
+        self.annotate_workspace.pattern_selected.connect(self._on_smart_pattern_selected)
+        self.workspace_stack.addWidget(self.annotate_workspace)
+
+        main_layout.addWidget(self.workspace_stack)
 
         # ═══════════════════════════════════════════════════════════════════════
         # MAIN AREA - Side-by-Side Samples | Results (Not Vertical Splitter)
@@ -893,6 +1465,25 @@ class NamingArchitectDialog(QDialog):
 
         main_layout.addWidget(regex_container)
 
+        # Rule name input
+        name_row = QHBoxLayout()
+        name_row.addWidget(QLabel("Rule Name (optional):"))
+        self.name_edit = QLineEdit()
+        self.name_edit.setPlaceholderText("e.g., RO9S Project, ISIH Shots...")
+        self.name_edit.setMaximumWidth(300)
+        self.name_edit.setStyleSheet("""
+            QLineEdit {
+                background-color: #1e1e1e;
+                border: 1px solid #444;
+                border-radius: 4px;
+                padding: 6px;
+                color: #ccc;
+            }
+        """)
+        name_row.addWidget(self.name_edit)
+        name_row.addStretch()
+        main_layout.addLayout(name_row)
+
         # Action buttons
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -908,7 +1499,7 @@ class NamingArchitectDialog(QDialog):
         btn_apply.setStyleSheet(
             "background-color: #094771; color: white; font-weight: bold;"
         )
-        btn_apply.clicked.connect(self.accept)
+        btn_apply.clicked.connect(self._on_apply_clicked)
         btn_row.addWidget(btn_apply)
 
         main_layout.addLayout(btn_row)
@@ -946,6 +1537,70 @@ class NamingArchitectDialog(QDialog):
 
         # Reset combo to default
         self.preset_combo.setCurrentIndex(0)
+
+    def _update_mode_toggle_styling(self) -> None:
+        """Update mode toggle button styling based on active mode."""
+        active_style = """
+            QPushButton {
+                background-color: #094771;
+                color: white;
+                font-weight: bold;
+                border: 2px solid #00bff3;
+            }
+        """
+        inactive_style = """
+            QPushButton {
+                background-color: #3a3a3a;
+                color: #888;
+                font-weight: normal;
+                border: 1px solid #555;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+                color: #aaa;
+            }
+        """
+
+        if self._mode == "token":
+            self.btn_token_mode.setStyleSheet(active_style)
+            self.btn_annotate_mode.setStyleSheet(inactive_style)
+            self.btn_token_mode.setChecked(True)
+            self.btn_annotate_mode.setChecked(False)
+        else:
+            self.btn_token_mode.setStyleSheet(inactive_style)
+            self.btn_annotate_mode.setStyleSheet(active_style)
+            self.btn_token_mode.setChecked(False)
+            self.btn_annotate_mode.setChecked(True)
+
+    def _on_mode_toggle(self, mode: str) -> None:
+        """Toggle between token mode and annotate mode."""
+        if self._mode == mode:
+            return  # Already in this mode
+
+        self._mode = mode
+        self._update_mode_toggle_styling()
+
+        # Switch workspace stack
+        if mode == "token":
+            self.workspace_stack.setCurrentIndex(0)
+            self._on_rule_changed()  # Refresh with token pattern
+        else:  # annotate
+            self.workspace_stack.setCurrentIndex(1)
+            # Feed samples to annotation workspace
+            self.annotate_workspace.set_samples(self._samples)
+
+    def _on_smart_pattern_selected(self, pattern: str) -> None:
+        """Handle pattern selected from annotation workspace."""
+        self._smart_pattern = pattern
+        self._mode = "annotate"  # Ensure mode is set to annotate
+
+        # Update regex display
+        self.regex_label.setText(pattern)
+        self.regex_label.setVisible(True)
+        self.regex_toggle.setText("▲ Generated Regex (Annotate Mode)")
+
+        # Update simulation with the smart pattern
+        self._refresh_simulation_with_pattern(pattern)
 
     def _on_token_selected(self, index: int) -> None:
         """Add token from dropdown"""
@@ -1031,14 +1686,18 @@ class NamingArchitectDialog(QDialog):
         QApplication.clipboard().setText(pattern)
 
     def _on_samples_changed(self) -> None:
-        """Update samples list and enable Magic Wand"""
+        """Update samples list and feed to both modes."""
         text = self.sample_edit.toPlainText()
         self._samples = [
             os.path.basename(line.strip()) for line in text.splitlines() if line.strip()
         ]
         self.btn_magic.setEnabled(len(self._samples) > 0)
-        self.btn_smart.setEnabled(len(self._samples) > 0)
-        if self._mode == "smart" and self._smart_pattern:
+
+        # Feed samples to annotation workspace
+        self.annotate_workspace.set_samples(self._samples)
+
+        # Update simulation based on current mode
+        if self._mode == "annotate" and self._smart_pattern:
             self._refresh_simulation_with_pattern(self._smart_pattern)
         else:
             self._on_rule_changed()
@@ -1108,45 +1767,6 @@ class NamingArchitectDialog(QDialog):
                 self.drop_zone.add_token(t)
             self._on_rule_changed()
 
-    def _on_launch_smart_pattern(self) -> None:
-        """Launch the Smart Pattern Builder dialog."""
-        from ramses_ingest.smart_pattern_dialog import SmartPatternDialog
-
-        dlg = SmartPatternDialog(parent=self)
-
-        # Pre-populate with samples
-        dlg.sample_edit.setPlainText("\n".join(self._samples))
-        dlg._on_samples_changed()
-
-        if dlg.exec():
-            # User selected a pattern - store it
-            pattern = dlg.get_final_regex()
-            if pattern:
-                self._smart_pattern = pattern
-                self._mode = "smart"
-
-                # Clear token zone and show the pattern
-                self.drop_zone.blockSignals(True)
-                self.drop_zone.clear()
-                self.drop_zone.blockSignals(False)
-                self.regex_label.setText(pattern)
-                self.regex_label.setVisible(True)
-                self.regex_toggle.setText("▲ Generated Regex (Smart Pattern)")
-
-                # Update simulation with the smart pattern
-                self._refresh_simulation_with_pattern(pattern)
-
-                # Show success message
-                from PySide6.QtWidgets import QMessageBox
-
-                QMessageBox.information(
-                    self,
-                    "Pattern Generated",
-                    f"Smart pattern generated successfully!\n\n"
-                    f"The pattern has been loaded and tested against your examples.\n"
-                    f"Review the results below, then click 'Apply to Project' to use it.",
-                )
-
     def _refresh_simulation_with_pattern(self, pattern: str) -> None:
         """Refresh simulation table with a raw regex pattern."""
         if not self._samples:
@@ -1205,8 +1825,47 @@ class NamingArchitectDialog(QDialog):
                 "color: #f44747; font-size: 10px; font-weight: bold;"
             )
 
+    def _on_apply_clicked(self) -> None:
+        """Handle Apply button click with duplicate checking."""
+        from PySide6.QtWidgets import QMessageBox
+
+        # Get the pattern
+        pattern = self.get_final_regex()
+
+        if not pattern:
+            QMessageBox.warning(
+                self,
+                "No Pattern",
+                "Please create a pattern first (using tokens or annotations)."
+            )
+            return
+
+        # Check for duplicate
+        if pattern in self._existing_patterns:
+            reply = QMessageBox.question(
+                self,
+                "Duplicate Pattern",
+                f"This pattern already exists in your project:\n\n{pattern}\n\n"
+                "Do you want to add it again anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply == QMessageBox.StandardButton.No:
+                return
+
+        # Store the rule name
+        self._rule_name = self.name_edit.text().strip()
+
+        # Accept the dialog
+        self.accept()
+
     def get_final_regex(self) -> str:
-        # If smart pattern was generated, use that; otherwise use tokens
-        if self._mode == "smart" and self._smart_pattern:
+        """Get the final regex pattern based on current mode."""
+        # If annotate pattern was generated, use that; otherwise use tokens
+        if self._mode == "annotate" and self._smart_pattern:
             return self._smart_pattern
         return TokenEngine.compile(self.drop_zone.get_tokens())
+
+    def get_rule_name(self) -> str:
+        """Get the user-provided rule name."""
+        return self._rule_name

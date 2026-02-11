@@ -60,6 +60,7 @@ def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str]:
             
         rules.append(NamingRule(
             pattern=entry["pattern"],
+            name=entry.get("name", ""),
             sequence_prefix=entry.get("sequence_prefix", ""),
             shot_prefix=entry.get("shot_prefix", ""),
             use_parent_dir_as_sequence=entry.get("use_parent_dir_as_sequence", False),
@@ -78,6 +79,8 @@ def save_rules(rules: list[NamingRule], path: str | Path, studio_name: str = "Ra
     entries = []
     for rule in rules:
         entry: dict = {"pattern": rule.pattern}
+        if rule.name:
+            entry["name"] = rule.name
         if rule.sequence_prefix:
             entry["sequence_prefix"] = rule.sequence_prefix
         if rule.shot_prefix:

@@ -87,6 +87,8 @@ class NamingRule:
     """
 
     pattern: str
+    name: str = ""
+    """Optional user-friendly name for this rule (e.g., 'RO9S Project')."""
     sequence_prefix: str = ""
     shot_prefix: str = ""
     use_parent_dir_as_sequence: bool = False

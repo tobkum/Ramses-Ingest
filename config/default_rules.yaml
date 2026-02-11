@@ -1,6 +1,7 @@
 studio_name: Overmind Studios
 rules:
 - pattern: ^(?P<shot>[A-Z]+\d+)
+- pattern: ^(?P<shot>[A-Z]+\d+)
 - pattern: (?P<sequence>[A-Za-z]*\d+)[_-](?P<shot>[A-Za-z]*\d+)
 - pattern: (?P<shot>[A-Za-z]*\d+)
   use_parent_dir_as_sequence: true

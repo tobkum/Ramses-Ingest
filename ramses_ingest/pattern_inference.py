@@ -175,7 +175,7 @@ class PatternInferenceEngine:
         Analyze character composition of selected text.
 
         Returns dict with different pattern representations:
-        - specific: Exact character classes with fixed length
+        - specific: Exact character classes tracking consecutive runs
         - flexible: Character classes with variable length
         - very_flexible: Broad pattern (non-delimiter chars)
         """
@@ -188,44 +188,85 @@ class PatternInferenceEngine:
         has_digit = bool(re.search(r'\d', text))
         has_other = bool(re.search(r'[^A-Za-z0-9]', text))
 
-        # Count occurrences
-        upper_count = len(re.findall(r'[A-Z]', text))
-        lower_count = len(re.findall(r'[a-z]', text))
-        digit_count = len(re.findall(r'\d', text))
-
         # Build patterns
         patterns = {}
 
-        # SPECIFIC: Exact character class counts
+        # SPECIFIC: Track consecutive runs of character types
+        # Example: "RO9S" -> [A-Z]{2}\d{1}[A-Z]{1}
         specific_parts = []
-        if has_upper:
-            specific_parts.append(f"[A-Z]{{{upper_count}}}")
-        if has_lower:
-            specific_parts.append(f"[a-z]{{{lower_count}}}")
-        if has_digit:
-            specific_parts.append(f"\\d{{{digit_count}}}")
+        i = 0
+        while i < len(text):
+            char = text[i]
+            if char.isupper():
+                count = 0
+                while i < len(text) and text[i].isupper():
+                    count += 1
+                    i += 1
+                specific_parts.append(f"[A-Z]{{{count}}}")
+            elif char.islower():
+                count = 0
+                while i < len(text) and text[i].islower():
+                    count += 1
+                    i += 1
+                specific_parts.append(f"[a-z]{{{count}}}")
+            elif char.isdigit():
+                count = 0
+                while i < len(text) and text[i].isdigit():
+                    count += 1
+                    i += 1
+                specific_parts.append(f"\\d{{{count}}}")
+            else:
+                # Other characters
+                specific_parts.append(re.escape(char))
+                i += 1
 
         patterns['specific'] = ''.join(specific_parts) if specific_parts else None
 
-        # FLEXIBLE: Variable length with character classes
-        flexible_parts = []
-        if has_upper and has_lower:
-            # Mixed case letters
-            flexible_parts.append("[A-Za-z]+")
-            if has_digit:
-                flexible_parts.append("\\d+")
-        elif has_upper:
-            flexible_parts.append("[A-Z]+")
-            if has_digit:
-                flexible_parts.append("\\d+")
-        elif has_lower:
-            flexible_parts.append("[a-z]+")
-            if has_digit:
-                flexible_parts.append("\\d+")
-        elif has_digit:
-            flexible_parts.append("\\d+")
+        # FLEXIBLE: Check for interleaving
+        # If letters and digits are interleaved (multiple transitions), use combined class
+        transitions = 0
+        prev_type = None
+        for char in text:
+            if char.isalpha():
+                curr_type = 'alpha'
+            elif char.isdigit():
+                curr_type = 'digit'
+            else:
+                curr_type = 'other'
 
-        patterns['flexible'] = ''.join(flexible_parts) if flexible_parts else None
+            if prev_type and prev_type != curr_type and prev_type != 'other' and curr_type != 'other':
+                transitions += 1
+            prev_type = curr_type
+
+        # If interleaved (2+ transitions), use combined pattern
+        if transitions >= 2 and (has_upper or has_lower) and has_digit:
+            # Interleaved alphanumeric - use combined class
+            if has_upper and has_lower:
+                patterns['flexible'] = "[A-Za-z0-9]+"
+            elif has_upper:
+                patterns['flexible'] = "[A-Z0-9]+"
+            else:
+                patterns['flexible'] = "[a-z0-9]+"
+        else:
+            # Not interleaved - use separate classes
+            flexible_parts = []
+            if has_upper and has_lower:
+                # Mixed case letters
+                flexible_parts.append("[A-Za-z]+")
+                if has_digit:
+                    flexible_parts.append("\\d+")
+            elif has_upper:
+                flexible_parts.append("[A-Z]+")
+                if has_digit:
+                    flexible_parts.append("\\d+")
+            elif has_lower:
+                flexible_parts.append("[a-z]+")
+                if has_digit:
+                    flexible_parts.append("\\d+")
+            elif has_digit:
+                flexible_parts.append("\\d+")
+
+            patterns['flexible'] = ''.join(flexible_parts) if flexible_parts else None
 
         # VERY_FLEXIBLE: Match anything except delimiters
         patterns['very_flexible'] = f"[^{self.DELIMITERS}]+"
@@ -376,6 +417,312 @@ class PatternInferenceEngine:
                 flexibility=candidate.flexibility,
                 confidence=min(score, 1.0),
                 description=f"{candidate.description} (matched {match_count}/{len(test_examples)}, {len(set(extractions))} unique)"
+            ))
+
+        return scored
+
+
+    def infer_combined_pattern(
+        self,
+        annotations: dict[str, Annotation],
+        test_examples: Optional[List[str]] = None
+    ) -> List[PatternCandidate]:
+        """
+        Infer a combined regex pattern from multiple field annotations.
+
+        This method takes annotations for multiple fields (e.g., shot, sequence)
+        and generates combined regex patterns that extract all fields.
+
+        Args:
+            annotations: Dict mapping field_name -> Annotation (e.g., {"shot": ann1, "sequence": ann2})
+            test_examples: Optional list of examples to validate against
+
+        Returns:
+            List of PatternCandidate objects for combined patterns, sorted by confidence
+
+        Raises:
+            ValueError: If annotations is empty or annotations span different examples
+        """
+        if not annotations:
+            raise ValueError("At least one annotation is required")
+
+        # Ensure all annotations reference the same example
+        examples = {ann.example for ann in annotations.values()}
+        if len(examples) > 1:
+            raise ValueError("All annotations must reference the same example string")
+
+        base_example = list(annotations.values())[0].example
+
+        # Sort annotations by position (left to right)
+        sorted_fields = sorted(
+            annotations.items(),
+            key=lambda x: x[1].start_pos
+        )
+
+        # Extract context fragments between annotations
+        context_fragments = self._extract_context_between(base_example, [ann for _, ann in sorted_fields])
+
+        # Generate combined patterns at different flexibility levels
+        combined_candidates = []
+
+        # For each flexibility level, build a combined pattern
+        for flexibility in [Flexibility.SPECIFIC, Flexibility.FLEXIBLE, Flexibility.VERY_FLEXIBLE]:
+            # Build pattern parts for each field
+            # Note: For VERY_FLEXIBLE, we use flexible patterns for fields
+            # but very flexible patterns for separators
+            field_patterns = {}
+            for field_name, annotation in annotations.items():
+                char_pattern = self._analyze_character_pattern(annotation.selected_text)
+
+                if flexibility == Flexibility.SPECIFIC and char_pattern['specific']:
+                    field_patterns[field_name] = char_pattern['specific']
+                elif flexibility in [Flexibility.FLEXIBLE, Flexibility.VERY_FLEXIBLE]:
+                    # Use flexible patterns for fields even in VERY_FLEXIBLE mode
+                    # VERY_FLEXIBLE mainly affects separators
+                    if char_pattern['flexible']:
+                        field_patterns[field_name] = char_pattern['flexible']
+                    else:
+                        field_patterns[field_name] = char_pattern['specific'] or re.escape(annotation.selected_text)
+                else:
+                    # Fallback if pattern doesn't exist for this flexibility
+                    field_patterns[field_name] = re.escape(annotation.selected_text)
+
+            # Stitch together the combined pattern
+            pattern_parts = []
+
+            # Add start anchor if first annotation starts at beginning
+            if sorted_fields[0][1].start_pos == 0:
+                pattern_parts.append("^")
+            elif context_fragments['prefix']:
+                pattern_parts.append(re.escape(context_fragments['prefix']))
+
+            # Add fields with their separators
+            for i, (field_name, annotation) in enumerate(sorted_fields):
+                # Add the field capture group
+                pattern_parts.append(f"(?P<{field_name}>{field_patterns[field_name]})")
+
+                # Add separator/context after this field (if not last)
+                if i < len(sorted_fields) - 1:
+                    separator = context_fragments['separators'][i]
+                    if separator:
+                        # Convert separator to flexible pattern
+                        sep_pattern = self._separator_to_pattern(separator, flexibility)
+                        pattern_parts.append(sep_pattern)
+
+            # Add suffix
+            if context_fragments['suffix']:
+                pattern_parts.append(re.escape(context_fragments['suffix']))
+            else:
+                pattern_parts.append(".*$")
+
+            combined_pattern = "".join(pattern_parts)
+
+            # Determine confidence based on flexibility
+            base_confidence = {
+                Flexibility.SPECIFIC: 0.7,
+                Flexibility.FLEXIBLE: 0.85,
+                Flexibility.VERY_FLEXIBLE: 0.6
+            }[flexibility]
+
+            combined_candidates.append(PatternCandidate(
+                pattern=combined_pattern,
+                flexibility=flexibility,
+                confidence=base_confidence,
+                description=f"Combined {len(annotations)}-field pattern ({flexibility.value})"
+            ))
+
+        # Score candidates against test examples if provided
+        if test_examples:
+            combined_candidates = self._score_combined_candidates(
+                combined_candidates,
+                test_examples,
+                list(annotations.keys())
+            )
+
+        # Sort by confidence
+        combined_candidates.sort(key=lambda c: c.confidence, reverse=True)
+
+        return combined_candidates
+
+    def _separator_to_pattern(self, separator: str, flexibility: Flexibility) -> str:
+        """
+        Convert a literal separator into a flexible regex pattern.
+
+        Args:
+            separator: The literal separator text (e.g., "_A1_", "_", ".")
+            flexibility: How flexible the pattern should be
+
+        Returns:
+            Regex pattern for the separator
+        """
+        if not separator:
+            return ""
+
+        # Detect if it's a simple delimiter (just punctuation/whitespace)
+        if all(c in "_-. \t" for c in separator):
+            # Simple delimiter - use literal
+            return re.escape(separator)
+
+        # Check if separator is complex (contains multiple components/tokens)
+        # Example: "C013_230614_" has multiple number groups separated by _
+        token_count = len(re.findall(r'[A-Za-z]+|\d+', separator))
+
+        # If separator has many tokens (> 2), it's likely variable data
+        # Use non-greedy wildcard for flexibility
+        if token_count > 2:
+            if flexibility == Flexibility.SPECIFIC:
+                return re.escape(separator)
+            else:
+                # Use non-greedy wildcard to match until next field
+                return r".*?"
+
+        # Mixed content separator (contains alphanumeric)
+        if flexibility == Flexibility.SPECIFIC:
+            # For specific, use exact match
+            return re.escape(separator)
+        elif flexibility == Flexibility.FLEXIBLE:
+            # For flexible, replace alphanumeric runs with character classes
+            # "_A1_" -> "_[A-Z]+\d+_"
+            pattern = ""
+            i = 0
+            while i < len(separator):
+                char = separator[i]
+                if char in "_-. \t":
+                    pattern += re.escape(char)
+                    i += 1
+                elif char.isalpha():
+                    # Collect consecutive letters
+                    start = i
+                    while i < len(separator) and separator[i].isalpha():
+                        i += 1
+                    letters = separator[start:i]
+                    if letters.isupper():
+                        pattern += "[A-Z]+"
+                    elif letters.islower():
+                        pattern += "[a-z]+"
+                    else:
+                        pattern += "[A-Za-z]+"
+                elif char.isdigit():
+                    # Collect consecutive digits
+                    while i < len(separator) and separator[i].isdigit():
+                        i += 1
+                    pattern += r"\d+"
+                else:
+                    pattern += re.escape(char)
+                    i += 1
+            return pattern
+        else:  # VERY_FLEXIBLE
+            # For very flexible, use non-greedy wildcard
+            return r".*?"
+
+    def _extract_context_between(
+        self,
+        example: str,
+        sorted_annotations: List[Annotation]
+    ) -> dict:
+        """
+        Extract literal text fragments between annotations.
+
+        Args:
+            example: The full example string
+            sorted_annotations: Annotations sorted by start_pos (left to right)
+
+        Returns:
+            Dict with 'prefix', 'separators' (list), and 'suffix'
+        """
+        context = {
+            'prefix': '',
+            'separators': [],
+            'suffix': ''
+        }
+
+        if not sorted_annotations:
+            return context
+
+        # Prefix: text before first annotation
+        first_ann = sorted_annotations[0]
+        if first_ann.start_pos > 0:
+            context['prefix'] = example[:first_ann.start_pos]
+
+        # Separators: text between consecutive annotations
+        for i in range(len(sorted_annotations) - 1):
+            curr_ann = sorted_annotations[i]
+            next_ann = sorted_annotations[i + 1]
+
+            separator = example[curr_ann.end_pos:next_ann.start_pos]
+            context['separators'].append(separator)
+
+        # Suffix: text after last annotation
+        last_ann = sorted_annotations[-1]
+        if last_ann.end_pos < len(example):
+            context['suffix'] = example[last_ann.end_pos:]
+
+        return context
+
+    def _score_combined_candidates(
+        self,
+        candidates: List[PatternCandidate],
+        test_examples: List[str],
+        field_names: List[str]
+    ) -> List[PatternCandidate]:
+        """
+        Score combined pattern candidates based on multi-field extraction quality.
+
+        Args:
+            candidates: List of pattern candidates to score
+            test_examples: Examples to test against
+            field_names: List of field names that should be extracted
+
+        Returns:
+            List of scored candidates
+        """
+        scored = []
+
+        for candidate in candidates:
+            extractions = {field: [] for field in field_names}
+            full_match_count = 0
+
+            for example in test_examples:
+                match = re.search(candidate.pattern, example)
+                if match:
+                    groups = match.groupdict()
+                    # Check if ALL required fields were extracted
+                    if all(field in groups and groups[field] for field in field_names):
+                        full_match_count += 1
+                        for field in field_names:
+                            extractions[field].append(groups[field])
+
+            if full_match_count == 0:
+                # Pattern doesn't extract all fields from any example
+                scored.append(PatternCandidate(
+                    pattern=candidate.pattern,
+                    flexibility=candidate.flexibility,
+                    confidence=0.1,
+                    description=candidate.description + " (matched 0 complete)"
+                ))
+                continue
+
+            # Calculate quality scores
+            match_ratio = full_match_count / len(test_examples)
+
+            # Calculate uniqueness ratio for each field
+            uniqueness_ratios = []
+            for field in field_names:
+                field_values = extractions[field]
+                if field_values:
+                    unique_ratio = len(set(field_values)) / len(field_values)
+                    uniqueness_ratios.append(unique_ratio)
+
+            avg_uniqueness = sum(uniqueness_ratios) / len(uniqueness_ratios) if uniqueness_ratios else 0
+
+            # Combined score: weighted by match ratio and uniqueness
+            score = candidate.confidence * (0.4 + 0.6 * match_ratio) * (0.7 + 0.3 * avg_uniqueness)
+
+            scored.append(PatternCandidate(
+                pattern=candidate.pattern,
+                flexibility=candidate.flexibility,
+                confidence=min(score, 1.0),
+                description=f"{candidate.description} (matched {full_match_count}/{len(test_examples)} complete)"
             ))
 
         return scored

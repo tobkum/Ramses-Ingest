@@ -343,6 +343,210 @@ class TestPatternInference(unittest.TestCase):
         boundary = self.engine._get_right_boundary("A077_C013", 4)
         self.assertEqual(boundary, "_")
 
+    # ========== COMBINED PATTERN TESTS ==========
+
+    def test_combined_pattern_two_fields(self):
+        """Test combined pattern generation for shot + sequence."""
+        examples = [
+            "ISIH_A1_030.mov",
+            "ISIH_A1_031.mov",
+            "ISIH_B2_010.mov"
+        ]
+
+        # Annotate both sequence (ISIH) and shot (030)
+        annotations = {
+            "sequence": Annotation(
+                example=examples[0],
+                selected_text="ISIH",
+                field_name="sequence",
+                start_pos=0,
+                end_pos=4
+            ),
+            "shot": Annotation(
+                example=examples[0],
+                selected_text="030",
+                field_name="shot",
+                start_pos=8,
+                end_pos=11
+            )
+        }
+
+        candidates = self.engine.infer_combined_pattern(annotations, test_examples=examples)
+
+        # Should generate combined patterns
+        self.assertGreater(len(candidates), 0)
+
+        # Best candidate should extract both fields from all examples
+        best = candidates[0]
+
+        for example in examples:
+            match = re.search(best.pattern, example)
+            self.assertIsNotNone(match, f"Pattern should match {example}")
+            groups = match.groupdict()
+            self.assertIn("sequence", groups, "Should extract sequence")
+            self.assertIn("shot", groups, "Should extract shot")
+            self.assertTrue(groups["sequence"], "Sequence should not be empty")
+            self.assertTrue(groups["shot"], "Shot should not be empty")
+
+    def test_combined_pattern_ro9s(self):
+        """Test combined pattern for RO9S project (shot + resource)."""
+        examples = [
+            "A077C013_230614_RO9S.mov",
+            "A081C011_230615_RO9S_1.mov",
+            "A027C009_230512_RO9S_A.mov"
+        ]
+
+        # Annotate shot (A077) and resource (RO9S)
+        annotations = {
+            "shot": Annotation(
+                example=examples[0],
+                selected_text="A077",
+                field_name="shot",
+                start_pos=0,
+                end_pos=4
+            ),
+            "resource": Annotation(
+                example=examples[0],
+                selected_text="RO9S",
+                field_name="resource",
+                start_pos=16,
+                end_pos=20
+            )
+        }
+
+        candidates = self.engine.infer_combined_pattern(annotations, test_examples=examples)
+
+        # Verify extraction quality
+        best = candidates[0]
+        shot_values = set()
+        resource_values = set()
+
+        for example in examples:
+            match = re.search(best.pattern, example)
+            if match:
+                groups = match.groupdict()
+                if "shot" in groups and groups["shot"]:
+                    shot_values.add(groups["shot"])
+                if "resource" in groups and groups["resource"]:
+                    resource_values.add(groups["resource"])
+
+        # Should extract multiple unique shots
+        self.assertGreaterEqual(len(shot_values), 2, "Should extract unique shot values")
+        # Resource should be RO9S in all examples
+        self.assertIn("RO9S", resource_values, "Should extract RO9S resource")
+
+    def test_combined_pattern_three_fields(self):
+        """Test combined pattern with three fields (sequence + shot + version)."""
+        examples = [
+            "SEQ010_SH010_v001.exr",
+            "SEQ010_SH020_v002.exr",
+            "SEQ020_SH030_v001.exr"
+        ]
+
+        # Annotate sequence, shot, and version
+        annotations = {
+            "sequence": Annotation(
+                example=examples[0],
+                selected_text="SEQ010",
+                field_name="sequence",
+                start_pos=0,
+                end_pos=6
+            ),
+            "shot": Annotation(
+                example=examples[0],
+                selected_text="SH010",
+                field_name="shot",
+                start_pos=7,
+                end_pos=12
+            ),
+            "version": Annotation(
+                example=examples[0],
+                selected_text="v001",
+                field_name="version",
+                start_pos=13,
+                end_pos=17
+            )
+        }
+
+        candidates = self.engine.infer_combined_pattern(annotations, test_examples=examples)
+        self.assertGreater(len(candidates), 0)
+
+        # Best candidate should extract all three fields
+        best = candidates[0]
+
+        for example in examples:
+            match = re.search(best.pattern, example)
+            self.assertIsNotNone(match, f"Pattern should match {example}")
+            groups = match.groupdict()
+            self.assertIn("sequence", groups)
+            self.assertIn("shot", groups)
+            self.assertIn("version", groups)
+
+    def test_combined_pattern_different_examples_error(self):
+        """Test that annotating different examples raises an error."""
+        examples = [
+            "ISIH_A1_030.mov",
+            "ISIH_A1_031.mov"
+        ]
+
+        # Annotate sequence in first example, shot in second example
+        annotations = {
+            "sequence": Annotation(
+                example=examples[0],  # Different example
+                selected_text="ISIH",
+                field_name="sequence",
+                start_pos=0,
+                end_pos=4
+            ),
+            "shot": Annotation(
+                example=examples[1],  # Different example
+                selected_text="031",
+                field_name="shot",
+                start_pos=8,
+                end_pos=11
+            )
+        }
+
+        # Should raise ValueError
+        with self.assertRaises(ValueError) as context:
+            self.engine.infer_combined_pattern(annotations, test_examples=examples)
+
+        self.assertIn("same example", str(context.exception).lower())
+
+    def test_extract_context_between(self):
+        """Test extraction of context fragments between annotations."""
+        example = "ISIH_A1_030.mov"
+
+        annotations = [
+            Annotation(
+                example=example,
+                selected_text="ISIH",
+                field_name="sequence",
+                start_pos=0,
+                end_pos=4
+            ),
+            Annotation(
+                example=example,
+                selected_text="030",
+                field_name="shot",
+                start_pos=8,
+                end_pos=11
+            )
+        ]
+
+        context = self.engine._extract_context_between(example, annotations)
+
+        # Should have no prefix (starts at 0)
+        self.assertEqual(context['prefix'], "")
+        # Should have "_A1_" as separator
+        self.assertEqual(context['separators'], ["_A1_"])
+        # Should have ".mov" as suffix
+        self.assertEqual(context['suffix'], ".mov")
+
+
+# Need to import re for combined pattern tests
+import re
+
 
 if __name__ == "__main__":
     unittest.main()
