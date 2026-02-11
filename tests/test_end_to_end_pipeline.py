@@ -195,31 +195,17 @@ class TestEndToEndPipeline(unittest.TestCase):
         ]
         matches = match_clips(clips, rules)
 
-        # Mock different colorspaces
-        media_infos = {}
-        with patch("subprocess.run") as mock_run:
-            # First clip: bt709
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=self._mock_ffprobe_response()
-            )
-            media_infos[matches[0].clip.first_file] = probe_file(matches[0].clip.first_file)
-
-            # Second clip: bt2020 (different!)
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=json.dumps({
-                    "streams": [{
-                        "width": 1920,
-                        "height": 1080,
-                        "color_primaries": "bt2020",
-                        "color_transfer": "smpte2084",
-                        "color_space": "bt2020",
-                    }],
-                    "format": {"tags": {}}
-                })
-            )
-            media_infos[matches[1].clip.first_file] = probe_file(matches[1].clip.first_file)
+        # Construct MediaInfo directly (OIIO can't read dummy test files)
+        media_infos = {
+            matches[0].clip.first_file: MediaInfo(
+                width=1920, height=1080, color_primaries="bt709",
+                color_transfer="bt709", color_space="bt709",
+            ),
+            matches[1].clip.first_file: MediaInfo(
+                width=1920, height=1080, color_primaries="bt2020",
+                color_transfer="smpte2084", color_space="bt2020",
+            ),
+        }
 
         plans = build_plans(matches, media_infos, project_id="TEST")
 
@@ -493,19 +479,14 @@ class TestEndToEndPipeline(unittest.TestCase):
         rules = [NamingRule(pattern=r"(?P<sequence>SEQ\d+)_(?P<shot>SH\d+)_(?P<step>\w+)")]
         matches = match_clips(clips, rules)
 
-        # Mock ffprobe with specific timecode
+        # Construct MediaInfo directly with specific timecode
+        # (OIIO can't read dummy test files, and timecode is a video concept)
         custom_timecode = "02:30:15:10"
-        with patch("subprocess.run") as mock_run:
-            response = json.dumps({
-                "streams": [{
-                    "width": 1920,
-                    "height": 1080,
-                    "tags": {"timecode": custom_timecode}
-                }],
-                "format": {"tags": {}}
-            })
-            mock_run.return_value = MagicMock(returncode=0, stdout=response)
-            media_infos = {m.clip.first_file: probe_file(m.clip.first_file) for m in matches}
+        media_infos = {
+            m.clip.first_file: MediaInfo(
+                width=1920, height=1080, start_timecode=custom_timecode,
+            ) for m in matches
+        }
 
         plans = build_plans(matches, media_infos, project_id="TEST")
         resolve_paths(plans, self.project_root)

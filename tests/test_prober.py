@@ -65,7 +65,7 @@ class TestProber(unittest.TestCase):
         })
         mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
         
-        info = probe_file("dummy.exr")
+        info = probe_file("dummy.mov")
         self.assertEqual(info.start_timecode, "02:15:10:05")
 
     @patch("os.path.isfile")
