@@ -21,13 +21,13 @@ try:
         # referring to the singleton's lock.
         _original_post = getattr(RamDaemonInterface, "_RamDaemonInterface__post")
 
-        def _patched_post(self, query, bufsize=0):
+        def _patched_post(self, query, bufsize=0, timeout=2):
             # Ensure the instance has a lock (in case it's a new instance/reset)
             if not hasattr(self, "_lock"):
                 self._lock = threading.Lock()
-            
+
             with self._lock:
-                return _original_post(self, query, bufsize)
+                return _original_post(self, query, bufsize, timeout)
 
         setattr(RamDaemonInterface, "_RamDaemonInterface__post", _patched_post)
 

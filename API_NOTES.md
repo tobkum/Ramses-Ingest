@@ -27,17 +27,16 @@ Media metadata extraction (Timecode, Resolution, FPS) via `ffprobe` is paralleli
 ## Known Limitations & Considerations
 
 ### Socket Buffer Size
-The vendored Ramses API uses a fixed buffer size of **65536 bytes** (64KB) for receiving data. 
-- **Risk**: Projects with a very large number of sequences or shots (e.g., >1000) might return a JSON response exceeding this limit, causing `json.loads` to fail due to truncation.
-- **Future Mitigation**: The API should be updated to read from the socket in a loop until the full message is received (e.g., using a delimiter or content-length header). *Note: Per current project constraints, the API files themselves are not modified.*
+As of API RC9, `getShots` and `getAssets` use a **6,553,600 byte** (6.5MB) buffer with a 5-second timeout when fetching with `includeData=True`. The default buffer for other calls remains 65,536 bytes (64KB). This resolves previous truncation risks for large projects.
 
 ### Error Handling
 The API calls are often "non-fatal". If the Ramses Daemon is offline or returns an error, the ingestion process continues by falling back to local path resolution. This ensures that files are still organized on disk even if the database registration fails.
 
 ### Data Fetching Cache
-`RamDaemonInterface.getData` has a hardcoded **2-second cache**. 
-- Repeated calls to the same object property within 2 seconds will return cached data.
-- During long-running ingestions, if external changes occur in Ramses, the tool might see stale data for up to 2 seconds.
+As of API RC9, `RamDaemonInterface` uses a proper `RamDaemonCachedObject` system with separate caches for object data (2s default) and paths (30s default).
+
+- `getShots`/`getAssets` with `includeData=True` (via `project.shots(lazyLoading=False)`) pre-populate the cache, avoiding N+1 queries.
+- During long-running ingestions, if external changes occur in Ramses, the tool might see stale data for up to the cache timeout.
 
 ## Recommendations for Future Development
 - **Parallel Probing**: Media probing via `ffprobe` is currently sequential. For large deliveries, this can be parallelized.

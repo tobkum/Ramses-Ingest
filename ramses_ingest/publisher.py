@@ -948,7 +948,8 @@ def register_ramses_objects(
         if sequence_cache and seq_upper in sequence_cache:
             seq_obj = RamSequence(sequence_cache[seq_upper])
         else:
-            for s in daemon.getObjects("RamSequence"):
+            # Fallback to project-level lookup (lazyLoading=False for bulk fetch)
+            for s in project.sequences():
                 if s.shortName().upper() == seq_upper:
                     seq_obj = s
                     break
@@ -964,6 +965,8 @@ def register_ramses_objects(
             "height": info.height or 1080,
             "overrideFramerate": True,
             "framerate": info.fps or 24.0,
+            "overridePixelAspectRatio": True,
+            "pixelAspectRatio": info.pixel_aspect_ratio,
         }
 
         if not seq_obj:
@@ -998,8 +1001,8 @@ def register_ramses_objects(
         if shot_cache and shot_upper in shot_cache:
             shot_obj = shot_cache[shot_upper]
         else:
-            # Fallback to direct lookup (avoid getObjects in loop)
-            for s in project.shots():
+            # Fallback to direct lookup (lazyLoading=False fetches full data in bulk)
+            for s in project.shots(lazyLoading=False):
                 if s.shortName().upper() == shot_upper:
                     shot_obj = s
                     break
@@ -1096,7 +1099,7 @@ def update_ramses_status(
         if shot_cache and plan.shot_id.upper() in shot_cache:
             target_shot = shot_cache[plan.shot_id.upper()]
         else:
-            for shot in project.shots():
+            for shot in project.shots(lazyLoading=False):
                 if shot.shortName().upper() == plan.shot_id.upper():
                     target_shot = shot
                     break

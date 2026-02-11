@@ -182,6 +182,7 @@ class MediaInfo:
     color_space: str = ""
     color_transfer: str = ""
     color_primaries: str = "" # Added Primaries
+    pixel_aspect_ratio: float = 1.0
     duration_seconds: float = 0.0
     frame_count: int = 0
     start_timecode: str = ""
@@ -276,6 +277,18 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         if dur > 0 and fps > 0:
             nb_frames = int(round(dur * fps))
 
+    # Parse Pixel Aspect Ratio from ffprobe's sample_aspect_ratio (e.g., "1:1", "2:1")
+    # SAR describes pixel shape: 1:1 = square pixels, 2:1 = anamorphic 2x squeeze
+    par = 1.0
+    sar_str = s.get("sample_aspect_ratio", "")
+    if sar_str and ":" in sar_str:
+        try:
+            sar_num, sar_den = sar_str.split(":")
+            if int(sar_den) != 0:
+                par = int(sar_num) / int(sar_den)
+        except (ValueError, ZeroDivisionError):
+            pass
+
     info = MediaInfo(
         width=int(s.get("width", 0)),
         height=int(s.get("height", 0)),
@@ -285,6 +298,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         color_space=s.get("color_space", ""),
         color_transfer=s.get("color_transfer", ""),
         color_primaries=s.get("color_primaries", ""),
+        pixel_aspect_ratio=par,
         duration_seconds=float(s.get("duration", 0.0)),
         frame_count=nb_frames,
         start_timecode=tc,

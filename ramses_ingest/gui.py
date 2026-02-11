@@ -1138,6 +1138,12 @@ class IngestWindow(QMainWindow):
 
             details.append(f"<b>FPS:</b> {fps_val}")
 
+        if plan.media_info.pixel_aspect_ratio != 1.0:
+            par_val = f"{plan.media_info.pixel_aspect_ratio:.3f}"
+            if abs(plan.media_info.pixel_aspect_ratio - self._engine._project_par) > 0.001:
+                par_val = f"<b style='color:#f44747'>{par_val} (Project: {self._engine._project_par:.3f})</b>"
+            details.append(f"<b>Pixel Aspect:</b> {par_val}")
+
         if plan.media_info.codec:
             details.append(f"<b>Codec:</b> {plan.media_info.codec}")
         if plan.media_info.color_space:
@@ -2263,7 +2269,9 @@ class IngestWindow(QMainWindow):
             fps = self._engine._project_fps or 0.0
             w = self._engine._project_width or 0
             h = self._engine._project_height or 0
-            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.3f} FPS")
+            par = self._engine._project_par
+            par_str = f" | PAR: {par}" if par != 1.0 else ""
+            self._standards_label.setText(f"STANDARD: {w}x{h} @ {fps:.3f} FPS{par_str}")
 
             # Populate steps
             self._step_combo.blockSignals(True)

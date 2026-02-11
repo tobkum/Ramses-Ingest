@@ -70,6 +70,7 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
             "technical": {
                 "resolution": {"width": mi.width, "height": mi.height} if mi.width else None,
                 "framerate": mi.fps if mi.fps else None,
+                "pixel_aspect_ratio": mi.pixel_aspect_ratio if mi.pixel_aspect_ratio != 1.0 else None,
                 "codec": mi.codec or None,
                 "pixel_format": mi.pix_fmt or None,
                 "duration_seconds": mi.duration_seconds if mi.duration_seconds else None,
@@ -863,7 +864,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td><b>{res.frames_copied}</b></td>
             <td>{missing_display}</td>
             <td class="tech">
-                <b>{res_display}</b> @ {fps_display} fps<br>{codec_display} / {mi.pix_fmt}<br>
+                <b>{res_display}</b> @ {fps_display} fps{f" | PAR {mi.pixel_aspect_ratio:.2f}" if mi.pixel_aspect_ratio != 1.0 else ""}<br>{codec_display} / {mi.pix_fmt}<br>
                 <div class="color-audit">{color_str}</div>
             </td>
             <td><span class="code">{mi.start_timecode or "—"}</span></td>

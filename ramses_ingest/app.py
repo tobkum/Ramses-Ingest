@@ -72,9 +72,10 @@ class IngestEngine:
         self._project_fps: float | None = None
         self._project_width: int | None = None
         self._project_height: int | None = None
-        
-        # Sequence Overrides: {SEQ_NAME: (fps, width, height)}
-        self._sequence_settings: dict[str, tuple[float, int, int]] = {}
+        self._project_par: float = 1.0
+
+        # Sequence Overrides: {SEQ_NAME: (fps, width, height, par)}
+        self._sequence_settings: dict[str, tuple[float, int, int, float]] = {}
 
         self._existing_sequences: list[str] = []
         self._existing_shots: list[str] = []
@@ -197,6 +198,7 @@ class IngestEngine:
             self._project_fps = project.framerate()
             self._project_width = project.width()
             self._project_height = project.height()
+            self._project_par = project.pixelAspectRatio()
 
             # Cache User/Operator
             self._operator_name = "Unknown"
@@ -204,43 +206,37 @@ class IngestEngine:
             if user:
                 self._operator_name = user.name()
 
-            # Relational Batching: Fetch only what's needed for this project
-            # to stay below the 64KB socket limit.
-            from ramses.daemon_interface import RamDaemonInterface
-            daemon = RamDaemonInterface.instance()
-            project_uuid = project.uuid()
+            # Bulk-fetch sequences and shots via RC9 API (lazyLoading=False
+            # pre-populates the daemon cache, preventing N+1 queries).
 
             # Cache sequences with UUIDs and Standards
             self._existing_sequences = []
             self._sequence_uuids = {}
             self._sequence_settings = {}
-            all_seqs = daemon.getObjects("RamSequence")
-            for seq in all_seqs:
-                if seq.get("project") == project_uuid:
-                    sn = seq.shortName()
-                    if not sn:  # Null check for shortName()
-                        continue
-                    seq_uuid = seq.uuid()
-                    if not seq_uuid:  # Null check for uuid()
-                        continue
-                    self._existing_sequences.append(sn)
-                    self._sequence_uuids[sn.upper()] = seq_uuid
-                    # Store sequence-specific overrides
-                    self._sequence_settings[sn.upper()] = (
-                        seq.framerate(), seq.width(), seq.height()
-                    )
+            for seq in project.sequences():
+                sn = seq.shortName()
+                if not sn:
+                    continue
+                seq_uuid = seq.uuid()
+                if not seq_uuid:
+                    continue
+                self._existing_sequences.append(sn)
+                self._sequence_uuids[sn.upper()] = seq_uuid
+                # Store sequence-specific overrides (including PAR)
+                self._sequence_settings[sn.upper()] = (
+                    seq.framerate(), seq.width(), seq.height(),
+                    seq.pixelAspectRatio()
+                )
 
-            # Cache shots
+            # Cache shots (lazyLoading=False fetches full data in bulk)
             self._existing_shots = []
             self._shot_objects = {}
-            all_shots = daemon.getObjects("RamShot")
-            for shot in all_shots:
-                if shot.get("project") == project_uuid:
-                    sn = shot.shortName()
-                    if not sn:  # Null check for shortName()
-                        continue
-                    self._existing_shots.append(sn)
-                    self._shot_objects[sn.upper()] = shot
+            for shot in project.shots(lazyLoading=False):
+                sn = shot.shortName()
+                if not sn:
+                    continue
+                self._existing_shots.append(sn)
+                self._shot_objects[sn.upper()] = shot
 
             # Cache step short names
             self._steps = []
