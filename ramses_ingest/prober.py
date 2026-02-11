@@ -19,6 +19,11 @@ import atexit
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+import OpenImageIO as oiio
+
+# Image formats where OIIO reads PAR from the file header (ffprobe can't)
+_OIIO_PAR_EXTENSIONS = {".exr", ".dpx", ".tif", ".tiff", ".hdr"}
+
 logger = logging.getLogger(__name__)
 
 # Cache Settings
@@ -192,9 +197,49 @@ class MediaInfo:
         return self.width > 0 and self.height > 0
 
 
-def probe_file(file_path: str | Path) -> MediaInfo:
-    """Run ffprobe on *file_path* and return a ``MediaInfo``.
+def _probe_image_oiio(file_path: str) -> MediaInfo:
+    """Probe an image file via OpenImageIO, extracting all relevant metadata.
 
+    Used for EXR, DPX, TIFF, HDR — formats where OIIO reads header attributes
+    (like PixelAspectRatio) that ffprobe cannot access.
+    """
+    try:
+        inp = oiio.ImageInput.open(file_path)
+        if not inp:
+            oiio.geterror()  # Clear pending error to prevent stderr noise at exit
+            return MediaInfo()
+
+        spec = inp.spec()
+        par = spec.get_float_attribute("PixelAspectRatio", 1.0)
+        if par <= 0:
+            par = 1.0
+
+        # Map OIIO format to a human-readable codec/format name
+        fmt = inp.format_name() or ""
+
+        # Color space: OIIO stores this in the "oiio:ColorSpace" attribute
+        color_space = spec.get_string_attribute("oiio:ColorSpace", "")
+
+        info = MediaInfo(
+            width=spec.width,
+            height=spec.height,
+            fps=0.0,  # Single frame — FPS comes from the sequence context
+            codec=fmt,
+            pix_fmt=str(spec.format),
+            color_space=color_space,
+            pixel_aspect_ratio=par,
+        )
+        inp.close()
+        return info
+    except Exception:
+        pass
+    return MediaInfo()
+
+
+def probe_file(file_path: str | Path) -> MediaInfo:
+    """Probe *file_path* for media metadata and return a ``MediaInfo``.
+
+    Uses OIIO for image formats (EXR, DPX, TIFF, HDR) and ffprobe for video.
     Checks persistent cache first (Key = Path + MTime).
     """
     file_path = str(file_path)
@@ -215,7 +260,20 @@ def probe_file(file_path: str | Path) -> MediaInfo:
     except Exception:
         pass
 
-    # 2. Run ffprobe
+    # 2. For image formats, use OIIO (reads EXR/DPX headers natively, including PAR)
+    file_ext = Path(file_path).suffix.lower()
+    if file_ext in _OIIO_PAR_EXTENSIONS:
+        info = _probe_image_oiio(file_path)
+        if info.is_valid and cache_key:
+            import time
+            with _CACHE_LOCK:
+                global _CACHE_DIRTY
+                _METADATA_CACHE[cache_key] = asdict(info)
+                _CACHE_ACCESS_TIMES[cache_key] = time.time()
+                _CACHE_DIRTY = True
+        return info
+
+    # 3. For video/other formats, run ffprobe
     cmd = [
         "ffprobe",
         "-v", "quiet",
@@ -277,8 +335,8 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         if dur > 0 and fps > 0:
             nb_frames = int(round(dur * fps))
 
-    # Parse Pixel Aspect Ratio from ffprobe's sample_aspect_ratio (e.g., "1:1", "2:1")
-    # SAR describes pixel shape: 1:1 = square pixels, 2:1 = anamorphic 2x squeeze
+    # Parse Pixel Aspect Ratio from ffprobe's sample_aspect_ratio (video formats only;
+    # image formats are handled by the OIIO path above and never reach here)
     par = 1.0
     sar_str = s.get("sample_aspect_ratio", "")
     if sar_str and ":" in sar_str:

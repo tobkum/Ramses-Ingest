@@ -1,4 +1,6 @@
-# No hard dependencies beyond Python 3.10+ stdlib.
-# FFmpeg/ffprobe must be on PATH for prober.py and preview.py.
+# Python 3.10+ required.
+# FFmpeg/ffprobe must be on PATH for video probing and preview generation.
+# For color-managed previews, FFmpeg must be compiled with --enable-libOpenColorIO.
 PySide6
 msgpack
+OpenImageIO
