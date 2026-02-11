@@ -975,7 +975,7 @@ def register_ramses_objects(
                     seq_obj = s
                     break
 
-        seq_folder = join_normalized(project.folderPath(), "05-SHOTS", plan.sequence_id)
+        seq_folder = join_normalized(project.folderPath(), FolderNames.shots, plan.sequence_id)
         seq_data = {
             "shortName": plan.sequence_id,
             "name": plan.sequence_id,
@@ -1035,7 +1035,7 @@ def register_ramses_objects(
         shot_nm.shortName = plan.shot_id
         shot_folder_name = shot_nm.fileName()
         shot_folder = join_normalized(
-            project.folderPath(), "05-SHOTS", shot_folder_name
+            project.folderPath(), FolderNames.shots, shot_folder_name
         )
 
         duration = 5.0
