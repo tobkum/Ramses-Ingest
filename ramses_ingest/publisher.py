@@ -245,9 +245,8 @@ def copy_frames(
     first_filename = ""
 
     # Enforce case-consistency for destination filenames
-    # Project casing is preserved, but Shot/Step are standardized to Upper
+    # Project casing is preserved, Shot is standardized to Upper
     shot_id = shot_id.upper()
-    step_id = step_id
 
     # Build base part of Ramses filename
     # e.g. PROJ_S_SH010_PLATE or PROJ_S_SH010_PLATE_BG
