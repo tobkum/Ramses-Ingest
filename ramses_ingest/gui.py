@@ -743,7 +743,7 @@ class IngestWindow(QMainWindow):
         # Set column widths (balanced to use full width)
         header = self._table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(0, 28)  # Checkbox
+        header.resizeSection(0, 34)  # Checkbox
         header.setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )  # Filename stretches
