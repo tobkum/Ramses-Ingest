@@ -136,7 +136,7 @@ class TestCopyFrames(unittest.TestCase):
 
     def test_copy_sequence(self):
         clip = _make_clip("plate", self.src_dir, frame_count=4)
-        copied, checksums, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
+        copied, checksums, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE", fast_verify=False)
         self.assertEqual(copied, 4)
         self.assertEqual(len(checksums), 4)
         self.assertIn(first_file, checksums)
@@ -658,9 +658,9 @@ class TestPublisherConcurrency(unittest.TestCase):
         original_md5 = _calculate_md5
         md5_calls = []
 
-        def track_md5(path):
+        def track_md5(path, **kwargs):
             md5_calls.append(path)
-            return original_md5(path)
+            return original_md5(path, **kwargs)
 
         with patch('ramses_ingest.publisher._calculate_md5', side_effect=track_md5):
             copy_frames(clip, dest_dir, "PROJ", "SH010", "PLATE", fast_verify=True)
