@@ -20,7 +20,8 @@ Before running the Ingest tool, perform these steps in the **Ramses Client** app
 2.  **Connection**: The tool will attempt to connect automatically. If the connection is lost, use the **"↻ Refresh"** button in the header.
 3.  **Select Source**: 
     *   Drag and drop folders or files onto the center **"Drop Zone"**.
-    *   The tool uses `pyseq` to instantly group image sequences, supporting both `.` and `_` separators.
+    *   The tool uses **PyAV (FFmpeg C-bindings)** for near-instant metadata extraction (10-20x faster than traditional scanning).
+    *   It uses `pyseq` to group image sequences, supporting both `.` and `_` separators.
 4.  **Editorial Mapping (Optional)**:
     *   If the delivery includes a **CMX 3600 EDL**, click **"Load EDL..."** in the Options dialog.
     *   The tool will automatically map clip names to shot IDs based on EDL comments.
@@ -35,9 +36,10 @@ The professional 3-panel UI is designed for rapid verification:
     *   Use the search box (`Ctrl+F`) to find specific shot IDs.
 2.  **Verify (Center Table)**:
     *   **Status Dot**: Green means ready. Yellow/Red indicates technical mismatches (Res/FPS) or missing frames.
+    *   **Color Science**: Review the Colorspace column. Professional standards (BT709, sRGB, etc.) are automatically mapped from raw file metadata.
     *   **Metadata**: Review the Resolution and FPS columns. Items mismatched with the Ramses Project Standards will be highlighted in yellow.
 3.  **Edit (Right Panel)**:
-    *   Select a clip to view its full metadata and destination path in the **Detail Panel**.
+    *   Select a clip to view its full metadata and destination path in the **Detail Panel**. The tool is hardened to display technical specs even in offline mode.
     *   **Override**: Use the Shot ID input in the right panel to manually correct a naming mismatch.
 
 ## 4. Configuration & Execution
