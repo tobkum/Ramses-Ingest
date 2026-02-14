@@ -44,7 +44,7 @@ The professional 3-panel UI is designed for rapid verification:
 
 1.  **Ingest Options**: Click the **⚙ (Options)** button in the sidebar.
     *   Enable **Generate Thumbnails** and **Generate Proxies** as needed.
-    *   Toggle **Fast Verify** for large deliveries if bit-perfect MD5 is not required for every single frame.
+    *   **Fast Verify**: Enabled by default. Uses strategic sampling (3-point validation for movies, first/mid/last for sequences) to ensure high performance. Toggle off if bit-perfect MD5 is required for every single frame.
 2.  **Dry-Run**: Check the "Dry Run" box in the action bar to simulate the process and verify paths without moving files.
 3.  **Process Ingest**: Click **Execute**. The tool follows a transactional workflow:
     *   **Phase 1**: Database registration (Sequences/Shots).

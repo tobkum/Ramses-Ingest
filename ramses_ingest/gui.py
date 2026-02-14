@@ -919,7 +919,7 @@ class IngestWindow(QMainWindow):
         self._chk_status = QCheckBox()
         self._chk_status.setChecked(True)
         self._chk_fast_verify = QCheckBox()
-        self._chk_fast_verify.setChecked(False)
+        self._chk_fast_verify.setChecked(True)
         self._ocio_in = QComboBox()
         # Expanded list of production-standard colorspaces
         self._populate_ocio_dropdown(self._ocio_in)

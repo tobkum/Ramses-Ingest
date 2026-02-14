@@ -394,7 +394,7 @@ class IngestEngine:
         update_status: bool = False,
         export_json_audit: bool = False,
         dry_run: bool = False,
-        fast_verify: bool = False,
+        fast_verify: bool = True,
     ) -> list[IngestResult]:
         """Execute all approved (can_execute) plans.
 

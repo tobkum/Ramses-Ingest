@@ -8,7 +8,8 @@ Technical ingest tool for [Ramses](https://ramses.rxlab.guide/) production manag
 2.  **Matching**: Regex-based identification of Sequence/Shot/Step from filenames or parent directories. Includes a visual "Naming Architect" for building and testing custom rules.
 3.  **Probing**: Automatic extraction of resolution, framerate, and start timecode via `ffprobe`.
 4.  **Verification**: 
-    - Full or "Fast" (First/Mid/Last) MD5 checksum verification for every frame.
+    - "Fast Verify" (First/Mid/Last sampling) MD5 checksum verification (Enabled by default).
+    - Optional full bit-perfect MD5 validation for every frame.
     - Missing frame detection for sequences.
     - Duplicate detection (compares frame count and MD5 against existing versions).
     - Standards validation against Ramses project configuration (FPS/Resolution mismatches).

@@ -245,7 +245,7 @@ def copy_frames(
     resource: str = "",
     progress_callback: Callable[[str], None] | None = None,
     dry_run: bool = False,
-    fast_verify: bool = False,
+    fast_verify: bool = True,
     max_workers: int | None = None,
 ) -> tuple[int, dict[str, str], int, str]:
     """Copy clip frames into *dest_dir* with parallel processing and verification.
@@ -811,7 +811,7 @@ def execute_plan(
     ocio_out: str = "sRGB",  # Hardcoded for safety
     skip_ramses_registration: bool = False,
     dry_run: bool = False,
-    fast_verify: bool = False,
+    fast_verify: bool = True,
 ) -> IngestResult:
     """Execute a single ``IngestPlan``: create Ramses objects, copy frames, generate previews.
 
