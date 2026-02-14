@@ -17,19 +17,20 @@ DEFAULT_RULES_PATH = os.path.join(
 )
 
 
-def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str]:
-    """Parse a YAML rules file into ``NamingRule`` objects and a studio name.
+def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str, str]:
+    """Parse a YAML rules file into ``NamingRule`` objects, a studio name, and a logo path.
 
     Returns:
-        tuple: (list of NamingRule instances, studio_name string).
+        tuple: (list of NamingRule instances, studio_name string, studio_logo string).
     """
     if path is None:
         path = DEFAULT_RULES_PATH
 
     path = str(path)
     studio_name = "Ramses Studio"
+    studio_logo = ""
     if not os.path.isfile(path):
-        return [], studio_name
+        return [], studio_name, studio_logo
 
     import yaml
 
@@ -38,9 +39,10 @@ def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str]:
 
     if not isinstance(data, dict):
         logger.warning(f"Config file '{path}' is not a valid YAML dictionary")
-        return [], studio_name
+        return [], studio_name, studio_logo
 
     studio_name = data.get("studio_name", studio_name)
+    studio_logo = data.get("studio_logo", "")
     rules: list[NamingRule] = []
     skipped_count = 0
     
@@ -69,10 +71,10 @@ def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str]:
     if skipped_count > 0:
         logger.warning(f"Skipped {skipped_count} invalid rule(s) in '{path}'")
 
-    return rules, studio_name
+    return rules, studio_name, studio_logo
 
 
-def save_rules(rules: list[NamingRule], path: str | Path, studio_name: str = "Ramses Studio") -> None:
+def save_rules(rules: list[NamingRule], path: str | Path, studio_name: str = "Ramses Studio", studio_logo: str = "") -> None:
     """Persist ``NamingRule`` objects and studio name back to a YAML file."""
     import yaml
 
@@ -93,5 +95,6 @@ def save_rules(rules: list[NamingRule], path: str | Path, studio_name: str = "Ra
     with open(str(path), "w", encoding="utf-8") as f:
         yaml.dump({
             "studio_name": studio_name,
+            "studio_logo": studio_logo,
             "rules": entries
         }, f, default_flow_style=False, sort_keys=False)

@@ -84,7 +84,7 @@ class IngestEngine:
         self._steps: list[str] = []
         self._operator_name: str = "Unknown"
 
-        self._rules, self.studio_name = load_rules()
+        self._rules, self.studio_name, self.studio_logo = load_rules()
         self.last_report_path: str | None = None
 
         # OCIO Defaults
@@ -637,7 +637,7 @@ class IngestEngine:
         html_path = os.path.join(report_dir, html_name)
         self.last_report_path = html_path
 
-        if generate_html_report(results, html_path, studio_name=self.studio_name, operator=self._operator_name):
+        if generate_html_report(results, html_path, studio_name=self.studio_name, studio_logo_path=self.studio_logo, operator=self._operator_name):
             _log(f"  HTML manifest created: {html_path}")
         else:
             _log(f"  ERROR: Failed to write HTML manifest to {html_path}")

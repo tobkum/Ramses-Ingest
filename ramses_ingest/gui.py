@@ -602,6 +602,13 @@ class IngestWindow(QMainWindow):
         self._studio_edit.textChanged.connect(self._on_studio_changed)
         header_lay.addWidget(self._studio_edit)
 
+        # New: Logo display in header if set
+        self._logo_preview = QLabel()
+        self._logo_preview.setFixedSize(30, 22)
+        self._logo_preview.setScaledContents(True)
+        self._update_logo_preview()
+        header_lay.addWidget(self._logo_preview)
+
         root.addWidget(header)
 
         # ═══════════════════════════════════════════════════════════════════════
@@ -1320,6 +1327,25 @@ class IngestWindow(QMainWindow):
 
         lay.addSpacing(10)
 
+        # Studio Branding Group
+        studio_group = QGroupBox("Studio Branding")
+        studio_lay = QVBoxLayout(studio_group)
+        
+        studio_lay.addWidget(QLabel("Studio Logo Image:"))
+        logo_row = QHBoxLayout()
+        logo_path_edit = QLineEdit(self._engine.studio_logo)
+        logo_path_edit.setPlaceholderText("Path to logo image (PNG/JPG)...")
+        logo_row.addWidget(logo_path_edit)
+        
+        btn_logo_browse = QPushButton("Browse...")
+        btn_logo_browse.clicked.connect(lambda: self._browse_studio_logo(logo_path_edit))
+        logo_row.addWidget(btn_logo_browse)
+        studio_lay.addLayout(logo_row)
+        
+        lay.addWidget(studio_group)
+
+        lay.addSpacing(10)
+
         # Daemon Settings
         from ramses.ram_settings import RamSettings
 
@@ -1363,6 +1389,7 @@ class IngestWindow(QMainWindow):
                 chk_fast,
                 ocio_in,
                 rule_combo,
+                logo_path_edit,
                 port_edit,
                 path_edit,
                 dialog,
@@ -1404,6 +1431,7 @@ class IngestWindow(QMainWindow):
         chk_fast,
         ocio_in,
         rule_combo,
+        logo_path_edit,
         port_edit,
         path_edit,
         dialog,
@@ -1415,6 +1443,18 @@ class IngestWindow(QMainWindow):
         self._chk_fast_verify.setChecked(chk_fast.isChecked())
         self._ocio_in.setCurrentText(ocio_in.currentText())
         self._rule_combo.setCurrentIndex(rule_combo.currentIndex())
+
+        # Apply studio branding
+        new_logo = logo_path_edit.text().strip()
+        if new_logo != self._engine.studio_logo:
+            self._engine.studio_logo = new_logo
+            self._update_logo_preview()
+            save_rules(
+                self._engine.rules,
+                DEFAULT_RULES_PATH,
+                studio_name=self._engine.studio_name,
+                studio_logo=new_logo,
+            )
 
         # Apply daemon settings
         from ramses.ram_settings import RamSettings
@@ -2568,9 +2608,33 @@ class IngestWindow(QMainWindow):
         self._engine.ocio_out = text
 
     def _on_studio_changed(self, text: str) -> None:
-        """Update engine and persist studio name to config."""
+        """Update engine and persist studio name and logo to config."""
         self._engine.studio_name = text
-        save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text)
+        save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text, studio_logo=self._engine.studio_logo)
+
+    def _update_logo_preview(self) -> None:
+        """Refresh the logo image in the header bar."""
+        if hasattr(self, "_logo_preview") and self._engine.studio_logo:
+            from PySide6.QtGui import QPixmap
+            if os.path.exists(self._engine.studio_logo):
+                self._logo_preview.setPixmap(QPixmap(self._engine.studio_logo))
+                self._logo_preview.setVisible(True)
+            else:
+                self._logo_preview.clear()
+                self._logo_preview.setVisible(False)
+        elif hasattr(self, "_logo_preview"):
+            self._logo_preview.clear()
+            self._logo_preview.setVisible(False)
+
+    def _browse_studio_logo(self, path_edit: QLineEdit) -> None:
+        """Browse for studio logo image file."""
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Select Studio Logo", "", 
+            "Images (*.png *.jpg *.jpeg *.png *.bmp);;All Files (*)"
+        )
+        if path:
+            path_edit.setText(path)
 
     def _on_view_report(self, _=None) -> None:
         """Open the last generated HTML report in the system browser."""
@@ -2795,14 +2859,16 @@ class IngestWindow(QMainWindow):
         dlg = RulesEditorDialog(DEFAULT_RULES_PATH, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             # Load updated rules from disk first
-            rules, studio = load_rules()
+            rules, studio, logo = load_rules()
             self._engine.rules = rules
             self._engine.studio_name = studio
+            self._engine.studio_logo = logo
             self._studio_edit.setText(studio)
+            self._update_logo_preview()
 
             # Then refresh the UI with the updated rules
             self._populate_rule_combo()
-            self._log("Rules and Studio name reloaded.")
+            self._log("Rules and Studio branding reloaded.")
 
     def _on_reset_rules(self, _=None) -> None:
         """Reset rules to the built-in defaults."""

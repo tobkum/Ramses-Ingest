@@ -6,21 +6,72 @@ from __future__ import annotations
 import os
 import time
 import base64
+import io
 from collections import Counter
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ramses_ingest.publisher import IngestResult
 
+# Module-level cache for Base64 encoded images: {(path, max_width, mtime): b64_str}
+_IMAGE_CACHE: dict[tuple[str, int | None, float], str] = {}
 
-def _get_base64_image(path: str) -> str:
-    """Encode an image file to a Base64 data URI."""
+
+def _get_base64_image(path: str, max_width: int | None = None) -> str:
+    """Encode an image file to a Base64 data URI, optionally resizing it.
+
+    Args:
+        path: Path to the image file.
+        max_width: Optional maximum width. If the image is wider, it will be scaled down.
+
+    Returns:
+        Base64 data URI string.
+    """
     if not path or not os.path.exists(path):
         return ""
+
     try:
-        with open(path, "rb") as image_file:
-            encoded = base64.b64encode(image_file.read()).decode("utf-8")
-            return f"data:image/jpeg;base64,{encoded}"
+        mtime = os.path.getmtime(path)
+        cache_key = (path, max_width, mtime)
+
+        if cache_key in _IMAGE_CACHE:
+            return _IMAGE_CACHE[cache_key]
+
+        # Use PySide6 for resizing if max_width is requested
+        if max_width:
+            from PySide6.QtGui import QImage, QImageReader
+            from PySide6.QtCore import QBuffer, QIODevice
+
+            reader = QImageReader(path)
+            if not reader.canRead():
+                return ""
+
+            img = reader.read()
+            if img.isNull():
+                return ""
+
+            if img.width() > max_width:
+                img = img.scaledToWidth(max_width)
+
+            # Convert to Base64
+            buffer = QBuffer()
+            buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+            # Use PNG for better quality/transparency support in logos
+            img.save(buffer, "PNG")
+            encoded = base64.b64encode(buffer.data().data()).decode("utf-8")
+            b64_str = f"data:image/png;base64,{encoded}"
+        else:
+            # Standard encoding for thumbnails (already small)
+            with open(path, "rb") as image_file:
+                encoded = base64.b64encode(image_file.read()).decode("utf-8")
+                # Detect extension for correct mime type
+                ext = os.path.splitext(path)[1].lower().strip(".")
+                mime = "jpeg" if ext in ["jpg", "jpeg"] else "png"
+                b64_str = f"data:image/{mime};base64,{encoded}"
+
+        _IMAGE_CACHE[cache_key] = b64_str
+        return b64_str
+
     except Exception:
         return ""
 
@@ -103,7 +154,7 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
         return False
 
 
-def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", operator: str = "Unknown") -> bool:
+def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", studio_logo_path: str = "", operator: str = "Unknown") -> bool:
     """Generate a clean, professional HTML manifest with exact analytics and technical flagging."""
     
     css = """
@@ -184,6 +235,12 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         text-transform: uppercase;
         letter-spacing: 2.5px;
         margin-bottom: 8px;
+    }
+
+    .studio-logo {
+        max-height: 40px;
+        margin-bottom: 12px;
+        display: block;
     }
 
     h1 {
@@ -928,6 +985,14 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         items_html = "<br>".join(attention_items)
         attention_box = f'<div class="attention-box"><strong>Attention Required</strong><br>{items_html}</div>'
 
+    # Branding Logo
+    logo_html = ""
+    if studio_logo_path:
+        # Resize logo to max 300px width for the report to keep HTML size manageable
+        b64_logo = _get_base64_image(studio_logo_path, max_width=300)
+        if b64_logo:
+            logo_html = f'<img src="{b64_logo}" class="studio-logo" alt="{studio_name}">'
+
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     project = getattr(results[0].plan, 'project_name', "") or results[0].plan.project_id if results and results[0].plan else "Unknown"
 
@@ -952,6 +1017,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '    <div class="report">',
         '        <header>',
         '            <div>',
+        f'                {logo_html}',
         f'                <div class="studio-header">{studio_name}</div>',
         "                <h1>Ingest Manifest</h1>",
         '            </div>',
