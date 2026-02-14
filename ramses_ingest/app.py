@@ -308,66 +308,23 @@ class IngestEngine:
         # Normalize all paths to forward slashes for consistency
         paths = [normalize_path(p) for p in paths]
 
-        all_clips: list[Clip] = []
-        seen_seq_keys: set[tuple[str, str, str]] = set() # (dir, base, ext)
+        # Process all paths (files and directories) through unified grouping logic
+        if progress_callback:
+            progress_callback("Identifying sequences and movie clips...")
 
-        # UX Magic: If user selects multiple files from same sequence, consolidate them instantly
-        # rather than performing N full-directory rescans.
-        file_paths = [p for p in paths if os.path.isfile(p)]
-        dir_paths = [p for p in paths if os.path.isdir(p)]
+        # 1. Collect all explicit files and files within selected directories
+        all_candidate_files = []
+        for p in paths:
+            if os.path.isfile(p):
+                all_candidate_files.append(p)
+            elif os.path.isdir(p):
+                for root, _, filenames in os.walk(p):
+                    for f in filenames:
+                        all_candidate_files.append(os.path.join(root, f))
 
-        # 1. Process files with grouping
-        if file_paths:
-            if progress_callback: progress_callback(f"Consolidating {len(file_paths)} files...")
-            from ramses_ingest.scanner import RE_FRAME_PADDING, MOVIE_EXTENSIONS
-            
-            temp_buckets: dict[tuple[str, str, str], list[tuple[int, str, int]]] = {}
-            standalone: list[Clip] = []
-
-            for p in file_paths:
-                name = os.path.basename(p)
-                ext = os.path.splitext(name)[1].lstrip(".").lower()
-                m = RE_FRAME_PADDING.match(name)
-                
-                # Logic: Only group if it matches the padding regex AND is not a movie
-                if m and ext not in MOVIE_EXTENSIONS:
-                    base = m.group("base")
-                    frame_str = m.group("frame")
-                    key = (os.path.dirname(p), base, ext)
-                    temp_buckets.setdefault(key, []).append((int(frame_str), p, len(frame_str)))
-                else:
-                    standalone.append(Clip(
-                        base_name=os.path.splitext(name)[0],
-                        extension=ext,
-                        directory=Path(os.path.dirname(p)),
-                        first_file=str(p)
-                    ))
-            
-            # Convert buckets to sequence Clips
-            for (dir_path, base, ext), frames in temp_buckets.items():
-                frames.sort()
-                all_clips.append(Clip(
-                    base_name=base,
-                    extension=ext,
-                    directory=Path(dir_path),
-                    is_sequence=True,
-                    frames=[f[0] for f in frames],
-                    first_file=frames[0][1],
-                    _padding=frames[0][2]
-                ))
-                seen_seq_keys.add((dir_path, base, ext))
-            all_clips.extend(standalone)
-
-        # 2. Process directories
-        for p in dir_paths:
-            if progress_callback: progress_callback(f"Scanning directory: {os.path.basename(p)}...")
-            new_clips = scan_directory(p)
-            for c in new_clips:
-                if c.is_sequence:
-                    key = (str(c.directory), c.base_name, c.extension.lower())
-                    if key in seen_seq_keys: continue
-                    seen_seq_keys.add(key)
-                all_clips.append(c)
+        # 2. Delegate grouping to centralized smart logic
+        from ramses_ingest.scanner import group_files
+        all_clips = group_files(all_candidate_files)
 
         _log(f"  Found {len(all_clips)} clip(s).")
 
