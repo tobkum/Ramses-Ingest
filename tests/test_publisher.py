@@ -136,9 +136,10 @@ class TestCopyFrames(unittest.TestCase):
 
     def test_copy_sequence(self):
         clip = _make_clip("plate", self.src_dir, frame_count=4)
-        copied, checksum, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
+        copied, checksums, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
         self.assertEqual(copied, 4)
-        self.assertGreater(len(checksum), 0)
+        self.assertEqual(len(checksums), 4)
+        self.assertIn(first_file, checksums)
 
         expected_files = [
             f"PROJ_S_SH010_PLATE.{i:04d}.exr" for i in range(1, 5)
@@ -157,8 +158,9 @@ class TestCopyFrames(unittest.TestCase):
             frames=[],
             first_file=movie_path,
         )
-        copied, checksum, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
+        copied, checksums, bytes_moved, first_file = copy_frames(clip, self.dst_dir, "PROJ", "SH010", "PLATE")
         self.assertEqual(copied, 1)
+        self.assertEqual(len(checksums), 1)
         self.assertIn("PROJ_S_SH010_PLATE.mov", os.listdir(self.dst_dir))
 
     def test_fast_verify_catches_size_mismatch(self):
@@ -236,8 +238,9 @@ class TestWriteMetadata(unittest.TestCase):
 
     def test_writes_json_with_timecode(self):
         _write_ramses_metadata(
-            self.tmpdir, "test_file.exr", version=1, 
-            comment="test", timecode="01:00:00:00"
+            self.tmpdir, version=1, 
+            comment="test", timecode="01:00:00:00",
+            checksums={"test_file.exr": "fake_md5"}
         )
         import json
         meta_path = os.path.join(self.tmpdir, "_ramses_data.json")
@@ -246,6 +249,7 @@ class TestWriteMetadata(unittest.TestCase):
             data = json.load(f)
         self.assertIn("test_file.exr", data)
         self.assertEqual(data["test_file.exr"]["timecode"], "01:00:00:00")
+        self.assertEqual(data["test_file.exr"]["md5"], "fake_md5")
 
 
 class TestExecutePlan(unittest.TestCase):
@@ -382,7 +386,7 @@ class TestPublisherConcurrency(unittest.TestCase):
 
         def write_metadata(filename, version):
             for _ in range(5):  # Multiple writes per thread
-                _write_ramses_metadata(folder, filename, version)
+                _write_ramses_metadata(folder, version, checksums={filename: "fake_md5"})
 
         # Launch multiple threads writing different entries
         threads = [
@@ -440,7 +444,7 @@ class TestPublisherConcurrency(unittest.TestCase):
         # Cause rename to fail
         with patch('os.replace', side_effect=OSError("Simulated rename failure")):
             with self.assertRaises(OSError):
-                _write_ramses_metadata(folder, "test.exr", 1)
+                _write_ramses_metadata(folder, version=1, checksums={"test.exr": "md5"})
 
         # Verify no temp files left behind
         temp_files = [f for f in os.listdir(folder) if f.startswith(".ramses_data_")]

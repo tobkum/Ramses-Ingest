@@ -141,6 +141,7 @@ class IngestResult:
     frames_copied: int = 0
     bytes_copied: int = 0  # Exact byte count
     checksum: str = ""  # MD5 of the first frame/file
+    checksums: dict[str, str] = field(default_factory=dict)  # MD5 of every verified frame
     missing_frames: list[int] = field(default_factory=list)  # Frame gaps in sequences
     error: str = ""
 
@@ -218,7 +219,7 @@ def copy_frames(
     dry_run: bool = False,
     fast_verify: bool = False,
     max_workers: int | None = None,
-) -> tuple[int, str, int, str]:
+) -> tuple[int, dict[str, str], int, str]:
     """Copy clip frames into *dest_dir* with parallel processing and verification.
 
     Args:
@@ -232,7 +233,7 @@ def copy_frames(
         fast_verify: If True, only MD5 verify first, middle and last frames.
         max_workers: Number of parallel copy threads. If None, auto-calculated for I/O.
 
-    Returns (number of files copied, MD5 checksum of the first file, total bytes moved, first filename).
+    Returns (number of files copied, dict of filename->MD5 checksums, total bytes moved, first filename).
     """
     if max_workers is None:
         # I/O-bound operation: use more threads than CPU cores
@@ -241,7 +242,7 @@ def copy_frames(
         os.makedirs(dest_dir, exist_ok=True)
 
     total_bytes = 0
-    first_checksum = ""
+    all_checksums = {}
     first_filename = ""
 
     # Enforce case-consistency for destination filenames
@@ -383,16 +384,18 @@ def copy_frames(
             checksum, sz, dst_name, is_first = future.result()
             total_bytes += sz
             copied_count += 1
+            
+            if checksum:
+                all_checksums[dst_name] = checksum
 
             if is_first:
-                first_checksum = checksum
                 first_filename = dst_name
 
             if progress_callback and (i % 10 == 0 or i == total_frames - 1):
                 mode = "Verifying" if not fast_verify else "Copying"
                 progress_callback(f"    {mode} frame {i + 1}/{total_frames}...")
 
-    return copied_count, first_checksum, total_bytes, first_filename
+    return copied_count, all_checksums, total_bytes, first_filename
 
 
 def _get_next_version(publish_root: str) -> int:
@@ -696,14 +699,15 @@ def resolve_paths_from_daemon(
 
 def _write_ramses_metadata(
     folder: str,
-    filename: str,
     version: int,
     comment: str = "",
     timecode: str = "",
+    checksums: dict[str, str] | None = None,
 ) -> None:
     """Write a ``_ramses_data.json`` sidecar file for the published version.
 
     Uses atomic write pattern (temp file + rename) + thread-safe lock to prevent corruption.
+    Stores an entry for every file, including MD5 checksums for bit-perfect auditing.
     """
     # Protect entire read-modify-write sequence with lock to prevent race conditions
     with _METADATA_WRITE_LOCK:
@@ -717,16 +721,31 @@ def _write_ramses_metadata(
             except (json.JSONDecodeError, OSError):
                 data = {}
 
-        entry = {
-            "version": version,
-            "comment": comment,
-            "state": "wip",
-            "date": int(time.time()),
-        }
-        if timecode:
-            entry["timecode"] = timecode
+        # Shared metadata for all files in this version
+        timestamp = int(time.time())
+        
+        # If no checksums provided, we still need to write at least one entry 
+        # (old behavior for movies/unverified files)
+        if not checksums:
+            # Fallback: check directory if filename not known
+            filenames = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)) and not f.startswith("_")]
+        else:
+            filenames = list(checksums.keys())
 
-        data[filename] = entry
+        for fname in filenames:
+            entry = {
+                "version": version,
+                "comment": comment,
+                "state": "wip",
+                "date": timestamp,
+            }
+            if timecode:
+                entry["timecode"] = timecode
+            
+            if checksums and fname in checksums:
+                entry["md5"] = checksums[fname]
+
+            data[fname] = entry
 
         os.makedirs(folder, exist_ok=True)
 
@@ -809,7 +828,7 @@ def execute_plan(
         # 1. Copy frames
         action_verb = "Simulating" if dry_run else "Copying"
         _log(f"  {action_verb} {clip.frame_count or 1} file(s)...")
-        copied_count, checksum, total_bytes, first_filename = copy_frames(
+        copied_count, checksums, total_bytes, first_filename = copy_frames(
             clip,
             plan.target_publish_dir,
             plan.project_id,
@@ -827,7 +846,11 @@ def execute_plan(
         else:
             result.frames_copied = copied_count
 
-        result.checksum = checksum
+        result.checksums = checksums
+        # Maintain legacy 'checksum' property for first frame
+        if first_filename in checksums:
+            result.checksum = checksums[first_filename]
+            
         result.bytes_copied = total_bytes
         result.published_path = plan.target_publish_dir
 
@@ -835,10 +858,10 @@ def execute_plan(
         if not dry_run:
             _write_ramses_metadata(
                 plan.target_publish_dir,
-                first_filename,
                 plan.version,
                 comment="Ingested via Ramses-Ingest",
                 timecode=plan.media_info.start_timecode,
+                checksums=checksums,
             )
 
     except Exception as exc:
