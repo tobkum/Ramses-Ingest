@@ -369,6 +369,12 @@ class IngestEngine:
                 self._project_path,
             )
 
+        # Log theoretical paths for matched clips
+        _log("Theoretical target paths:")
+        for p in plans:
+            if p.match.matched and p.target_publish_dir:
+                _log(f"  {p.shot_id} -> {p.target_publish_dir}")
+
         # Enhancement #9: Check for duplicate versions
         _log("Checking for duplicate versions...")
         from ramses_ingest.publisher import check_for_duplicates, check_for_path_collisions
