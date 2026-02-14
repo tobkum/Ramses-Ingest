@@ -198,13 +198,41 @@ def build_plans(
     return plans
 
 
-def _calculate_md5(file_path: str) -> str:
-    """Calculate MD5 hash of a file in large chunks (1MB) for performance."""
+def _calculate_md5(file_path: str, sampled: bool = False) -> str:
+    """Calculate MD5 hash of a file.
+    
+    If *sampled* is True, only hashes the first, middle and last 1MB for speed.
+    This is intended for large movie files where a full hash is too slow.
+    """
     hash_md5 = hashlib.md5()
+    chunk_size = 1048576  # 1MB
+    
     # Let OSError propagate so copy failures are not silent
     with open(file_path, "rb") as f:
-        for chunk in iter(lambda: f.read(1048576), b""):  # 1MB chunks
+        if sampled:
+            # Get file size for seeking
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(0)
+            
+            if size > (chunk_size * 3):
+                # 1. Sample start
+                hash_md5.update(f.read(chunk_size))
+                # 2. Sample middle
+                f.seek(size // 2)
+                hash_md5.update(f.read(chunk_size))
+                # 3. Sample end
+                f.seek(max(0, size - chunk_size))
+                hash_md5.update(f.read(chunk_size))
+                return hash_md5.hexdigest()
+            else:
+                # File is small enough to hash fully anyway
+                f.seek(0)
+
+        # Full hash or fallback from sampling
+        for chunk in iter(lambda: f.read(chunk_size), b""):
             hash_md5.update(chunk)
+            
     return hash_md5.hexdigest()
 
 
@@ -231,6 +259,7 @@ def copy_frames(
         progress_callback: Optional callback for progress updates
         dry_run: If True, simulate copy without actually writing files
         fast_verify: If True, only MD5 verify first, middle and last frames.
+                     For movie clips, uses strategic sampling (1MB start/mid/end).
         max_workers: Number of parallel copy threads. If None, auto-calculated for I/O.
 
     Returns (number of files copied, dict of filename->MD5 checksums, total bytes moved, first filename).
@@ -280,7 +309,8 @@ def copy_frames(
                 if i != 0 and i != mid and i != (len(clip.frames) - 1):
                     needs_md5 = False
 
-            frames_to_copy.append((src, dst, dst_name, needs_md5, i == 0))
+            # Sequence frames are small, we never use sampled MD5 for them
+            frames_to_copy.append((src, dst, dst_name, needs_md5, i == 0, False))
     else:
         src = clip.first_file
         # Validate source file exists
@@ -289,14 +319,16 @@ def copy_frames(
 
         dst_name = f"{ramses_base}.{clip.extension}"
         dst = os.path.join(dest_dir, dst_name)
-        frames_to_copy.append((src, dst, dst_name, True, True))
+        # Use sampling for movie files if fast_verify is on
+        frames_to_copy.append((src, dst, dst_name, True, True, fast_verify))
 
     def _process_one(args):
-        src, dst, dst_name, needs_md5, is_first = args
+        src, dst, dst_name, needs_md5, is_first, use_sampling = args
 
         if dry_run:
             sz = os.path.getsize(src)
-            checksum = _calculate_md5(src) if needs_md5 else "skipped"
+            # Optimization: Skip expensive MD5 hashing during dry runs (Enhancement #21)
+            checksum = "dry_run_skipped" if needs_md5 else "skipped"
             return checksum, sz, dst_name, is_first
 
         src_sz = os.path.getsize(src)  # Read source size before copy
@@ -363,8 +395,8 @@ def copy_frames(
         checksum = ""
         if needs_md5:
             try:
-                src_md5 = _calculate_md5(src)
-                dst_md5 = _calculate_md5(dst)
+                src_md5 = _calculate_md5(src, sampled=use_sampling)
+                dst_md5 = _calculate_md5(dst, sampled=use_sampling)
                 if src_md5 != dst_md5:
                     raise OSError(f"Checksum mismatch: {dst}")
                 checksum = src_md5
