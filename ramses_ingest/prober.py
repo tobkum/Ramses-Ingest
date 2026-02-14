@@ -239,8 +239,9 @@ class MediaInfo:
             try:
                 val = int(val)
             except (ValueError, TypeError):
-                return str(val or "")
-        return _resolve_color_int(val, attr_name)
+                # If it's already a string (e.g. from ffprobe), ensure it's uppercase for the GUI
+                return str(val or "").upper()
+        return _resolve_color_int(val, attr_name).upper()
 
     @property
     def is_valid(self) -> bool:
