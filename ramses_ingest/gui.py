@@ -52,7 +52,7 @@ from PySide6.QtWidgets import (
 from ramses_ingest.app import IngestEngine
 from ramses_ingest.publisher import IngestPlan, IngestResult
 from ramses_ingest.config import load_rules, save_rules, DEFAULT_RULES_PATH
-from ramses_ingest.prober import check_ffprobe
+from ramses_ingest.prober import check_ffprobe, has_av
 
 # Import reusable components
 from ramses_ingest.gui_widgets import (
@@ -1124,11 +1124,12 @@ class IngestWindow(QMainWindow):
         details.append(f"<b>Resource:</b> {plan.resource or '—'}")
 
         # Proper frame count for movies
-        fc = (
+        fc_raw = (
             plan.match.clip.frame_count
             if plan.match.clip.is_sequence
             else plan.media_info.frame_count
         )
+        fc = fc_raw or 0
         if not plan.match.clip.is_sequence and fc <= 0:
             fc = 1  # Fallback
 
@@ -1137,7 +1138,7 @@ class IngestWindow(QMainWindow):
         if plan.media_info.width and plan.media_info.height:
             res_val = f"{plan.media_info.width}x{plan.media_info.height}"
 
-            if self._engine._project_width > 0 and (
+            if (self._engine._project_width or 0) > 0 and (
                 plan.media_info.width != self._engine._project_width
                 or plan.media_info.height != self._engine._project_height
             ):
@@ -1149,16 +1150,16 @@ class IngestWindow(QMainWindow):
             fps_val = f"{plan.media_info.fps:.3f}"
 
             if (
-                self._engine._project_fps > 0
-                and abs(plan.media_info.fps - self._engine._project_fps) > 0.001
+                (self._engine._project_fps or 0.0) > 0
+                and abs(plan.media_info.fps - (self._engine._project_fps or 0.0)) > 0.001
             ):
-                fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps:.3f})</b>"
+                fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps or 0.0:.3f})</b>"
 
             details.append(f"<b>FPS:</b> {fps_val}")
 
         par_val = f"{plan.media_info.pixel_aspect_ratio:.3f}"
-        if abs(plan.media_info.pixel_aspect_ratio - self._engine._project_par) > 0.001:
-            par_val = f"<b style='color:#f44747'>{par_val} (Project: {self._engine._project_par:.3f})</b>"
+        if abs(plan.media_info.pixel_aspect_ratio - (self._engine._project_par or 1.0)) > 0.001:
+            par_val = f"<b style='color:#f44747'>{par_val} (Project: {self._engine._project_par or 1.0:.3f})</b>"
         details.append(f"<b>Pixel Aspect:</b> {par_val}")
 
         if plan.media_info.codec:
@@ -1681,11 +1682,9 @@ class IngestWindow(QMainWindow):
             if clip.is_sequence:
                 fc = clip.frame_count
             else:
-                fc = (
-                    plan.media_info.frame_count
-                    if plan.media_info.frame_count > 0
-                    else 1
-                )
+                # Proper frame count for movies (handle potential None)
+                m_fc = plan.media_info.frame_count or 0
+                fc = m_fc if m_fc > 0 else 1
 
             frames_text = str(fc)
             frames_item = self._table.item(idx, 6)
@@ -1711,7 +1710,7 @@ class IngestWindow(QMainWindow):
             is_res_mismatch = False
             if plan.media_info.width and plan.media_info.height:
                 res_text = f"{plan.media_info.width}x{plan.media_info.height}"
-                if self._engine._project_width > 0 and (
+                if (self._engine._project_width or 0) > 0 and (
                     plan.media_info.width != self._engine._project_width
                     or plan.media_info.height != self._engine._project_height
                 ):
@@ -1738,8 +1737,8 @@ class IngestWindow(QMainWindow):
             # --- Column 8: FPS ---
             fps_text = f"{plan.media_info.fps:.3f}" if plan.media_info.fps > 0 else "—"
             is_fps_mismatch = False
-            if self._engine._project_fps > 0 and plan.media_info.fps > 0:
-                if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+            if (self._engine._project_fps or 0.0) > 0 and plan.media_info.fps > 0:
+                if abs(plan.media_info.fps - (self._engine._project_fps or 0.0)) > 0.001:
                     is_fps_mismatch = True
 
             fps_item = self._table.item(idx, 8)
@@ -1754,7 +1753,7 @@ class IngestWindow(QMainWindow):
             if is_fps_mismatch:
                 fps_item.setBackground(QColor(120, 100, 0, 100))
                 fps_item.setToolTip(
-                    f"Mismatch: Project is {self._engine._project_fps:.3f}"
+                    f"Mismatch: Project is {self._engine._project_fps or 0.0:.3f}"
                 )
             else:
                 fps_item.setBackground(QColor(0, 0, 0, 0))
@@ -1764,7 +1763,7 @@ class IngestWindow(QMainWindow):
             par_val = plan.media_info.pixel_aspect_ratio if plan.media_info else 1.0
             par_text = f"{par_val:.2f}"
             is_par_mismatch = False
-            if abs(par_val - self._engine._project_par) > 0.001:
+            if abs(par_val - (self._engine._project_par or 1.0)) > 0.001:
                 is_par_mismatch = True
 
             par_item = self._table.item(idx, 9)
@@ -1779,7 +1778,7 @@ class IngestWindow(QMainWindow):
             if is_par_mismatch:
                 par_item.setBackground(QColor(120, 100, 0, 100))
                 par_item.setToolTip(
-                    f"Mismatch: Project is {self._engine._project_par:.2f}"
+                    f"Mismatch: Project is {self._engine._project_par or 1.0:.2f}"
                 )
             else:
                 par_item.setBackground(QColor(0, 0, 0, 0))
@@ -1869,15 +1868,15 @@ class IngestWindow(QMainWindow):
         is_fps_mismatch = False
 
         if not plan.resource:
-            if self._engine._project_width > 0 and plan.media_info.width > 0:
+            if (self._engine._project_width or 0) > 0 and plan.media_info.width > 0:
                 if (
                     plan.media_info.width != self._engine._project_width
                     or plan.media_info.height != self._engine._project_height
                 ):
                     is_res_mismatch = True
 
-            if self._engine._project_fps > 0 and plan.media_info.fps > 0:
-                if abs(plan.media_info.fps - self._engine._project_fps) > 0.001:
+            if (self._engine._project_fps or 0.0) > 0 and plan.media_info.fps > 0:
+                if abs(plan.media_info.fps - (self._engine._project_fps or 0.0)) > 0.001:
                     is_fps_mismatch = True
 
         if plan.match.clip.missing_frames:

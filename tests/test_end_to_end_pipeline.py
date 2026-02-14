@@ -111,13 +111,14 @@ class TestEndToEndPipeline(unittest.TestCase):
 
         # Step 4: Probe media info (mock ffprobe)
         media_infos = {}
-        with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(
-                returncode=0,
-                stdout=self._mock_ffprobe_response()
-            )
-            for match in matches:
-                media_infos[match.clip.first_file] = probe_file(match.clip.first_file)
+        with patch("ramses_ingest.prober._HAS_AV", False):
+            with patch("subprocess.run") as mock_run:
+                mock_run.return_value = MagicMock(
+                    returncode=0,
+                    stdout=self._mock_ffprobe_response()
+                )
+                for match in matches:
+                    media_infos[match.clip.first_file] = probe_file(match.clip.first_file)
 
         # Step 5: Build plans
         plans = build_plans(

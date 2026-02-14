@@ -16,6 +16,7 @@ from ramses_ingest.prober import probe_file, MediaInfo
 
 class TestProber(unittest.TestCase):
     
+    @patch("ramses_ingest.prober._HAS_AV", False)
     @patch("os.path.isfile")
     @patch("subprocess.run")
     def test_probe_success(self, mock_run, mock_isfile):
@@ -47,6 +48,7 @@ class TestProber(unittest.TestCase):
         self.assertEqual(info.start_timecode, "01:00:00:00")
         self.assertEqual(info.frame_count, 240)
 
+    @patch("ramses_ingest.prober._HAS_AV", False)
     @patch("os.path.isfile")
     @patch("subprocess.run")
     def test_probe_timecode_in_format(self, mock_run, mock_isfile):
@@ -68,6 +70,7 @@ class TestProber(unittest.TestCase):
         info = probe_file("dummy.mov")
         self.assertEqual(info.start_timecode, "02:15:10:05")
 
+    @patch("ramses_ingest.prober._HAS_AV", False)
     @patch("os.path.isfile")
     @patch("subprocess.run")
     def test_probe_failure(self, mock_run, mock_isfile):
@@ -76,6 +79,7 @@ class TestProber(unittest.TestCase):
         info = probe_file("corrupt.mov")
         self.assertFalse(info.is_valid)
 
+    @patch("ramses_ingest.prober._HAS_AV", False)
     @patch("os.path.isfile")
     @patch("subprocess.run")
     def test_ffprobe_missing(self, mock_run, mock_isfile):
@@ -84,6 +88,7 @@ class TestProber(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             probe_file("any.mov")
 
+    @patch("ramses_ingest.prober._HAS_AV", False)
     @patch("os.path.isfile")
     @patch("subprocess.run")
     def test_probe_corrupt_json(self, mock_run, mock_isfile):
@@ -92,6 +97,56 @@ class TestProber(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0, stdout="not json at all")
         info = probe_file("corrupt.json")
         self.assertFalse(info.is_valid)
+
+class TestPyAVProber(unittest.TestCase):
+    """Tests for the new PyAV-based high-performance probing path."""
+
+    @patch("ramses_ingest.prober._HAS_AV", True)
+    @patch("ramses_ingest.prober.av")
+    @patch("os.path.isfile", return_value=True)
+    def test_probe_av_success(self, mock_isfile, mock_av):
+        # Setup mocks for PyAV structure: container -> stream -> metadata/context
+        mock_container = MagicMock()
+        mock_av.open.return_value.__enter__.return_value = mock_container
+        
+        # Mock metadata dictionary behavior
+        mock_container.metadata = {}
+        
+        mock_stream = MagicMock()
+        mock_stream.width = 1920
+        mock_stream.height = 1080
+        mock_stream.average_rate = 24.0
+        mock_stream.frames = 240
+        mock_stream.pix_fmt = "yuv422p10le"
+        mock_stream.sample_aspect_ratio = 1.0
+        mock_stream.metadata = {"timecode": "01:00:00:00"}
+        mock_stream.codec_context.name = "prores"
+        
+        mock_container.streams.video = [mock_stream]
+        mock_container.duration = 10 * 1000000 # 10s in microseconds
+        mock_av.time_base = 1000000
+        
+        info = probe_file("fast.mov")
+        
+        self.assertTrue(info.is_valid)
+        self.assertEqual(info.width, 1920)
+        self.assertEqual(info.fps, 24.0)
+        self.assertEqual(info.codec, "prores")
+        self.assertEqual(info.start_timecode, "01:00:00:00")
+
+    @patch("ramses_ingest.prober._HAS_AV", True)
+    @patch("ramses_ingest.prober.av")
+    @patch("os.path.isfile", return_value=True)
+    def test_probe_av_fallback_on_error(self, mock_isfile, mock_av):
+        """If PyAV fails, it should automatically fallback to ffprobe."""
+        mock_av.open.side_effect = Exception("PyAV exploded")
+        
+        with patch("ramses_ingest.prober._probe_video_ffprobe") as mock_fallback:
+            mock_fallback.return_value = MediaInfo(width=1920, height=1080)
+            info = probe_file("problematic.mov")
+            
+            mock_fallback.assert_called_once()
+            self.assertEqual(info.width, 1920)
 
 class TestProberThreading(unittest.TestCase):
     """Test thread-safety and concurrent operations."""
@@ -121,11 +176,12 @@ class TestProberThreading(unittest.TestCase):
                     "format": {"tags": {}}
                 })
 
-                with patch("os.path.isfile", return_value=True):
-                    with patch("os.path.getmtime", return_value=123456.0):
-                        with patch("subprocess.run") as mock_run:
-                            mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
-                            info = probe_file(f"file_{file_id}.mov")
+                with patch("ramses_ingest.prober._HAS_AV", False):
+                    with patch("os.path.isfile", return_value=True):
+                        with patch("os.path.getmtime", return_value=123456.0):
+                            with patch("subprocess.run") as mock_run:
+                                mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
+                                info = probe_file(f"file_{file_id}.mov")
 
                 with lock:
                     results[file_id] = info
@@ -284,10 +340,11 @@ class TestProberThreading(unittest.TestCase):
             # Mock file exists and mtime (must match the mtime in cache key)
             with patch("os.path.isfile", return_value=True):
                 with patch("os.path.getmtime", return_value=mtime):
-                    with patch("subprocess.run") as mock_run:
-                        # Should hit cache, not call ffprobe
-                        info = probe_file("/dummy/file.mov")
-                        mock_run.assert_not_called()
+                    with patch("ramses_ingest.prober._HAS_AV", False):
+                        with patch("subprocess.run") as mock_run:
+                            # Should hit cache, not call ffprobe
+                            info = probe_file("/dummy/file.mov")
+                            mock_run.assert_not_called()
 
             # Access time should be updated
             new_time = prober._CACHE_ACCESS_TIMES.get(cache_key, 0)
@@ -370,9 +427,10 @@ class TestProberThreading(unittest.TestCase):
             file_path = "/test/new_file.mov"
             with patch("os.path.isfile", return_value=True):
                 with patch("os.path.getmtime", return_value=mtime):
-                    with patch("subprocess.run") as mock_run:
-                        mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
-                        info = probe_file(file_path)
+                    with patch("ramses_ingest.prober._HAS_AV", False):
+                        with patch("subprocess.run") as mock_run:
+                            mock_run.return_value = MagicMock(returncode=0, stdout=mock_stdout)
+                            info = probe_file(file_path)
 
             # Both dicts should have entry (format: path|mtime)
             cache_key = f"{file_path}|{mtime}"

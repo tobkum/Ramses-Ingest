@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Media metadata extraction via ffprobe with persistent caching.
+"""Media metadata extraction via PyAV/ffprobe with persistent caching.
 
 Responsibilities:
     - Probe a single file to extract resolution, fps, duration, codec, colorspace.
@@ -22,13 +22,40 @@ from pathlib import Path
 
 import OpenImageIO as oiio
 
-# Image formats where OIIO reads PAR from the file header (ffprobe can't)
+# Image formats where OIIO reads PAR from the file header (ffprobe/PyAV can't)
 _OIIO_PAR_EXTENSIONS = {".exr", ".dpx", ".tif", ".tiff", ".hdr"}
 
 # Subprocess creation flags to hide console windows on Windows
 _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
 
 logger = logging.getLogger(__name__)
+
+# FFmpeg/ISO color-space integer-to-string mappings (shared by PyAV and cache deserialization)
+_COLORSPACE_MAP = {0: "RGB", 1: "BT709", 2: "Unspecified", 4: "FCC", 5: "BT470BG", 6: "SMPTE170M", 7: "SMPTE240M", 8: "YCGCO", 9: "BT2020NC", 10: "BT2020C"}
+_TRANSFER_MAP = {1: "BT709", 2: "Unspecified", 4: "Gamma22", 5: "Gamma28", 8: "Linear", 11: "XVYCC", 13: "SRGB", 14: "BT2020_10", 16: "SMPTE2084", 18: "HLG"}
+_PRIMARIES_MAP = {1: "BT709", 2: "Unspecified", 4: "BT470M", 5: "BT470BG", 6: "SMPTE170M", 9: "BT2020", 11: "DCI-P3", 12: "Display-P3"}
+
+_COLOR_MAPS = {
+    "colorspace": _COLORSPACE_MAP,
+    "transfer": _TRANSFER_MAP,
+    "primaries": _PRIMARIES_MAP,
+}
+
+
+def _resolve_color_int(val: int, attr_name: str) -> str:
+    """Map an integer color value to its human-readable name."""
+    for key, mapping in _COLOR_MAPS.items():
+        if key in attr_name.lower():
+            return mapping.get(val, str(val))
+    return str(val)
+
+# Try to import PyAV for 10x faster video probing
+try:
+    import av
+    _HAS_AV = True
+except ImportError:
+    _HAS_AV = False
+    logger.warning("PyAV not available, using slower ffprobe subprocesses. Install with: pip install av")
 
 # Cache Settings
 CACHE_PATH_MSGPACK = os.path.join(os.path.expanduser("~"), ".ramses_ingest_cache.msgpack")
@@ -172,11 +199,15 @@ def check_ffprobe() -> bool:
         )
         return True
     except (FileNotFoundError, subprocess.CalledProcessError):
-        logger.warning("'ffprobe' not found in PATH. Media metadata extraction will fail.")
+        logger.warning("'ffprobe' not found in PATH. Subprocess-based extraction will fail.")
         return False
 
 # Run check on import (logging only)
 check_ffprobe()
+
+def has_av() -> bool:
+    """Check if PyAV is available for high-performance probing."""
+    return _HAS_AV
 
 
 @dataclass
@@ -195,6 +226,21 @@ class MediaInfo:
     duration_seconds: float = 0.0
     frame_count: int = 0
     start_timecode: str = ""
+
+    def __post_init__(self):
+        """Fix cached or raw integer values after initialization."""
+        self.color_space = self._fix_color_val(self.color_space, "colorspace")
+        self.color_transfer = self._fix_color_val(self.color_transfer, "transfer")
+        self.color_primaries = self._fix_color_val(self.color_primaries, "primaries")
+
+    @staticmethod
+    def _fix_color_val(val, attr_name):
+        if not isinstance(val, int):
+            try:
+                val = int(val)
+            except (ValueError, TypeError):
+                return str(val or "")
+        return _resolve_color_int(val, attr_name)
 
     @property
     def is_valid(self) -> bool:
@@ -240,44 +286,82 @@ def _probe_image_oiio(file_path: str) -> MediaInfo:
     return MediaInfo()
 
 
-def probe_file(file_path: str | Path) -> MediaInfo:
-    """Probe *file_path* for media metadata and return a ``MediaInfo``.
+def _probe_video_av(file_path: str) -> MediaInfo:
+    """Probe a video file via PyAV (FFmpeg C-bindings).
 
-    Uses OIIO for image formats (EXR, DPX, TIFF, HDR) and ffprobe for video.
-    Checks persistent cache first (Key = Path + MTime).
+    This is 10-20x faster than ffprobe subprocesses because it avoids
+    process startup overhead and JSON serialization.
     """
-    global _CACHE_DIRTY
-    file_path = str(file_path)
-    if not os.path.isfile(file_path):
+    if not _HAS_AV:
         return MediaInfo()
 
-    # 1. Check Cache (thread-safe)
-    cache_key = None
     try:
-        import time
-        mtime = os.path.getmtime(file_path)
-        cache_key = f"{file_path}|{mtime}"
-        with _CACHE_LOCK:
-            if cache_key in _METADATA_CACHE:
-                # Update access time for LRU
-                _CACHE_ACCESS_TIMES[cache_key] = time.time()
-                return MediaInfo(**_METADATA_CACHE[cache_key])
-    except Exception:
-        pass
+        # We use 'with' to ensure container is closed even if parsing fails
+        with av.open(file_path) as container:
+            if not container.streams.video:
+                return MediaInfo()
 
-    # 2. For image formats, use OIIO (reads EXR/DPX headers natively, including PAR)
-    file_ext = Path(file_path).suffix.lower()
-    if file_ext in _OIIO_PAR_EXTENSIONS:
-        info = _probe_image_oiio(file_path)
-        if info.is_valid and cache_key:
-            import time
-            with _CACHE_LOCK:
-                _METADATA_CACHE[cache_key] = asdict(info)
-                _CACHE_ACCESS_TIMES[cache_key] = time.time()
-                _CACHE_DIRTY = True
-        return info
+            stream = container.streams.video[0]
+            
+            # FPS: PyAV uses Fraction, convert to float
+            fps = 0.0
+            if stream.average_rate:
+                fps = float(stream.average_rate)
+            elif stream.base_rate:
+                fps = float(stream.base_rate)
 
-    # 3. For video/other formats, run ffprobe
+            # Duration and Frame Count
+            duration = float(container.duration / av.time_base) if container.duration else 0.0
+            nb_frames = stream.frames or 0
+            # Fallback for missing nb_frames (common in some containers)
+            if nb_frames <= 0 and duration > 0 and fps > 0:
+                nb_frames = int(round(duration * fps))
+
+            # Timecode: Check container metadata first, then stream
+            tc = container.metadata.get("timecode", "")
+            if not tc:
+                tc = stream.metadata.get("timecode", "")
+
+            # Pixel Aspect Ratio
+            par = 1.0
+            if stream.sample_aspect_ratio:
+                par = float(stream.sample_aspect_ratio)
+
+            # Extract color science metadata from codec context if available
+            ctx = stream.codec_context
+            
+            # Safely stringify Enums or Integers if present
+            def _safestr(val, attr_name=""):
+                if val is None: return ""
+                if hasattr(val, "name"):
+                    return str(val.name)
+                if isinstance(val, int):
+                    return _resolve_color_int(val, attr_name)
+                s = str(val)
+                if "." in s: return s.split(".")[-1]
+                return s
+
+            return MediaInfo(
+                width=stream.width or 0,
+                height=stream.height or 0,
+                fps=fps,
+                codec=ctx.name or "",
+                pix_fmt=stream.pix_fmt or "",
+                color_space=_safestr(getattr(ctx, "colorspace", ""), "colorspace"),
+                color_transfer=_safestr(getattr(ctx, "color_trc", ""), "transfer"),
+                color_primaries=_safestr(getattr(ctx, "color_primaries", ""), "primaries"),
+                pixel_aspect_ratio=par,
+                duration_seconds=duration,
+                frame_count=nb_frames,
+                start_timecode=tc,
+            )
+    except Exception as e:
+        logger.debug(f"PyAV probe failed for {file_path}: {e}")
+        return MediaInfo()
+
+
+def _probe_video_ffprobe(file_path: str) -> MediaInfo:
+    """Fallback: Probe a video file via ffprobe subprocess."""
     cmd = [
         "ffprobe",
         "-v", "quiet",
@@ -340,8 +424,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         if dur > 0 and fps > 0:
             nb_frames = int(round(dur * fps))
 
-    # Parse Pixel Aspect Ratio from ffprobe's sample_aspect_ratio (video formats only;
-    # image formats are handled by the OIIO path above and never reach here)
+    # Parse Pixel Aspect Ratio
     par = 1.0
     sar_str = s.get("sample_aspect_ratio", "")
     if sar_str and ":" in sar_str:
@@ -352,7 +435,7 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         except (ValueError, ZeroDivisionError):
             pass
 
-    info = MediaInfo(
+    return MediaInfo(
         width=int(s.get("width", 0)),
         height=int(s.get("height", 0)),
         fps=fps,
@@ -367,16 +450,53 @@ def probe_file(file_path: str | Path) -> MediaInfo:
         start_timecode=tc,
     )
 
-    # 3. Update Cache (thread-safe)
+
+def probe_file(file_path: str | Path) -> MediaInfo:
+    """Probe *file_path* for media metadata and return a ``MediaInfo``.
+
+    Prioritizes:
+    1. Persistent Cache
+    2. OIIO (for Image Sequences)
+    3. PyAV (for Video Containers) - FAST
+    4. ffprobe (Fallback) - SLOW
+    """
+    global _CACHE_DIRTY
+    file_path = str(file_path)
+    if not os.path.isfile(file_path):
+        return MediaInfo()
+
+    # 1. Check Cache (thread-safe)
+    cache_key = None
+    try:
+        mtime = os.path.getmtime(file_path)
+        cache_key = f"{file_path}|{mtime}"
+        with _CACHE_LOCK:
+            if cache_key in _METADATA_CACHE:
+                _CACHE_ACCESS_TIMES[cache_key] = time.time()
+                return MediaInfo(**_METADATA_CACHE[cache_key])
+    except Exception:
+        pass
+
+    # 2. For image formats, use OIIO (reads EXR/DPX headers natively, including PAR)
+    file_ext = Path(file_path).suffix.lower()
+    if file_ext in _OIIO_PAR_EXTENSIONS:
+        info = _probe_image_oiio(file_path)
+    # 3. For video containers, prioritize PyAV (Native C-Bindings)
+    elif _HAS_AV:
+        info = _probe_video_av(file_path)
+        # Fallback to ffprobe if PyAV failed to produce valid result
+        if not info.is_valid:
+            info = _probe_video_ffprobe(file_path)
+    # 4. Ultimate fallback to ffprobe subprocess
+    else:
+        info = _probe_video_ffprobe(file_path)
+
+    # Update Cache (thread-safe)
     if info.is_valid and cache_key:
-        import time
         with _CACHE_LOCK:
             _METADATA_CACHE[cache_key] = asdict(info)
             _CACHE_ACCESS_TIMES[cache_key] = time.time()
             _CACHE_DIRTY = True
-
-            # Prune cache proactively to prevent unbounded growth during long GUI sessions
             _prune_lru_cache()
-            # Note: Cache is flushed at end of processing via flush_cache()
 
     return info

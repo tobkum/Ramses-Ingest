@@ -4,3 +4,4 @@
 PySide6
 msgpack
 OpenImageIO
+av
