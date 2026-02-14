@@ -602,13 +602,6 @@ class IngestWindow(QMainWindow):
         self._studio_edit.textChanged.connect(self._on_studio_changed)
         header_lay.addWidget(self._studio_edit)
 
-        # New: Logo display in header if set
-        self._logo_preview = QLabel()
-        self._logo_preview.setFixedSize(30, 22)
-        self._logo_preview.setScaledContents(True)
-        self._update_logo_preview()
-        header_lay.addWidget(self._logo_preview)
-
         root.addWidget(header)
 
         # ═══════════════════════════════════════════════════════════════════════
@@ -1448,7 +1441,6 @@ class IngestWindow(QMainWindow):
         new_logo = logo_path_edit.text().strip()
         if new_logo != self._engine.studio_logo:
             self._engine.studio_logo = new_logo
-            self._update_logo_preview()
             save_rules(
                 self._engine.rules,
                 DEFAULT_RULES_PATH,
@@ -2612,20 +2604,6 @@ class IngestWindow(QMainWindow):
         self._engine.studio_name = text
         save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text, studio_logo=self._engine.studio_logo)
 
-    def _update_logo_preview(self) -> None:
-        """Refresh the logo image in the header bar."""
-        if hasattr(self, "_logo_preview") and self._engine.studio_logo:
-            from PySide6.QtGui import QPixmap
-            if os.path.exists(self._engine.studio_logo):
-                self._logo_preview.setPixmap(QPixmap(self._engine.studio_logo))
-                self._logo_preview.setVisible(True)
-            else:
-                self._logo_preview.clear()
-                self._logo_preview.setVisible(False)
-        elif hasattr(self, "_logo_preview"):
-            self._logo_preview.clear()
-            self._logo_preview.setVisible(False)
-
     def _browse_studio_logo(self, path_edit: QLineEdit) -> None:
         """Browse for studio logo image file."""
         from PySide6.QtWidgets import QFileDialog
@@ -2864,7 +2842,6 @@ class IngestWindow(QMainWindow):
             self._engine.studio_name = studio
             self._engine.studio_logo = logo
             self._studio_edit.setText(studio)
-            self._update_logo_preview()
 
             # Then refresh the UI with the updated rules
             self._populate_rule_combo()
