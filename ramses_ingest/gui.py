@@ -400,10 +400,7 @@ class ConnectionWorker(QThread):
         try:
             ok = self._engine.connect_ramses()
             self.finished.emit(ok)
-        except Exception as e:
-            print(f"[DEBUG] Connection error: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             self.finished.emit(False)
 
 

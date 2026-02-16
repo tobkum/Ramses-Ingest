@@ -131,10 +131,7 @@ class IngestEngine:
             else: self._steps = ["PLATE"]
 
             self._connected = True; return True
-        except Exception as e:
-            print(f"[DEBUG] connect_ramses exception: {e}")
-            import traceback
-            traceback.print_exc()
+        except Exception:
             self._project_fps = None; self._project_width = None; self._project_height = None; return False
 
     def _require_connection(self) -> None:
