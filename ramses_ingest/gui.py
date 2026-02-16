@@ -1295,7 +1295,7 @@ class IngestWindow(QMainWindow):
         btn_architect = QPushButton("Architect...")
 
         def _launch_and_refresh():
-            self._on_launch_architect()
+            self._on_launch_smart_pattern()
             self._populate_rule_combo(rule_combo)
             rule_combo.setCurrentIndex(self._rule_combo.currentIndex())
 
