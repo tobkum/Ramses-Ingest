@@ -31,10 +31,12 @@ class TestFramePaddingRegex(unittest.TestCase):
         m = RE_FRAME_PADDING.match("shot.mov")
         self.assertIsNone(m)
 
-    def test_single_digit_no_match(self):
-        """Single digit frame numbers should not match (too ambiguous)."""
+    def test_single_digit_match(self):
+        """Single digit frame numbers should match (storyboard support)."""
         m = RE_FRAME_PADDING.match("plate.1.exr")
-        self.assertIsNone(m)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group("base"), "plate")
+        self.assertEqual(m.group("frame"), "1")
 
 
 class TestScanDirectory(unittest.TestCase):

@@ -2877,23 +2877,18 @@ class IngestWindow(QMainWindow):
             self._populate_rule_combo()
             self._log("Rules reset to default built-in patterns.")
 
-    def _on_launch_architect(self, _=None) -> None:
-        """Launch the visual rule builder and apply the result."""
-        from ramses_ingest.architect import NamingArchitectDialog
+    def _on_launch_smart_pattern(self, _=None) -> None:
+        """Launch the smart pattern builder and apply the result."""
+        from ramses_ingest.smart_pattern_dialog import SmartPatternDialog
         from ramses_ingest.matcher import NamingRule
 
-        # Get existing patterns for duplicate detection
-        existing_patterns = [rule.pattern for rule in self._engine.rules]
-
-        dlg = NamingArchitectDialog(parent=self, existing_patterns=existing_patterns)
+        dlg = SmartPatternDialog(parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             regex = dlg.get_final_regex()
-            rule_name = dlg.get_rule_name()
 
             if regex:
                 # Add to engine's rules and persist
-                new_rule = NamingRule(pattern=regex, name=rule_name)
-                # FIX: self._engine.rules returns a copy, so we must set it back
+                new_rule = NamingRule(pattern=regex, name="New Smart Rule")
                 current_rules = self._engine.rules
                 current_rules.insert(0, new_rule)
                 self._engine.rules = current_rules
@@ -2903,20 +2898,16 @@ class IngestWindow(QMainWindow):
                         DEFAULT_RULES_PATH,
                         studio_name=self._engine.studio_name,
                     )
-                    # Log success with name if provided
-                    if rule_name:
-                        self._log(f"Added naming rule '{rule_name}' to project.")
-                    else:
-                        self._log("Added naming rule to project.")
+                    self._log("Added new naming rule from Smart Pattern builder.")
                 except Exception as e:
                     self._log(f"Warning: Could not save rules to config: {e}")
 
                 # Refresh UI
                 self._populate_rule_combo()
                 self._rule_combo.setCurrentIndex(1)  # Select the newly created rule
-                self._log(f"New rule created via Architect: {regex}")
+                self._log(f"New rule created: {regex}")
             else:
-                self._log("Architect returned empty rule - skipping.")
+                self._log("Smart Pattern builder returned empty rule - skipping.")
 
     def _on_load_edl(self, _=None) -> None:
         from PySide6.QtWidgets import QFileDialog

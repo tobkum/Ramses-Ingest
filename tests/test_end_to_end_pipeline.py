@@ -199,12 +199,12 @@ class TestEndToEndPipeline(unittest.TestCase):
         # Construct MediaInfo directly (OIIO can't read dummy test files)
         media_infos = {
             matches[0].clip.first_file: MediaInfo(
-                width=1920, height=1080, color_primaries="bt709",
-                color_transfer="bt709", color_space="bt709",
+                width=1920, height=1080, color_primaries="BT709",
+                color_transfer="BT709", color_space="BT709",
             ),
             matches[1].clip.first_file: MediaInfo(
-                width=1920, height=1080, color_primaries="bt2020",
-                color_transfer="smpte2084", color_space="bt2020",
+                width=1920, height=1080, color_primaries="BT2020",
+                color_transfer="SMPTE2084", color_space="BT2020",
             ),
         }
 

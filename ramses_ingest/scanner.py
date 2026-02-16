@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 import re
 import logging
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,8 +23,8 @@ logger = logging.getLogger(__name__)
 # Matches frame numbers at the END of the filename (before extension)
 # Examples: name.0001.exr, name_0001.exr, name-0001.exr, project_v01_shot_0030.exr (matches 0030, not 01)
 # Uses GREEDY .+ to explicitly match from the end (VFX convention: frames always at end)
-# Minimum 2 digits for frame numbers to align with pyseq frame_pattern
-RE_FRAME_PADDING = re.compile(r"^(?P<base>.+)(?P<sep>[\._-])(?P<frame>\d{2,})\.(?P<ext>[a-zA-Z0-9]+)$")
+# Changed to \d+ to support single digit frames (e.g. .1.exr)
+RE_FRAME_PADDING = re.compile(r"^(?P<base>.+)(?P<sep>[\._-])(?P<frame>\d+)\.(?P<ext>[a-zA-Z0-9]+)$")
 
 # Common media extensions (lowercase)
 IMAGE_EXTENSIONS = {
@@ -105,8 +106,6 @@ def group_files(file_paths: list[str | Path]) -> list[Clip]:
     2. Group remaining files by (Directory, BaseName, Padding, Extension).
     3. Return a unified list of movie and sequence Clips.
     """
-    from collections import defaultdict
-
     movie_clips: list[Clip] = []
     image_files: list[tuple[str, str, int, str, str, Path, int]] = [] # (base, sep, frame, ext, filename, dir, padding)
 
@@ -178,6 +177,7 @@ def scan_directory(root: str | Path) -> list[Clip]:
     """Scan *root* for media files and return detected clips.
 
     Recursively collects all files and delegates grouping to group_files.
+    Explicitly prevents symlink recursion.
     """
     root = Path(root)
     if not root.is_dir():
@@ -185,7 +185,8 @@ def scan_directory(root: str | Path) -> list[Clip]:
 
     all_files = []
     try:
-        for root_dir, _, filenames in os.walk(root):
+        # followlinks=False prevents infinite recursion via symlinks
+        for root_dir, _, filenames in os.walk(root, followlinks=False):
             for f in filenames:
                 all_files.append(os.path.join(root_dir, f))
     except (PermissionError, OSError) as e:

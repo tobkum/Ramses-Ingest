@@ -492,7 +492,7 @@ class TestOIIOProbing(unittest.TestCase):
         """OIIO should extract the colorspace attribute from the EXR header."""
         info = probe_file(self.FIXTURE)
         # OIIO normalizes "ACEScg" to "lin_ap1_scene"
-        self.assertIn(info.color_space, ("ACEScg", "lin_ap1_scene"))
+        self.assertIn(info.color_space, ("ACESCG", "LIN_AP1_SCENE"))
 
     @unittest.skipUnless(os.path.isfile(FIXTURE), "Test EXR fixture not found")
     def test_probe_exr_format(self):

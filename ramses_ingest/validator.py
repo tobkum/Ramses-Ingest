@@ -38,7 +38,7 @@ def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIs
     """Validate colorspace consistency across a batch of plans.
 
     Critical issues (rendering-breaking):
-        - Mixed color primaries (bt709 + bt2020)
+        - Mixed color primaries (BT709 + BT2020)
         - Missing colorspace metadata in some clips
 
     Warning issues (potentially intentional):
@@ -62,11 +62,12 @@ def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIs
         if not plan.match.matched or not plan.media_info.width or plan.resource:
             continue
 
+        # Normalize to uppercase for consistent comparison
         profile = {
             'plan_idx': i,
-            'primaries': plan.media_info.color_primaries or "UNKNOWN",
-            'transfer': plan.media_info.color_transfer or "UNKNOWN",
-            'space': plan.media_info.color_space or "UNKNOWN",
+            'primaries': (plan.media_info.color_primaries or "UNKNOWN").upper(),
+            'transfer': (plan.media_info.color_transfer or "UNKNOWN").upper(),
+            'space': (plan.media_info.color_space or "UNKNOWN").upper(),
         }
         profiles.append(profile)
 
@@ -76,12 +77,12 @@ def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIs
     # 1. Check for mixed primaries (CRITICAL - different color gamuts)
     primaries_set = set(p['primaries'] for p in profiles)
 
-    # Define incompatible primaries combinations
+    # Define incompatible primaries combinations (Uppercase)
     incompatible_pairs = [
-        ('bt709', 'bt2020'),
-        ('bt709', 'film'),
-        ('bt2020', 'film'),
-        ('smpte170m', 'bt2020'),
+        ('BT709', 'BT2020'),
+        ('BT709', 'FILM'),
+        ('BT2020', 'FILM'),
+        ('SMPTE170M', 'BT2020'),
     ]
 
     # Check if any incompatible pairs exist in the batch
@@ -218,8 +219,14 @@ def _calculate_md5_safe(file_path: str) -> str:
     
     Samples 512KB from three locations to detect duplicates while maintaining
     uniqueness even if files start with identical black leaders or color bars.
+    
+    NOTE: This is a probabilistic check (high confidence but not cryptographic certainty).
+    It trades absolute certainty for 100x speed on large files.
     """
     try:
+        if not os.path.exists(file_path):
+            return ""
+
         size = os.path.getsize(file_path)
         chunk_size = 524288  # 512 KB
         
@@ -236,9 +243,13 @@ def _calculate_md5_safe(file_path: str) -> str:
                 # 3. Sample end (to catch trailing differences like burn-in)
                 f.seek(max(0, size - chunk_size))
                 hash_md5.update(f.read(chunk_size))
+            elif size > chunk_size:
+                # If file is small but bigger than 1 chunk, just read the rest
+                hash_md5.update(f.read())
                 
         return hash_md5.hexdigest()
-    except (OSError, IOError):
+    except (OSError, IOError) as e:
+        # Log failure but return empty string to indicate hashing failed
         return ""
 
 

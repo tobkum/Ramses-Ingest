@@ -102,7 +102,7 @@ class TestValidateBatchColorspace(unittest.TestCase):
         self.assertIn(2, issues)
         self.assertEqual(issues[2].severity, "critical")
         self.assertIn("Primaries mismatch", issues[2].message)
-        self.assertIn("bt2020", issues[2].message)
+        self.assertIn("BT2020", issues[2].message.upper())
 
     def test_mixed_primaries_bt709_film_critical(self):
         """Mixed bt709 and film primaries should flag critical issue."""

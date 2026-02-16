@@ -20,7 +20,11 @@ import atexit
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-import OpenImageIO as oiio
+try:
+    import OpenImageIO as oiio
+except ImportError:
+    oiio = None
+    logger.warning("OpenImageIO not available. EXR/DPX metadata extraction (especially PixelAspectRatio) will be limited.")
 
 # Image formats where OIIO reads PAR from the file header (ffprobe/PyAV can't)
 _OIIO_PAR_EXTENSIONS = {".exr", ".dpx", ".tif", ".tiff", ".hdr"}
@@ -254,6 +258,9 @@ def _probe_image_oiio(file_path: str) -> MediaInfo:
     Used for EXR, DPX, TIFF, HDR — formats where OIIO reads header attributes
     (like PixelAspectRatio) that ffprobe cannot access.
     """
+    if oiio is None:
+        return MediaInfo()
+
     try:
         inp = oiio.ImageInput.open(file_path)
         if not inp:

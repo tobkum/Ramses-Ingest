@@ -258,8 +258,11 @@ class IngestEngine:
             self._connected = True
             return True
 
-        except Exception:
+        except Exception as e:
             # Connection failed - ensure no defaults are used
+            from ramses.logger import log
+            from ramses.constants import LogLevel
+            log(f"Ramses connection failed: {e}", LogLevel.Error)
             self._project_fps = None
             self._project_width = None
             self._project_height = None
@@ -541,7 +544,8 @@ class IngestEngine:
         executed_plans = set()
 
         # Helper for thread pool
-        def _run_one(plan: IngestPlan) -> IngestResult:
+        def _run_one(args) -> IngestResult:
+            plan, copy_workers = args
             # Use per-clip colorspace override if set, otherwise fall back to global setting
             colorspace = plan.colorspace_override or self.ocio_in
             return execute_plan(
@@ -555,11 +559,25 @@ class IngestEngine:
                 skip_ramses_registration=True,
                 dry_run=dry_run,  # Enhancement #8: Dry-run mode
                 fast_verify=fast_verify,
+                copy_max_workers=copy_workers, # Limit copy threads per plan
             )
 
         if executable:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=_optimal_io_workers()) as executor:
-                future_to_plan = {executor.submit(_run_one, p): p for p in executable}
+            # Determine parallel workers
+            max_workers = _optimal_io_workers()
+            num_plans = len(executable)
+            
+            # Divide IO budget among parallel plans
+            # If we run 8 plans, give each 4 threads (Total ~32)
+            # Ensure at least 1 thread per plan
+            copy_workers_per_plan = max(1, 32 // min(num_plans, max_workers))
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                # Pass tuple of (plan, copy_workers)
+                future_to_plan = {
+                    executor.submit(_run_one, (p, copy_workers_per_plan)): p 
+                    for p in executable
+                }
                 
                 for i, future in enumerate(concurrent.futures.as_completed(future_to_plan), 1):
                     plan = future_to_plan[future]
