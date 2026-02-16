@@ -403,8 +403,16 @@ class SmartPatternDialog(QDialog):
 
     def _on_samples_changed(self):
         text = self.sample_edit.toPlainText()
-        self._samples = [line.strip() for line in text.splitlines() if line.strip()]
+        # Strip paths from samples so we only deal with filenames
+        self._samples = [os.path.basename(line.strip()) for line in text.splitlines() if line.strip()]
         
+        # Update the text edit if it contains full paths to keep it clean
+        stripped_text = "\n".join(self._samples)
+        if text.strip() != stripped_text:
+            self.sample_edit.blockSignals(True)
+            self.sample_edit.setPlainText(stripped_text)
+            self.sample_edit.blockSignals(False)
+
         self.example_list.clear()
         self.example_list.addItems(self._samples)
         
@@ -415,7 +423,16 @@ class SmartPatternDialog(QDialog):
 
     def _on_negative_samples_changed(self):
         text = self.negative_sample_edit.toPlainText()
-        self._negative_samples = [line.strip() for line in text.splitlines() if line.strip()]
+        # Strip paths from negative samples
+        self._negative_samples = [os.path.basename(line.strip()) for line in text.splitlines() if line.strip()]
+        
+        # Update the text edit if it contains full paths
+        stripped_text = "\n".join(self._negative_samples)
+        if text.strip() != stripped_text:
+            self.negative_sample_edit.blockSignals(True)
+            self.negative_sample_edit.setPlainText(stripped_text)
+            self.negative_sample_edit.blockSignals(False)
+
         self._update_pattern_and_preview()
 
     def _on_example_selected(self, item: QListWidgetItem):
