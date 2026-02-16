@@ -26,12 +26,14 @@ class TestIngestEngine(unittest.TestCase):
         self.engine._project_width = 1920
         self.engine._project_height = 1080
 
-    @patch("ramses_ingest.publisher.register_ramses_objects")
+    @patch("ramses_ingest.app.check_disk_space")
+    @patch("ramses_ingest.app.register_ramses_objects")
     @patch("ramses_ingest.app.execute_plan")
-    @patch("ramses_ingest.reporting.generate_html_report")
-    def test_execute_two_phase_flow(self, mock_report, mock_exec, mock_reg):
+    @patch("ramses_ingest.app.generate_html_report")
+    def test_execute_two_phase_flow(self, mock_report, mock_exec, mock_reg, mock_disk):
         # Setup plans with all required fields for execution
         clip = Clip("shot", "mov", Path("/tmp"))
+        clip.first_file = "/tmp/shot.mov"  # Ensure path is not empty for size calculation
         match = MatchResult(clip, matched=True, shot_id="SHOT", sequence_id="SEQ")
         plan = IngestPlan(
             match=match,
@@ -39,10 +41,12 @@ class TestIngestEngine(unittest.TestCase):
             sequence_id="SEQ",
             shot_id="SHOT",
             project_id="TEST",
+            resource="", # HERO HIERARCHY FIX: Registration only happens if resource is empty
             target_publish_dir="/tmp/test_project/shots/SHOT/PLATE/_published/001_WIP"
         )
 
-        mock_exec.return_value = MagicMock(success=True, plan=plan)
+        mock_disk.return_value = (True, "")
+        mock_exec.return_value = MagicMock(success=True, plan=plan, frames_copied=1, bytes_copied=1024)
         mock_report.return_value = True
 
         # Debug: verify plan is executable before calling execute

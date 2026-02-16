@@ -38,111 +38,70 @@ logger = logging.getLogger(__name__)
 
 
 def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
-    """Verify if the destination volume has enough free space.
-
-    Args:
-        dest_path: Target directory or file path.
-        required_bytes: Number of bytes needed.
-
-    Returns:
-        (bool success, str error_message)
-    """
+    """Verify if the destination volume has enough free space."""
     try:
-        # Get the root of the destination path (even if it doesn't exist yet)
         target = os.path.abspath(dest_path)
         while not os.path.exists(target):
             parent = os.path.dirname(target)
-            if parent == target:
-                break  # Root reached
+            if parent == target: break
             target = parent
 
         usage = shutil.disk_usage(target)
-        # Keep 500MB as safety margin for OS/logs
         if usage.free < (required_bytes + 524288000):
             free_gb = usage.free / (1024**3)
             req_gb = required_bytes / (1024**3)
-            return (
-                False,
-                f"Insufficient disk space on {target}. Need {req_gb:.2f} GB, but only {free_gb:.2f} GB free (plus safety margin).",
-            )
+            return (False, f"Insufficient disk space on {target}. Need {req_gb:.2f} GB, but only {free_gb:.2f} GB free.")
         return True, ""
-    except Exception as exc:
-        return True, ""  # Don't block on errors (e.g. permission issues on parent)
+    except Exception:
+        return True, ""
 
 
-# Thread-safe cache lock for Ramses object registration
 _RAMSES_CACHE_LOCK = threading.Lock()
-
-# Thread-safe lock for version number generation to prevent race conditions
 _VERSION_LOCK = threading.Lock()
-
-# Thread-safe lock for metadata writes to prevent read-modify-write race conditions
 _METADATA_WRITE_LOCK = threading.Lock()
 
 
 @dataclass
 class IngestPlan:
     """A fully resolved plan for ingesting one clip into the Ramses tree."""
-
     match: MatchResult
     media_info: MediaInfo
-
     sequence_id: str = ""
     shot_id: str = ""
     project_id: str = ""
-    project_name: str = ""  # Added long name support
+    project_name: str = ""
     step_id: str = "PLATE"
     resource: str = ""
     state: str = "WIP"
-    colorspace_override: str = ""  # Per-clip colorspace override (takes precedence over global OCIO setting)
-
+    colorspace_override: str = ""
     is_new_sequence: bool = False
     is_new_shot: bool = False
     version: int = 1
-
     target_publish_dir: str = ""
-    """Resolved path: ``{Shot}/{Step}/_published/v{NNN}/``."""
-
     target_preview_dir: str = ""
-    """Resolved path: ``{Shot}/{Step}/_preview/``."""
-
     error: str = ""
-    """Non-empty if this plan cannot be executed."""
-
-    # Enhancement #9: Duplicate detection
     is_duplicate: bool = False
-    """True if this clip appears to be a duplicate of an existing version."""
     duplicate_version: int = 0
-    """Version number of the duplicate, if found."""
     duplicate_path: str = ""
-    """Path to the duplicate version, if found."""
-
     enabled: bool = True
-    """User-controlled toggle for inclusion in ingest."""
 
     @property
     def can_execute(self) -> bool:
-        return (
-            self.enabled
-            and self.error == ""
-            and self.match.matched
-            and not self.is_duplicate
-        )
+        return self.enabled and self.error == "" and self.match.matched and not self.is_duplicate
 
 
 @dataclass
 class IngestResult:
     """Outcome of executing a single ``IngestPlan``."""
-
     plan: IngestPlan
     success: bool = False
     published_path: str = ""
     preview_path: str = ""
     frames_copied: int = 0
-    bytes_copied: int = 0  # Exact byte count
-    checksum: str = ""  # MD5 of the first frame/file
-    checksums: dict[str, str] = field(default_factory=dict)  # MD5 of every verified frame
-    missing_frames: list[int] = field(default_factory=list)  # Frame gaps in sequences
+    bytes_copied: int = 0
+    checksum: str = ""
+    checksums: dict[str, str] = field(default_factory=dict)
+    missing_frames: list[int] = field(default_factory=list)
     error: str = ""
 
 
@@ -156,1109 +115,373 @@ def build_plans(
     project_name: str = "",
 ) -> list[IngestPlan]:
     """Build an ``IngestPlan`` for each matched clip."""
-    if existing_sequences is None:
-        existing_sequences = []
-    if existing_shots is None:
-        existing_shots = []
-
-    seen_seqs = set(s.upper() for s in existing_sequences)
-    seen_shots = set(s.upper() for s in existing_shots)
-
+    seen_seqs = set(s.upper() for s in (existing_sequences or []))
+    seen_shots = set(s.upper() for s in (existing_shots or []))
     plans: list[IngestPlan] = []
 
     for match in matches:
         info = media_infos.get(match.clip.first_file, MediaInfo())
         plan = IngestPlan(
-            match=match,
-            media_info=info,
-            sequence_id=match.sequence_id,
-            shot_id=match.shot_id,
-            project_id=project_id,
-            project_name=project_name or project_id,
-            step_id=match.step_id or step_id,
-            resource=match.resource,
-            version=match.version or 1,
+            match=match, media_info=info, sequence_id=match.sequence_id, shot_id=match.shot_id,
+            project_id=project_id, project_name=project_name or project_id,
+            step_id=match.step_id or step_id, resource=match.resource, version=match.version or 1,
         )
-
         if not match.matched:
-            plan.error = "Could not match clip to a shot identity."
-            plans.append(plan)
-            continue
+            plan.error = "Could not match clip to a shot identity."; plans.append(plan); continue
 
         plan.is_new_sequence = match.sequence_id.upper() not in seen_seqs
         plan.is_new_shot = match.shot_id.upper() not in seen_shots
-
-        # Track for subsequent clips in the same batch
-        if match.sequence_id:
-            seen_seqs.add(match.sequence_id.upper())
+        if match.sequence_id: seen_seqs.add(match.sequence_id.upper())
         seen_shots.add(match.shot_id.upper())
-
         plans.append(plan)
-
     return plans
 
 
 def _calculate_md5(file_path: str, sampled: bool = False) -> str:
-    """Calculate MD5 hash of a file.
-    
-    If *sampled* is True, only hashes the first, middle and last 1MB for speed.
-    This is intended for large movie files where a full hash is too slow.
-    """
+    """Calculate MD5 hash of a file."""
     hash_md5 = hashlib.md5()
-    chunk_size = 1048576  # 1MB
-    
-    # Let OSError propagate so copy failures are not silent
+    chunk_size = 1048576
     with open(file_path, "rb") as f:
         if sampled:
-            # Get file size for seeking
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(0)
-            
+            f.seek(0, os.SEEK_END); size = f.tell(); f.seek(0)
             if size > (chunk_size * 3):
-                # 1. Sample start
                 hash_md5.update(f.read(chunk_size))
-                # 2. Sample middle
-                f.seek(size // 2)
-                hash_md5.update(f.read(chunk_size))
-                # 3. Sample end
-                f.seek(max(0, size - chunk_size))
-                hash_md5.update(f.read(chunk_size))
+                f.seek(size // 2); hash_md5.update(f.read(chunk_size))
+                f.seek(max(0, size - chunk_size)); hash_md5.update(f.read(chunk_size))
                 return hash_md5.hexdigest()
-            else:
-                # File is small enough to hash fully anyway
-                f.seek(0)
-
-        # Full hash or fallback from sampling
-        for chunk in iter(lambda: f.read(chunk_size), b""):
-            hash_md5.update(chunk)
-            
+            else: f.seek(0)
+        for chunk in iter(lambda: f.read(chunk_size), b""): hash_md5.update(chunk)
     return hash_md5.hexdigest()
 
 
 def copy_frames(
-    clip: Clip,
-    dest_dir: str,
-    project_id: str,
-    shot_id: str,
-    step_id: str,
-    resource: str = "",
-    progress_callback: Callable[[str], None] | None = None,
-    dry_run: bool = False,
-    fast_verify: bool = True,
-    max_workers: int | None = None,
+    clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str,
+    resource: str = "", progress_callback: Callable[[str], None] | None = None,
+    dry_run: bool = False, fast_verify: bool = True, max_workers: int | None = None,
 ) -> tuple[int, dict[str, str], int, str]:
-    """Copy clip frames into *dest_dir* with parallel processing and verification.
+    """Copy clip frames into *dest_dir* with parallel processing and verification."""
+    max_workers = max_workers or min(32, (os.cpu_count() or 1) + 4)
+    if not dry_run: os.makedirs(dest_dir, exist_ok=True)
 
-    Args:
-        clip: Source clip to copy
-        dest_dir: Destination directory
-        project_id: Project short name
-        shot_id: Shot identifier
-        step_id: Step identifier
-        progress_callback: Optional callback for progress updates
-        dry_run: If True, simulate copy without actually writing files
-        fast_verify: If True, only MD5 verify first, middle and last frames.
-                     For movie clips, uses strategic sampling (1MB start/mid/end).
-        max_workers: Number of parallel copy threads. If None, auto-calculated for I/O.
-
-    Returns (number of files copied, dict of filename->MD5 checksums, total bytes moved, first filename).
-    """
-    if max_workers is None:
-        # I/O-bound operation: use more threads than CPU cores
-        # But respect user override if provided
-        max_workers = min(32, (os.cpu_count() or 1) + 4)
-
-    if not dry_run:
-        os.makedirs(dest_dir, exist_ok=True)
-
-    total_bytes = 0
-    all_checksums = {}
-    first_filename = ""
-
-    # Enforce case-consistency for destination filenames
-    # Project casing is preserved, Shot is standardized to Upper
+    total_bytes, all_checksums, first_filename = 0, {}, ""
     shot_id = shot_id.upper()
-
-    # Build base part of Ramses filename
-    # e.g. PROJ_S_SH010_PLATE or PROJ_S_SH010_PLATE_BG
     base_parts = [project_id, "S", shot_id, step_id]
-    if resource:
-        base_parts.append(resource)
+    if resource: base_parts.append(resource)
     ramses_base = "_".join(base_parts)
 
     frames_to_copy = []
     if clip.is_sequence:
-        padding = clip.padding
-        separator = clip.separator  # Use detected separator from scanner
         for i, frame in enumerate(clip.frames):
-            src = os.path.join(
-                str(clip.directory),
-                f"{clip.base_name}{separator}{str(frame).zfill(padding)}.{clip.extension}",
-            )
-            # Validate source file exists before adding to copy list
-            if not os.path.isfile(src):
-                raise FileNotFoundError(f"Source frame missing: {src}")
-
-            dst_name = f"{ramses_base}.{str(frame).zfill(padding)}.{clip.extension}"
-            dst = os.path.join(dest_dir, dst_name)
-
-            # Determine if this frame needs full MD5 verification
-            needs_md5 = True
-            if fast_verify:
-                # Only verify first, middle, and last
-                mid = len(clip.frames) // 2
-                if i != 0 and i != mid and i != (len(clip.frames) - 1):
-                    needs_md5 = False
-
-            # Sequence frames are small, we never use sampled MD5 for them
-            frames_to_copy.append((src, dst, dst_name, needs_md5, i == 0, False))
+            src = os.path.join(str(clip.directory), f"{clip.base_name}{clip.separator}{str(frame).zfill(clip.padding)}.{clip.extension}")
+            if not os.path.isfile(src): raise FileNotFoundError(f"Source frame missing: {src}")
+            dst_name = f"{ramses_base}.{str(frame).zfill(clip.padding)}.{clip.extension}"
+            needs_md5 = not fast_verify or i in (0, len(clip.frames)//2, len(clip.frames)-1)
+            frames_to_copy.append((src, os.path.join(dest_dir, dst_name), dst_name, needs_md5, i == 0, False))
     else:
-        src = clip.first_file
-        # Validate source file exists
-        if not os.path.isfile(src):
-            raise FileNotFoundError(f"Source file missing: {src}")
-
+        if not os.path.isfile(clip.first_file): raise FileNotFoundError(f"Source file missing: {clip.first_file}")
         dst_name = f"{ramses_base}.{clip.extension}"
-        dst = os.path.join(dest_dir, dst_name)
-        # Use sampling for movie files if fast_verify is on
-        frames_to_copy.append((src, dst, dst_name, True, True, fast_verify))
+        frames_to_copy.append((clip.first_file, os.path.join(dest_dir, dst_name), dst_name, True, True, fast_verify))
 
     def _process_one(args):
         src, dst, dst_name, needs_md5, is_first, use_sampling = args
-
-        if dry_run:
-            sz = os.path.getsize(src)
-            # Optimization: Skip expensive MD5 hashing during dry runs (Enhancement #21)
-            checksum = "dry_run_skipped" if needs_md5 else "skipped"
-            return checksum, sz, dst_name, is_first
-
-        src_sz = os.path.getsize(src)  # Read source size before copy
-        try:
-            shutil.copy2(src, dst)
+        if dry_run: return ("dry_run_skipped" if needs_md5 else "skipped"), os.path.getsize(src), dst_name, is_first
+        src_sz = os.path.getsize(src)
+        try: shutil.copy2(src, dst)
         except OSError as e:
-            if e.errno == 28 or "No space" in str(e):  # ENOSPC
-                raise OSError(
-                    f"Disk full while copying {dst_name} (need {src_sz} bytes)"
-                ) from e
+            if e.errno == 28: raise OSError(f"Disk full while copying {dst_name}") from e
             raise
-        dst_sz = os.path.getsize(dst)  # Read destination size for verification
-
-        # Force sync on Windows network drives to prevent buffered write issues
-        # On SMB/CIFS shares, copy2 can return success while data is still buffered
+        dst_sz = os.path.getsize(dst)
         if sys.platform == "win32":
             handle = -1
             try:
                 import ctypes
-
-                # Open file handle with write access
-                handle = ctypes.windll.kernel32.CreateFileW(
-                    dst,
-                    0x40000000,  # GENERIC_WRITE
-                    0,  # No sharing
-                    None,
-                    3,  # OPEN_EXISTING
-                    0,
-                    None,
-                )
+                handle = ctypes.windll.kernel32.CreateFileW(dst, 0x40000000, 0, None, 3, 0, None)
                 if handle != -1:
-                    # Force flush buffers to disk (with timeout to prevent hangs on slow NAS)
                     import threading
-                    flush_done = threading.Event()
-                    def _flush():
-                        ctypes.windll.kernel32.FlushFileBuffers(handle)
-                        flush_done.set()
-                    t = threading.Thread(target=_flush, daemon=True)
-                    t.start()
-                    if not flush_done.wait(timeout=15):
-                        logger.warning(f"FlushFileBuffers timed out for {dst_name}")
-            except Exception:
-                # If flush fails, proceed anyway - size/MD5 checks will catch issues
-                pass
+                    done = threading.Event()
+                    def _f(): ctypes.windll.kernel32.FlushFileBuffers(handle); done.set()
+                    t = threading.Thread(target=_f, daemon=True); t.start()
+                    if not done.wait(timeout=15): logger.warning(f"FlushFileBuffers timed out for {dst_name}")
+            except Exception: pass
             finally:
-                # Always close handle if it was opened successfully
-                if handle != -1:
-                    try:
-                        import ctypes
-
-                        ctypes.windll.kernel32.CloseHandle(handle)
-                    except Exception:
-                        pass
-
-        # 1. Size check (always) - compare source vs destination
-        if src_sz != dst_sz:
-            raise OSError(
-                f"Size mismatch after copy: {dst_name} "
-                f"(source: {src_sz} bytes, dest: {dst_sz} bytes). "
-                f"Possible disk full or network write error."
-            )
-
-        # 2. MD5 check (conditional)
+                if handle != -1: ctypes.windll.kernel32.CloseHandle(handle)
+        if src_sz != dst_sz: raise OSError(f"Size mismatch after copy: {dst_name}")
         checksum = ""
         if needs_md5:
-            try:
-                src_md5 = _calculate_md5(src, sampled=use_sampling)
-                dst_md5 = _calculate_md5(dst, sampled=use_sampling)
-                if src_md5 != dst_md5:
-                    raise OSError(f"Checksum mismatch: {dst}")
-                checksum = src_md5
-            except OSError as e:
-                # Preserve original OS error (permission denied, disk full, etc.)
-                raise OSError(f"MD5 verification failed for {dst}: {e}") from e
-
+            src_md5, dst_md5 = _calculate_md5(src, sampled=use_sampling), _calculate_md5(dst, sampled=use_sampling)
+            if src_md5 != dst_md5: raise OSError(f"Checksum mismatch: {dst}")
+            checksum = src_md5
         return checksum, dst_sz, dst_name, is_first
-
-    copied_count = 0
-    total_frames = len(frames_to_copy)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [executor.submit(_process_one, f) for f in frames_to_copy]
-
         for i, future in enumerate(concurrent.futures.as_completed(futures)):
             checksum, sz, dst_name, is_first = future.result()
-            total_bytes += sz
-            copied_count += 1
-            
-            if checksum:
-                all_checksums[dst_name] = checksum
-
-            if is_first:
-                first_filename = dst_name
-
-            if progress_callback and (i % 10 == 0 or i == total_frames - 1):
-                mode = "Verifying" if not fast_verify else "Copying"
-                progress_callback(f"    {mode} frame {i + 1}/{total_frames}...")
-
-    return copied_count, all_checksums, total_bytes, first_filename
+            total_bytes += sz; first_filename = dst_name if is_first else first_filename
+            if checksum: all_checksums[dst_name] = checksum
+            if progress_callback and (i % 10 == 0 or i == len(frames_to_copy)-1):
+                progress_callback(f"    {'Verifying' if not fast_verify else 'Copying'} frame {i+1}/{len(frames_to_copy)}...")
+    return len(frames_to_copy), all_checksums, total_bytes, first_filename
 
 
 def _get_next_version(publish_root: str) -> int:
-    """Find the next available version number by scanning API-compliant folders.
-
-    Ramses API Spec: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
-
-    Thread-safe: Uses _VERSION_LOCK to prevent race conditions in parallel execution.
-    Callers are responsible for creating the version directory after obtaining the number.
-    """
+    """Find next available version number."""
     with _VERSION_LOCK:
         publish_root = normalize_path(publish_root)
-        if not os.path.isdir(publish_root):
-            return 1
-
+        if not os.path.isdir(publish_root): return 1
         max_v = 0
-        # Regex to match API-compliant version folders:
-        # 1. (?:(?P<res>.*)_)?  -> Optional resource block
-        # 2. (?P<ver>\d{3})     -> Mandatory 3-digit version
-        # 3. (?:_(?P<state>.*))? -> Optional state block
-        version_re = re.compile(
-            r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$"
-        )
-
+        version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
         try:
             for item in os.listdir(publish_root):
                 match = version_re.match(item)
                 if match:
                     v_path = os.path.join(publish_root, item)
-                    is_valid_version = False
-
-                    # Check for completion marker (permanent)
                     if os.path.exists(os.path.join(v_path, ".ramses_complete")):
-                        is_valid_version = True
-                    # Fallback: Check mtime (for backwards compatibility with old versions)
-                    else:
-                        try:
-                            mtime = os.path.getmtime(v_path)
-                            if (time.time() - mtime) < 3600:
-                                is_valid_version = True
-                        except (OSError, PermissionError):
-                            pass
-
-                    if is_valid_version:
-                        try:
-                            v = int(match.group("ver"))
-                            if v > max_v:
-                                max_v = v
-                        except ValueError:
-                            pass
-        except Exception:
-            pass
-
+                        v = int(match.group("ver"))
+                        if v > max_v: max_v = v
+        except Exception: pass
         return max_v + 1
 
 
-def generate_thumbnail_for_result(
-    result: IngestResult,
-    ocio_config: str | None = None,
-    ocio_in: str = "sRGB",
-) -> bool:
-    """Generate thumbnail on-demand for a previously ingested result (Enhancement #20).
-
-    This allows lazy thumbnail generation - skip during ingest, generate when needed.
-
-    Args:
-        result: IngestResult from a previous ingest
-        ocio_config: Optional OCIO config file path
-        ocio_in: Source colorspace
-
-    Returns:
-        True if thumbnail generated successfully
-    """
-    if not result.success or not result.plan.target_preview_dir:
-        return False
-
+def generate_thumbnail_for_result(result: IngestResult, ocio_config: str | None = None, ocio_in: str = "sRGB") -> bool:
+    if not result.success or not result.plan.target_preview_dir: return False
     try:
         from ramses_ingest.preview import generate_thumbnail as gen_thumb
-
         os.makedirs(result.plan.target_preview_dir, exist_ok=True)
-
-        thumb_name = f"{result.plan.project_id}_S_{result.plan.shot_id}_{result.plan.step_id}.jpg"
-        thumb_path = os.path.join(result.plan.target_preview_dir, thumb_name)
-
-        ok = gen_thumb(
-            result.plan.match.clip,
-            thumb_path,
-            ocio_config=ocio_config,
-            ocio_in=ocio_in,
-        )
-
-        if ok:
-            result.preview_path = thumb_path
-
-        return ok
-    except Exception:
+        thumb_path = os.path.join(result.plan.target_preview_dir, f"{result.plan.project_id}_S_{result.plan.shot_id}_{result.plan.step_id}.jpg")
+        if gen_thumb(result.plan.match.clip, thumb_path, ocio_config=ocio_config, ocio_in=ocio_in):
+            result.preview_path = thumb_path; return True
         return False
+    except Exception: return False
 
 
 def check_for_duplicates(plans: list[IngestPlan]) -> None:
-    """Check all plans for duplicate versions and mark them (Enhancement #9).
-
-    Updates the IngestPlan objects in-place with duplicate information.
-
-    Args:
-        plans: List of IngestPlan objects to check
-    """
     from ramses_ingest.validator import check_for_duplicate_version
-
     for plan in plans:
-        if not plan.match.matched or not plan.target_publish_dir:
-            continue
-
-        # Get the parent directory containing published versions
-        existing_versions_dir = os.path.dirname(plan.target_publish_dir)
-
-        is_dup, dup_path, dup_version = check_for_duplicate_version(
-            plan.match.clip, existing_versions_dir, resource=plan.resource
-        )
-
+        if not plan.match.matched or not plan.target_publish_dir: continue
+        is_dup, dup_path, dup_version = check_for_duplicate_version(plan.match.clip, os.path.dirname(plan.target_publish_dir), resource=plan.resource)
         if is_dup:
-            plan.is_duplicate = True
-            plan.duplicate_version = dup_version
-            plan.duplicate_path = dup_path
+            plan.is_duplicate, plan.duplicate_version, plan.duplicate_path = True, dup_version, dup_path
             plan.error = f"Duplicate of v{dup_version:03d}"
 
 
 def check_for_path_collisions(plans: list[IngestPlan]) -> None:
-    """Identify plans that resolve to the same destination path within the current batch.
-
-    Updates the IngestPlan.error field if a collision is detected.
-    """
     from collections import defaultdict
-
     path_to_plans = defaultdict(list)
-
     for plan in plans:
-        # Only check matched plans that have a target path
-        if not plan.match.matched or not plan.target_publish_dir:
-            continue
-
-        # Normalize path for comparison
-        path_key = os.path.normpath(plan.target_publish_dir).lower()
-        path_to_plans[path_key].append(plan)
-
-    for path, colliding in path_to_plans.items():
+        if not plan.match.matched or not plan.target_publish_dir: continue
+        path_to_plans[os.path.normpath(plan.target_publish_dir).lower()].append(plan)
+    for colliding in path_to_plans.values():
         if len(colliding) > 1:
-            for plan in colliding:
-                # Only append if not already showing a more specific error
-                collision_msg = (
-                    f"COLLISION: {len(colliding)} clips resolving to same path"
-                )
-                if not plan.error:
-                    plan.error = collision_msg
-                elif "COLLISION" not in plan.error:
-                    plan.error += f" | {collision_msg}"
+            for p in colliding:
+                msg = f"COLLISION: {len(colliding)} clips resolving to same path"
+                p.error = f"{p.error} | {msg}" if p.error and "COLLISION" not in p.error else msg
 
 
-def resolve_paths(
-    plans: list[IngestPlan],
-    project_root: str,
-    shots_folder: str = FolderNames.shots,
-) -> None:
-    """Fill in ``target_publish_dir`` and ``target_preview_dir`` on each plan.
-
-    Uses the Ramses folder convention::
-
-        {project_root}/{shots_folder}/{Project}_S_{Shot}/{Project}_S_{Shot}_{Step}/_published/v{NNN}/
-
-    This matches the standard Ramses API behavior (no sequence nesting on disk).
-    """
-    version_cache: dict[str, int] = {}  # Cache next version by publish_root path
-
+def resolve_paths(plans: list[IngestPlan], project_root: str, shots_folder: str = FolderNames.shots) -> None:
+    version_cache: dict[str, int] = {}
     for plan in plans:
-        if not plan.can_execute:
-            continue
-
-        # Preserve project casing (Ramses is case-sensitive for projects)
-        # but enforce uppercase for Shot as per standard convention
-        proj_id = plan.project_id
-        shot_id = plan.shot_id.upper()
-        step_id = plan.step_id
-
-        # Sanitize IDs to prevent path traversal
-        if "/" in proj_id or "\\" in proj_id or ".." in proj_id:
-            plan.error = f"Invalid project ID contains path separators: {proj_id}"
-            continue
-        if "/" in shot_id or "\\" in shot_id or ".." in shot_id:
-            plan.error = f"Invalid shot ID contains path separators: {shot_id}"
-            continue
-        if "/" in step_id or "\\" in step_id or ".." in step_id:
-            plan.error = f"Invalid step ID contains path separators: {step_id}"
-            continue
-
-        # Build standard Shot Root folder name: PROJ_S_SH010
-        snm = RamFileInfo()
-        snm.project = proj_id
-        snm.ramType = ItemType.SHOT
-        snm.shortName = shot_id
-        shot_root_name = snm.fileName()
-
-        shot_root = os.path.join(project_root, shots_folder, shot_root_name)
-
-        # Build step folder name using API convention: PROJ_S_SH010_PLATE
-        nm = RamFileInfo()
-        nm.project = proj_id
-        nm.ramType = ItemType.SHOT
-        nm.shortName = shot_id
-        nm.step = step_id
-        step_folder_name = nm.fileName()
-
-        step_folder = os.path.join(shot_root, step_folder_name)
-
-        # VERSION-UP LOGIC (Optimized with local cache)
+        if not plan.can_execute: continue
+        proj_id, shot_id, step_id = plan.project_id, plan.shot_id.upper(), plan.step_id
+        if any(c in proj_id + shot_id + step_id for c in "/\\") or ".." in proj_id + shot_id + step_id:
+            plan.error = "Invalid IDs contain path separators"; continue
+        
+        snm = RamFileInfo(); snm.project, snm.ramType, snm.shortName = proj_id, ItemType.SHOT, shot_id
+        shot_root = os.path.join(project_root, shots_folder, snm.fileName())
+        nm = RamFileInfo(); nm.project, nm.ramType, nm.shortName, nm.step = proj_id, ItemType.SHOT, shot_id, step_id
+        step_folder = os.path.join(shot_root, nm.fileName())
         publish_root = os.path.join(step_folder, "_published")
-        if publish_root not in version_cache:
-            version_cache[publish_root] = _get_next_version(publish_root)
-
+        if publish_root not in version_cache: version_cache[publish_root] = _get_next_version(publish_root)
         plan.version = version_cache[publish_root]
-
-        # Validate version number and state
-        if plan.version <= 0 or plan.version > 999:
-            plan.error = f"Invalid version number: {plan.version}"
-            continue
-        if "/" in plan.state or "\\" in plan.state:
-            plan.error = f"Invalid state contains path separators: {plan.state}"
-            continue
-
-        # API COMPLIANT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
-        if plan.resource:
-            version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}"
-        else:
-            version_str = f"{plan.version:03d}_{plan.state}"
-
-        plan.target_publish_dir = os.path.join(
-            publish_root,
-            version_str,
-        )
-        plan.target_preview_dir = os.path.join(
-            step_folder,
-            "_preview",
-        )
+        if plan.version <= 0 or plan.version > 999: plan.error = f"Invalid version: {plan.version}"; continue
+        version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}" if plan.resource else f"{plan.version:03d}_{plan.state}"
+        plan.target_publish_dir, plan.target_preview_dir = os.path.join(publish_root, version_str), os.path.join(step_folder, "_preview")
 
 
-def resolve_paths_from_daemon(
-    plans: list[IngestPlan],
-    shot_objects: dict[str, object],
-) -> None:
-    """Calculate target paths for the UI without creating folders on disk (Dry Resolve)."""
+def resolve_paths_from_daemon(plans: list[IngestPlan], shot_objects: dict[str, object]) -> None:
     from ramses.daemon_interface import RamDaemonInterface
-
-    daemon = RamDaemonInterface.instance()
-    version_cache: dict[str, int] = {}  # Cache next version by publish_root path
-
+    daemon, version_cache = RamDaemonInterface.instance(), {}
     for plan in plans:
-        if not plan.can_execute:
-            continue
+        if not plan.can_execute: continue
         shot_obj = shot_objects.get(plan.shot_id.upper())
-        if shot_obj is None:
-            continue
-
+        if not shot_obj: continue
         try:
-            # We bypass high-level API methods to avoid os.makedirs side-effects.
-            # Get the raw path from daemon without triggering the API's internal folder creation.
             base_path = normalize_path(daemon.getPath(shot_obj.uuid(), "RamShot"))
-            if not base_path:
-                continue
-
-            # Preserve project casing
-            proj_id = plan.project_id
-            shot_id = plan.shot_id.upper()
-            step_id = plan.step_id
-
-            # Build step folder name using API convention
-            nm = RamFileInfo()
-            nm.project = proj_id
-            nm.ramType = ItemType.SHOT
-            nm.shortName = shot_id
-            nm.step = step_id
-            step_folder_name = nm.fileName()
-
-            # Construct paths manually (Dry)
-            step_root = f"{base_path}/{step_folder_name}"
-
-            # Find next version (Dry scan of existing folders) with optimization
+            if not base_path: continue
+            nm = RamFileInfo(); nm.project, nm.ramType, nm.shortName, nm.step = plan.project_id, ItemType.SHOT, plan.shot_id.upper(), plan.step_id
+            step_root = f"{base_path}/{nm.fileName()}"
             publish_root = f"{step_root}/_published"
-            if publish_root not in version_cache:
-                version_cache[publish_root] = _get_next_version(publish_root)
-
+            if publish_root not in version_cache: version_cache[publish_root] = _get_next_version(publish_root)
             plan.version = version_cache[publish_root]
-
-            # API STRICT NAMING: [RESOURCE]_[VERSION]_[STATE] or [VERSION]_[STATE]
-            if plan.resource:
-                version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}"
-            else:
-                version_str = f"{plan.version:03d}_{plan.state}"
-
-            plan.target_publish_dir = f"{publish_root}/{version_str}"
-            plan.target_preview_dir = f"{step_root}/_preview"
-
-        except Exception:
-            pass
+            version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}" if plan.resource else f"{plan.version:03d}_{plan.state}"
+            plan.target_publish_dir, plan.target_preview_dir = f"{publish_root}/{version_str}", f"{step_root}/_preview"
+        except Exception: pass
 
 
-def _write_ramses_metadata(
-    folder: str,
-    version: int,
-    comment: str = "",
-    timecode: str = "",
-    checksums: dict[str, str] | None = None,
-) -> None:
-    """Write a ``_ramses_data.json`` sidecar file for the published version.
-
-    Uses atomic write pattern (temp file + rename) + thread-safe lock to prevent corruption.
-    Stores an entry for every file, including MD5 checksums for bit-perfect auditing.
-    """
-    # Protect entire read-modify-write sequence with lock to prevent race conditions
+def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None) -> None:
+    """Write metadata and completion marker atomically."""
     with _METADATA_WRITE_LOCK:
         meta_path = os.path.join(folder, "_ramses_data.json")
-
         data = {}
         if os.path.isfile(meta_path):
             try:
-                with open(meta_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                data = {}
-
-        # Shared metadata for all files in this version
-        timestamp = int(time.time())
+                with open(meta_path, "r", encoding="utf-8") as f: data = json.load(f)
+            except Exception: pass
         
-        # If no checksums provided, we still need to write at least one entry 
-        # (old behavior for movies/unverified files)
-        if not checksums:
-            # Fallback: check directory if filename not known
-            # Exclude system files and metadata files
-            SYSTEM_FILES = {".DS_Store", "Thumbs.db", "_ramses_data.json", ".ramses_complete"}
-            filenames = [
-                f for f in os.listdir(folder) 
-                if os.path.isfile(os.path.join(folder, f)) 
-                and not f.startswith("._")  # macOS hidden files
-                and f not in SYSTEM_FILES
-            ]
-        else:
-            filenames = list(checksums.keys())
-
+        timestamp = int(time.time())
+        filenames = list(checksums.keys()) if checksums else [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)) and not f.startswith("._") and f not in {".DS_Store", "Thumbs.db", "_ramses_data.json", ".ramses_complete"}]
         for fname in filenames:
-            entry = {
-                "version": version,
-                "comment": comment,
-                "state": "wip",
-                "date": timestamp,
-            }
-            if timecode:
-                entry["timecode"] = timecode
-            
-            if checksums and fname in checksums:
-                entry["md5"] = checksums[fname]
-
+            entry = {"version": version, "comment": comment, "state": "wip", "date": timestamp}
+            if timecode: entry["timecode"] = timecode
+            if checksums and fname in checksums: entry["md5"] = checksums[fname]
             data[fname] = entry
 
-        os.makedirs(folder, exist_ok=True)
-
-        # Atomic write: write to temp file, then rename
         import tempfile
-
-        temp_fd, temp_path = tempfile.mkstemp(
-            dir=folder, prefix=".ramses_data_", suffix=".tmp"
-        )
+        fd, t_path = tempfile.mkstemp(dir=folder, prefix=".ram_meta_", suffix=".tmp")
         try:
-            with os.fdopen(temp_fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-            # Atomic rename (POSIX) or best-effort on Windows
-            os.replace(temp_path, meta_path)
+            with os.fdopen(fd, "w", encoding="utf-8") as f: json.dump(data, f, indent=4)
+            os.replace(t_path, meta_path)
+            # Write completion marker INSIDE lock
+            with open(os.path.join(folder, ".ramses_complete"), "w") as f: f.write(str(timestamp))
         except Exception:
-            # Clean up temp file on failure
-            try:
-                os.remove(temp_path)
-            except Exception:
-                pass
+            if os.path.exists(t_path): os.remove(t_path)
             raise
 
 
 def execute_plan(
-    plan: IngestPlan,
-    generate_thumbnail: bool = True,
-    generate_proxy: bool = False,
-    progress_callback: Callable[[str], None] | None = None,
-    ocio_config: str | None = None,
-    ocio_in: str = "sRGB",
-    ocio_out: str = "sRGB",  # Hardcoded for safety
-    skip_ramses_registration: bool = False,
-    dry_run: bool = False,
-    fast_verify: bool = True,
-    copy_max_workers: int | None = None,
+    plan: IngestPlan, generate_thumbnail: bool = True, generate_proxy: bool = False,
+    progress_callback: Callable[[str], None] | None = None, ocio_config: str | None = None,
+    ocio_in: str = "sRGB", ocio_out: str = "sRGB", skip_ramses_registration: bool = False,
+    dry_run: bool = False, fast_verify: bool = True, copy_max_workers: int | None = None,
 ) -> IngestResult:
-    """Execute a single ``IngestPlan``: create Ramses objects, copy frames, generate previews.
-
-    Args:
-        plan: The plan to execute.
-        generate_thumbnail: Whether to generate a JPEG thumbnail.
-        generate_proxy: Whether to generate an MP4 video proxy.
-        progress_callback: Optional callable for progress messages.
-        ocio_config: Path to an OCIO config file.
-        ocio_in: Source colorspace.
-        ocio_out: Target colorspace.
-        skip_ramses_registration: If True, skips the DB creation step (useful for parallel execution).
-        dry_run: If True, preview operations without actually copying files (Enhancement #8).
-        fast_verify: If True, only verify MD5 for first/middle/last frames.
-        copy_max_workers: Max threads for file copy. Set to 1 if running plans in parallel.
-
-    Returns:
-        An ``IngestResult`` describing the outcome.
-    """
-
-    def _log(msg: str) -> None:
-        if progress_callback:
-            progress_callback(msg)
-
+    _log = lambda m: progress_callback(m) if progress_callback else None
     result = IngestResult(plan=plan, missing_frames=plan.match.clip.missing_frames)
-
     if not plan.can_execute:
-        result.error = plan.error or "Plan cannot be executed."
+        result.error = plan.error or "Cannot execute plan"
         return result
-
     if not plan.target_publish_dir:
         result.error = "No target publish directory resolved."
         return result
 
-    clip = plan.match.clip
-
-    # Track created DB objects for rollback
-    created_db_objects = []
-
-    # --- Create Ramses objects if daemon is available ---
     if not skip_ramses_registration and not dry_run:
-        try:
-            # We wrap the register call to intercept created objects if possible
-            # But currently register_ramses_objects returns None.
-            # Ideally it should return info about what it created.
-            # For now, we rely on best-effort cleanup or just accept DB pollution is better than file pollution.
-            # However, the requirement is to rollback DB entries.
-            # We'll need to modify register_ramses_objects or logic around it.
-            # For this fix, we will focus on file rollback which is critical.
-            # DB rollback is complex without transaction support in Ramses API.
-            register_ramses_objects(plan, _log)
-        except Exception as exc:
-            # Non-fatal: Log and continue (don't re-raise)
-            _log(f"  Ramses API (non-fatal): {exc}")
+        try: register_ramses_objects(plan, _log)
+        except Exception as e: _log(f"  Ramses DB (non-fatal): {e}")
 
-    # --- Transactional Execution (Copy + Metadata) ---
     try:
-        # 1. Copy frames
-        action_verb = "Simulating" if dry_run else "Copying"
-        _log(f"  {action_verb} {clip.frame_count or 1} file(s)...")
-        copied_count, checksums, total_bytes, first_filename = copy_frames(
-            clip,
-            plan.target_publish_dir,
-            plan.project_id,
-            plan.shot_id,
-            plan.step_id,
-            resource=plan.resource,
-            progress_callback=progress_callback,
-            dry_run=dry_run,
-            fast_verify=fast_verify,
-            max_workers=copy_max_workers,
-        )
-
-        # Update result stats
-        if not clip.is_sequence and plan.media_info.frame_count > 0:
-            result.frames_copied = plan.media_info.frame_count
-        else:
-            result.frames_copied = copied_count
-
-        result.checksums = checksums
-        # Maintain legacy 'checksum' property for first frame
-        if first_filename in checksums:
-            result.checksum = checksums[first_filename]
-            
-        result.bytes_copied = total_bytes
-        result.published_path = plan.target_publish_dir
-
-        # 2. Write metadata (Critical Step - Failure triggers rollback)
-        if not dry_run:
-            _write_ramses_metadata(
-                plan.target_publish_dir,
-                plan.version,
-                comment="Ingested via Ramses-Ingest",
-                timecode=plan.media_info.start_timecode,
-                checksums=checksums,
-            )
-
+        _log(f"  {'Simulating' if dry_run else 'Copying'} files...")
+        count, sums, bts, first = copy_frames(plan.match.clip, plan.target_publish_dir, plan.project_id, plan.shot_id, plan.step_id, resource=plan.resource, progress_callback=progress_callback, dry_run=dry_run, fast_verify=fast_verify, max_workers=copy_max_workers)
+        result.frames_copied = plan.media_info.frame_count if not plan.match.clip.is_sequence and plan.media_info.frame_count > 0 else count
+        result.checksums, result.bytes_copied, result.published_path = sums, bts, plan.target_publish_dir
+        if first in sums: result.checksum = sums[first]
+        if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums)
     except Exception as exc:
         error_msg = str(exc)
-        # Rollback: Delete the partially created version folder
-        if (
-            not dry_run
-            and plan.target_publish_dir
-            and os.path.exists(plan.target_publish_dir)
-        ):
+        if not dry_run and os.path.exists(plan.target_publish_dir):
             try:
-                _log(f"  CRITICAL ERROR: {error_msg}. Rolling back...")
                 shutil.rmtree(plan.target_publish_dir)
-                _log("  Rollback successful: Cleaned up partial files.")
-                
-                # Attempt to rollback Ramses DB entry if it was just created (New Shot/Sequence)
-                if not skip_ramses_registration:
-                    # NOTE: Ramses API does not support transactional rollback easily.
-                    # Deleting a shot/sequence is risky if it existed before.
-                    # We only delete if we are CERTAIN it was new.
-                    if plan.is_new_shot:
-                         _log(f"  [Rollback] Warning: Created shot {plan.shot_id} remains in DB (Safety: manual deletion required).")
-            except Exception as rollback_exc:
-                _log(
-                    f"  WARNING: Rollback failed - {plan.target_publish_dir}: {rollback_exc}"
-                )
-                result.error = f"Ingest failed AND rollback failed: {error_msg} | Rollback error: {rollback_exc}"
+                _log("  Rollback successful.")
+                result.error = f"Ingest failed (Rolled back): {error_msg}"
                 return result
-
-        result.error = f"Ingest failed (Rolled back): {error_msg}"
+            except Exception as re:
+                _log(f"  Rollback failed: {re}")
+                result.error = f"Ingest failed AND rollback failed: {error_msg}"
+                return result
+        result.error = f"Ingest failed: {error_msg}"
         return result
 
-    # --- Generate thumbnail (moved to batch processing for parallelization) ---
-    # Store thumbnail job info for later batch processing
     result._thumbnail_job = None
     if generate_thumbnail and not dry_run:
-        # HERO VS AUXILIARY: Determine target storage
         if not plan.resource:
-            # Hero: permanent preview folder
             os.makedirs(plan.target_preview_dir, exist_ok=True)
-            thumb_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg"
-            thumb_path = os.path.join(plan.target_preview_dir, thumb_name)
+            t_path = os.path.join(plan.target_preview_dir, f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.jpg")
         else:
-            # Sanitize resource string to prevent path traversal
-            safe_resource = re.sub(r'[/\\:*?"<>|]', "_", plan.resource)
-            if ".." in safe_resource or safe_resource.startswith("."):
-                safe_resource = safe_resource.replace("..", "_").lstrip(".")
-
-            # Auxiliary: temporary storage for report embedding only
             import tempfile
+            t_path = os.path.join(tempfile.gettempdir(), f"ram_tmp_{plan.project_id}_{plan.shot_id}_{re.sub(r'[/\\:*?\"<>|]', '_', plan.resource)}_{int(time.time())}.jpg")
+        result._thumbnail_job = {"clip": plan.match.clip, "path": t_path, "ocio_config": ocio_config, "ocio_in": ocio_in, "is_resource": bool(plan.resource)}
 
-            t_dir = tempfile.gettempdir()
-            # Unique name to avoid collisions in system temp
-            t_name = f"ram_tmp_{plan.project_id}_{plan.shot_id}_{safe_resource}_{int(time.time())}.jpg"
-            thumb_path = os.path.join(t_dir, t_name)
-
-        # Store job for batch processing (avoids sequential FFmpeg calls)
-        result._thumbnail_job = {
-            "clip": clip,
-            "path": thumb_path,
-            "ocio_config": ocio_config,
-            "ocio_in": ocio_in,
-            "is_resource": bool(plan.resource),
-        }
-
-    # --- Generate video proxy (HERO ONLY) ---
     if generate_proxy and plan.target_preview_dir and not dry_run and not plan.resource:
         try:
             from ramses_ingest.preview import generate_proxy as gen_proxy
-
-            proxy_name = f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"
-
-            proxy_path = os.path.join(plan.target_preview_dir, proxy_name)
-            _log("  Generating video proxy...")
-            gen_proxy(
-                clip,
-                proxy_path,
-                ocio_config=ocio_config,
-                ocio_in=ocio_in,
-            )
-        except Exception as exc:
-            # Non-fatal: Log and continue (don't re-raise)
-            _log(f"  Proxy (non-fatal): {exc}")
-
-    # Mark version as complete (prevents zombie detection on next ingest)
-    if not dry_run and plan.target_publish_dir:
-        try:
-            marker_path = os.path.join(plan.target_publish_dir, ".ramses_complete")
-            with open(marker_path, "w") as f:
-                f.write(f"{time.time()}\n")
-        except Exception:
-            pass  # Non-fatal
+            gen_proxy(plan.match.clip, os.path.join(plan.target_preview_dir, f"{plan.project_id}_S_{plan.shot_id}_{plan.step_id}.mp4"), ocio_config=ocio_config, ocio_in=ocio_in)
+        except Exception as e: _log(f"  Proxy failed: {e}")
 
     result.success = True
     return result
 
 
-def register_ramses_objects(
-    plan: IngestPlan,
-    log: Callable[[str], None],
-    sequence_cache: dict[str, str] | None = None,
-    shot_cache: dict[str, object] | None = None,
-    skip_status_update: bool = False,
-) -> None:
-    """Create or HEAL RamSequence / RamShot via the Daemon API."""
+def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequence_cache: dict[str, str] | None = None, shot_cache: dict[str, object] | None = None, skip_status_update: bool = False) -> None:
     try:
         from ramses import Ramses
-
         ram = Ramses.instance()
-        if not ram.online():
-            return
-    except Exception:
-        return
-
+        if not ram.online(): return
+    except Exception: return
     from ramses.ram_sequence import RamSequence
     from ramses.ram_shot import RamShot
     from ramses.daemon_interface import RamDaemonInterface
-
-    info = plan.media_info
-    daemon = RamDaemonInterface.instance()
-    project = ram.project()
-    if not project:
-        return
-
+    info, daemon, project = plan.media_info, RamDaemonInterface.instance(), ram.project()
+    if not project: return
     project_uuid = project.uuid()
 
-    # ... (Sequence and Shot creation logic remains same) ...
-
-    # 1. Handle Sequence
     seq_obj = None
     if plan.sequence_id:
-        seq_upper = plan.sequence_id.upper()
-
-        # Use cache if available, otherwise fetch
-        if sequence_cache and seq_upper in sequence_cache:
-            seq_obj = RamSequence(sequence_cache[seq_upper])
+        seq_up = plan.sequence_id.upper()
+        if sequence_cache and seq_up in sequence_cache: seq_obj = RamSequence(sequence_cache[seq_up])
         else:
-            # Fallback to project-level lookup (lazyLoading=False for bulk fetch)
             for s in project.sequences():
-                if s.shortName().upper() == seq_upper:
-                    seq_obj = s
-                    break
-
-        seq_folder = join_normalized(project.folderPath(), FolderNames.shots, plan.sequence_id)
-        seq_data = {
-            "shortName": plan.sequence_id,
-            "name": plan.sequence_id,
-            "folderPath": seq_folder,
-            "project": project_uuid,
-            "overrideResolution": True,
-            "width": info.width or 1920,
-            "height": info.height or 1080,
-            "overrideFramerate": True,
-            "framerate": info.fps or 24.0,
-            "overridePixelAspectRatio": True,
-            "pixelAspectRatio": info.pixel_aspect_ratio,
-        }
-
+                if s.shortName().upper() == seq_up: seq_obj = s; break
+        seq_data = {"shortName": plan.sequence_id, "name": plan.sequence_id, "folderPath": join_normalized(project.folderPath(), FolderNames.shots, plan.sequence_id), "project": project_uuid, "overrideResolution": True, "width": info.width or 1920, "height": info.height or 1080, "overrideFramerate": True, "framerate": info.fps or 24.0, "overridePixelAspectRatio": True, "pixelAspectRatio": info.pixel_aspect_ratio}
         if not seq_obj:
-            log(f"  Creating sequence {plan.sequence_id}...")
-            try:
-                seq_obj = RamSequence(data=seq_data, create=True)
-                if sequence_cache is not None:
-                    with _RAMSES_CACHE_LOCK:
-                        sequence_cache[seq_upper] = seq_obj.uuid()
-            except Exception as exc:
-                log(f"  Sequence creation failed: {exc}")
+            log(f"  Creating sequence {plan.sequence_id}..."); seq_obj = RamSequence(data=seq_data, create=True)
+            if sequence_cache is not None:
+                with _RAMSES_CACHE_LOCK: sequence_cache[seq_up] = seq_obj.uuid()
         else:
-            # METADATA MINIMIZATION: Only update if changed
-            current_data = seq_obj.data()
-            needs_update = False
-            for key, val in seq_data.items():
-                if current_data.get(key) != val:
-                    needs_update = True
-                    break
+            if any(seq_obj.data().get(k) != v for k, v in seq_data.items()): seq_obj.setData(seq_data)
 
-            if needs_update:
-                log(f"  Updating sequence {plan.sequence_id} metadata...")
-                seq_obj.setData(seq_data)
-
-    # 2. Handle Shot
     if plan.shot_id:
-        # ... (shot resolution logic remains same) ...
-        shot_upper = plan.shot_id.upper()
-        shot_obj = None
-
-        # Use provided shot_cache (passed from app.py)
-        if shot_cache and shot_upper in shot_cache:
-            shot_obj = shot_cache[shot_upper]
-        else:
-            # Fallback to direct lookup (lazyLoading=False fetches full data in bulk)
-            for s in project.shots(lazyLoading=False):
-                if s.shortName().upper() == shot_upper:
-                    shot_obj = s
-                    break
-
-        # Derive folder path using standard naming: PROJ_S_SH010
-        shot_nm = RamFileInfo()
-        shot_nm.project = plan.project_id
-        shot_nm.ramType = ItemType.SHOT
-        shot_nm.shortName = plan.shot_id
-        shot_folder_name = shot_nm.fileName()
-        shot_folder = join_normalized(
-            project.folderPath(), FolderNames.shots, shot_folder_name
-        )
-
-        duration = 5.0
-        if info.fps and info.fps > 0:
-            fc = info.frame_count or (
-                plan.match.clip.frame_count if plan.match.clip.is_sequence else 0
-            )
-            if fc > 0:
-                duration = fc / info.fps
-
-        shot_data = {
-            "shortName": plan.shot_id,
-            "name": plan.shot_id,
-            "folderPath": shot_folder,
-            "project": project_uuid,
-            "duration": duration,
-        }
-
-        # HERO SOVEREIGNTY: Only 'No Resource' clips define the source media identity
-        if not plan.resource:
-            shot_data["sourceMedia"] = plan.match.clip.base_name
-        elif shot_obj:
-            # For auxiliary, preserve existing sourceMedia if it exists
-            existing = shot_obj.get("sourceMedia")
-            if existing:
-                shot_data["sourceMedia"] = existing
-
-        if seq_obj:
-            shot_data["sequence"] = seq_obj.uuid()
-
+        shot_up = plan.shot_id.upper()
+        shot_obj = shot_cache.get(shot_up) if shot_cache else None
         if not shot_obj:
-            log(f"  Creating shot {plan.shot_id}...")
-            try:
-                shot_obj = RamShot(data=shot_data, create=True)
-                if shot_cache is not None:
-                    with _RAMSES_CACHE_LOCK:
-                        shot_cache[shot_upper] = shot_obj
-            except Exception as exc:
-                log(f"  Shot creation failed: {exc}")
+            for s in project.shots(lazyLoading=False):
+                if s.shortName().upper() == shot_up: shot_obj = s; break
+        shot_nm = RamFileInfo(); shot_nm.project, shot_nm.ramType, shot_nm.shortName = plan.project_id, ItemType.SHOT, plan.shot_id
+        duration = (info.frame_count or plan.match.clip.frame_count) / info.fps if info.fps and info.fps > 0 else 5.0
+        shot_data = {"shortName": plan.shot_id, "name": plan.shot_id, "folderPath": join_normalized(project.folderPath(), FolderNames.shots, shot_nm.fileName()), "project": project_uuid, "duration": duration}
+        if not plan.resource: shot_data["sourceMedia"] = plan.match.clip.base_name
+        elif shot_obj and shot_obj.get("sourceMedia"): shot_data["sourceMedia"] = shot_obj.get("sourceMedia")
+        if seq_obj: shot_data["sequence"] = seq_obj.uuid()
+        if not shot_obj:
+            log(f"  Creating shot {plan.shot_id}..."); shot_obj = RamShot(data=shot_data, create=True)
+            if shot_cache is not None:
+                with _RAMSES_CACHE_LOCK: shot_cache[shot_up] = shot_obj
         else:
-            # METADATA MINIMIZATION: Only update if changed
-            current_data = shot_obj.data()
-            needs_update = False
-            for key, val in shot_data.items():
-                if current_data.get(key) != val:
-                    needs_update = True
-                    break
-
-            if needs_update:
-                log(f"  Updating shot {plan.shot_id} metadata...")
-                shot_obj.setData(shot_data)
-
-    # 3. Handle Status Update (HERO ONLY)
-    if not skip_status_update:
-        update_ramses_status(plan, plan.state, shot_cache=shot_cache)
+            if any(shot_obj.data().get(k) != v for k, v in shot_data.items()): shot_obj.setData(shot_data)
+    if not skip_status_update: update_ramses_status(plan, plan.state, shot_cache=shot_cache)
 
 
-# Track daemon feature support globally to prevent log flooding
 _USER_ASSIGNMENT_SUPPORTED = True
 
-
-def update_ramses_status(
-    plan: IngestPlan,
-    status_name: str = "OK",
-    shot_cache: dict[str, object] | None = None,
-) -> bool:
-    """Update the status of the target step in Ramses and assign current user."""
+def update_ramses_status(plan: IngestPlan, status_name: str = "OK", shot_cache: dict[str, object] | None = None) -> bool:
     global _USER_ASSIGNMENT_SUPPORTED
     try:
         from ramses import Ramses
-
         ram = Ramses.instance()
-        if not ram.online():
-            return False
-
+        if not ram.online(): return False
         project = ram.project()
-        if not project:
-            return False
-
-        # Find the shot object
-        target_shot = None
-        if shot_cache and plan.shot_id.upper() in shot_cache:
-            target_shot = shot_cache[plan.shot_id.upper()]
-        else:
-            for shot in project.shots(lazyLoading=False):
-                if shot.shortName().upper() == plan.shot_id.upper():
-                    target_shot = shot
-                    break
-
-        if not target_shot:
-            return False
-
-        # Find the step object
-        from ramses.ram_step import RamStep, StepType
-
-        target_step = None
-        for step in project.steps(StepType.SHOT_PRODUCTION):
-            if step.shortName() == plan.step_id:
-                target_step = step
-                break
-
-        if not target_step:
-            return False
-
-        # Update status
+        if not project: return False
+        target_shot = shot_cache.get(plan.shot_id.upper()) if shot_cache else next((s for s in project.shots(lazyLoading=False) if s.shortName().upper() == plan.shot_id.upper()), None)
+        if not target_shot: return False
+        from ramses.ram_step import StepType
+        target_step = next((s for s in project.steps(StepType.SHOT_PRODUCTION) if s.shortName() == plan.step_id), None)
+        if not target_step: return False
         status = target_shot.currentStatus(target_step)
         if status:
-            # Find the state (OK, TODO, etc)
-            target_state = None
-            for state in ram.states():
-                if state.shortName().upper() == status_name.upper():
-                    target_state = state
-                    break
-
-            if target_state:
-                try:
-                    status.setState(target_state)
-                    status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
-
-                    # setUser calls setStatusModifiedBy which fails on some Daemon versions
-                    if _USER_ASSIGNMENT_SUPPORTED:
-                        try:
-                            status.setUser()
-                        except Exception as exc:
-                            # If we see "Unknown query", stop trying for this session
-                            # The API might log this to stdout before we catch it,
-                            # but this flag prevents subsequent attempts.
-                            err_msg = str(exc).lower()
-                            if "unknown query" in err_msg or "not reply" in err_msg:
-                                _USER_ASSIGNMENT_SUPPORTED = False
-
-                    return True
-                except Exception:
-                    return False
-
+            state = next((s for s in ram.states() if s.shortName().upper() == status_name.upper()), None)
+            if state:
+                status.setState(state); status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
+                if _USER_ASSIGNMENT_SUPPORTED:
+                    try: status.setUser()
+                    except Exception as e:
+                        if "unknown query" in str(e).lower(): _USER_ASSIGNMENT_SUPPORTED = False
+                return True
         return False
-    except Exception:
-        return False
+    except Exception: return False

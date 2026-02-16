@@ -12,48 +12,35 @@ import os
 import time
 import concurrent.futures
 from pathlib import Path
-from typing import Callable
+from typing import Callable, List, Dict, Optional, Any
+from collections import Counter
 
-from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING
+from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING, group_files
 from ramses_ingest.matcher import match_clips, NamingRule, MatchResult
 from ramses_ingest.prober import probe_file, MediaInfo, flush_cache
 from ramses_ingest.publisher import (
     build_plans, execute_plan, resolve_paths, resolve_paths_from_daemon,
     register_ramses_objects, IngestPlan, IngestResult, check_for_duplicates,
-    update_ramses_status
+    update_ramses_status, check_disk_space, check_for_path_collisions
 )
-
-
-def _optimal_io_workers() -> int:
-    """Calculate optimal thread count for I/O-bound operations.
-
-    For I/O-bound work (file copying, network, ffprobe), use more threads
-    than CPU cores. Common pattern: min(32, cpu_count + 4).
-
-    Returns:
-        Optimal number of worker threads (typically 8-32).
-    """
-    return min(32, (os.cpu_count() or 1) + 4)
 from ramses_ingest.config import load_rules
 from ramses_ingest.reporting import generate_html_report, generate_json_audit_trail
 from ramses_ingest.path_utils import normalize_path, validate_path_within_root
 
 
+def _optimal_io_workers() -> int:
+    """Calculate optimal thread count for I/O-bound operations."""
+    return min(32, (os.cpu_count() or 1) + 4)
+
+
 def _generate_one_thumbnail(job_data):
-    """Worker function for parallel thumbnail generation (Module level for Pickling)."""
+    """Worker function for parallel thumbnail generation."""
     try:
         from ramses_ingest.preview import generate_thumbnail
-        clip = job_data['clip']
-        path = job_data['path']
-        ocio_config = job_data['ocio_config']
-        ocio_in = job_data['ocio_in']
-
-        ok = generate_thumbnail(clip, path, ocio_config=ocio_config, ocio_in=ocio_in)
+        clip, path = job_data['clip'], job_data['path']
+        ok = generate_thumbnail(clip, path, ocio_config=job_data['ocio_config'], ocio_in=job_data['ocio_in'])
         return (path if ok else None, ok)
-    except Exception as e:
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.error(f"Thumbnail generation failed for {job_data.get('path', 'unknown')}: {e}")
+    except Exception:
         return (None, False)
 
 
@@ -61,641 +48,208 @@ class IngestEngine:
     """Orchestrates the full ingest pipeline."""
 
     def __init__(self, debug_mode: bool = False) -> None:
-        self._project_id: str = ""
-        self._project_name: str = ""
-        self._project_path: str = ""
-        self._step_id: str = "PLATE"
-        self._connected: bool = False
-        self._debug_mode: bool = debug_mode
-
-        # Project Standards (loaded from Ramses - no defaults!)
-        self._project_fps: float | None = None
-        self._project_width: int | None = None
-        self._project_height: int | None = None
-        self._project_par: float = 1.0
-
-        # Sequence Overrides: {SEQ_NAME: (fps, width, height, par)}
-        self._sequence_settings: dict[str, tuple[float, int, int, float]] = {}
-
-        self._existing_sequences: list[str] = []
-        self._existing_shots: list[str] = []
-        self._shot_objects: dict[str, object] = {}
-        self._sequence_uuids: dict[str, str] = {}  # Cache sequence UUIDs for execute phase
-        self._steps: list[str] = []
-        self._operator_name: str = "Unknown"
-
+        self._project_id = ""; self._project_name = ""; self._project_path = ""
+        self._step_id = "PLATE"; self._connected = False; self._debug_mode = debug_mode
+        self._project_fps = None; self._project_width = None; self._project_height = None; self._project_par = 1.0
+        self._sequence_settings = {}; self._existing_sequences = []; self._existing_shots = []
+        self._shot_objects = {}; self._sequence_uuids = {}; self._operator_name = "Unknown"
         self._rules, self.studio_name, self.studio_logo = load_rules()
-        self.last_report_path: str | None = None
-
-        # OCIO Defaults
-        self.ocio_config: str | None = os.getenv("OCIO")
-        self.ocio_in: str = "sRGB"
+        self.last_report_path = None
+        self.ocio_config = os.getenv("OCIO"); self.ocio_in = "sRGB"
 
     # -- Properties ----------------------------------------------------------
 
     @property
-    def project_id(self) -> str:
-        return self._project_id
-
+    def project_id(self) -> str: return self._project_id
     @property
-    def project_name(self) -> str:
-        return self._project_name
-
+    def project_name(self) -> str: return self._project_name
     @property
-    def project_path(self) -> str:
-        return self._project_path
-
+    def project_path(self) -> str: return self._project_path
     @property
-    def step_id(self) -> str:
-        return self._step_id
-
+    def step_id(self) -> str: return self._step_id
     @step_id.setter
-    def step_id(self, value: str) -> None:
-        self._step_id = value
-
+    def step_id(self, value: str) -> None: self._step_id = value
     @property
-    def connected(self) -> bool:
-        return self._connected
-
+    def connected(self) -> bool: return self._connected
     @property
-    def existing_sequences(self) -> list[str]:
-        return list(self._existing_sequences)
-
+    def existing_sequences(self) -> list[str]: return list(self._existing_sequences)
     @property
-    def existing_shots(self) -> list[str]:
-        return list(self._existing_shots)
-
+    def existing_shots(self) -> list[str]: return list(self._existing_shots)
     @property
-    def steps(self) -> list[str]:
-        return list(self._steps)
-
+    def steps(self) -> list[str]: return list(self._steps)
     @property
-    def rules(self) -> list[NamingRule]:
-        return list(self._rules)
-
+    def rules(self) -> list[NamingRule]: return list(self._rules)
     @rules.setter
-    def rules(self, value: list[NamingRule]) -> None:
-        self._rules = list(value)
-
+    def rules(self, value: list[NamingRule]) -> None: self._rules = list(value)
     @property
-    def debug_mode(self) -> bool:
-        return self._debug_mode
-
+    def debug_mode(self) -> bool: return self._debug_mode
     @debug_mode.setter
-    def debug_mode(self, value: bool) -> None:
-        self._debug_mode = value
+    def debug_mode(self, value: bool) -> None: self._debug_mode = value
 
     # -- Daemon connection ---------------------------------------------------
 
     def connect_ramses(self) -> bool:
-        """Attempt to connect to the Ramses daemon and cache project info.
-
-        Returns True if the daemon is online and a project is loaded.
-        """
+        """Attempt to connect to the Ramses daemon and cache project info."""
         self._connected = False
         try:
             from ramses import Ramses
             from ramses.constants import LogLevel
             ram = Ramses.instance()
-
-            # Configure logging based on debug mode setting
-            if self._debug_mode:
-                ram.settings().debugMode = True
-                ram.settings().logLevel = LogLevel.Debug
-            else:
-                ram.settings().debugMode = False
-                ram.settings().logLevel = LogLevel.Info
-
-            # If the singleton was already created but is offline, explicitly try to connect
-            if not ram.online():
-                ram.connect()
-
-            if not ram.online():
-                return False
-
+            ram.settings().debugMode = self._debug_mode
+            ram.settings().logLevel = LogLevel.Debug if self._debug_mode else LogLevel.Info
+            if not ram.online(): ram.connect()
+            if not ram.online(): return False
             project = ram.project()
-            if project is None:
-                return False
+            if project is None: return False
 
-            self._project_id = project.shortName()
-            self._project_name = project.name()
-            self._project_path = project.folderPath()
-
-            # Naming Validation: Ensure the project ID is compatible with Ramses API regex (10-char limit)
-            from ramses.file_info import RamFileInfo
-            test_info = RamFileInfo()
-            test_info.project = self._project_id
-            test_info.ramType = "S"
-            test_info.shortName = "SHOT"
-            if not test_info.setFileName(test_info.fileName()):
-                old_id = self._project_id
-                self._project_id = old_id[:10]
-                from ramses.logger import log
-                from ramses.constants import LogLevel
-                log(f"Project Short Name '{old_id}' is too long for Ramses (max 10 chars). Truncating to '{self._project_id}'.", LogLevel.Warning)
+            self._project_id, self._project_name, self._project_path = project.shortName(), project.name(), project.folderPath()
+            self._project_fps, self._project_width, self._project_height, self._project_par = project.framerate(), project.width(), project.height(), project.pixelAspectRatio()
             
-            # Retrieve Project Standards
-            self._project_fps = project.framerate()
-            self._project_width = project.width()
-            self._project_height = project.height()
-            self._project_par = project.pixelAspectRatio()
-
-            # Cache User/Operator
-            self._operator_name = "Unknown"
             user = ram.user()
-            if user:
-                self._operator_name = user.name()
+            if user: self._operator_name = user.name()
 
-            # Bulk-fetch sequences and shots via RC9 API (lazyLoading=False
-            # pre-populates the daemon cache, preventing N+1 queries).
-
-            # Cache sequences with UUIDs and Standards
-            self._existing_sequences = []
-            self._sequence_uuids = {}
-            self._sequence_settings = {}
+            self._existing_sequences, self._sequence_uuids, self._sequence_settings = [], {}, {}
             for seq in project.sequences():
                 sn = seq.shortName()
-                if not sn:
-                    continue
-                seq_uuid = seq.uuid()
-                if not seq_uuid:
-                    continue
-                self._existing_sequences.append(sn)
-                self._sequence_uuids[sn.upper()] = seq_uuid
-                # Store sequence-specific overrides (including PAR)
-                self._sequence_settings[sn.upper()] = (
-                    seq.framerate(), seq.width(), seq.height(),
-                    seq.pixelAspectRatio()
-                )
+                if not sn or not seq.uuid(): continue
+                self._existing_sequences.append(sn); self._sequence_uuids[sn.upper()] = seq.uuid()
+                self._sequence_settings[sn.upper()] = (seq.framerate(), seq.width(), seq.height(), seq.pixelAspectRatio())
 
-            # Cache shots (lazyLoading=False fetches full data in bulk)
-            self._existing_shots = []
-            self._shot_objects = {}
+            self._existing_shots, self._shot_objects = [], {}
             for shot in project.shots(lazyLoading=False):
                 sn = shot.shortName()
-                if not sn:
-                    continue
-                self._existing_shots.append(sn)
-                self._shot_objects[sn.upper()] = shot
+                if not sn: continue
+                self._existing_shots.append(sn); self._shot_objects[sn.upper()] = shot
 
-            # Cache step short names
             self._steps = []
             try:
-                from ramses.ram_step import RamStep, StepType
-                for step in project.steps(StepType.SHOT_PRODUCTION):
-                    self._steps.append(step.shortName())
-            except Exception:
-                pass
-            
+                from ramses.ram_step import StepType
+                for step in project.steps(StepType.SHOT_PRODUCTION): self._steps.append(step.shortName())
+            except Exception: pass
             if self._steps:
-                # If we were on default "PLATE" but it's not in the list, 
-                # switch to the first valid project step.
-                if self._step_id == "PLATE" and "PLATE" not in self._steps:
-                    self._step_id = self._steps[0]
-            else:
-                self._steps = ["PLATE"]
+                if self._step_id == "PLATE" and "PLATE" not in self._steps: self._step_id = self._steps[0]
+            else: self._steps = ["PLATE"]
 
-            self._connected = True
-            return True
-
-        except Exception as e:
-            # Connection failed - ensure no defaults are used
-            from ramses.logger import log
-            from ramses.constants import LogLevel
-            log(f"Ramses connection failed: {e}", LogLevel.Error)
-            self._project_fps = None
-            self._project_width = None
-            self._project_height = None
-            return False
+            self._connected = True; return True
+        except Exception:
+            self._project_fps = None; self._project_width = None; self._project_height = None; return False
 
     def _require_connection(self) -> None:
-        """Raise an error if not connected to Ramses daemon.
-
-        Call this at the start of any operation that requires Ramses.
-        """
-        if not self._connected:
-            raise RuntimeError(
-                "Not connected to Ramses daemon. "
-                "Ensure the Ramses application is running and a project is loaded."
-            )
-        if self._project_fps is None or self._project_width is None:
-            raise RuntimeError(
-                "Project settings not loaded from Ramses. "
-                "Connection may have failed or project is not properly configured."
-            )
+        if not self._connected or self._project_fps is None:
+            raise RuntimeError("Not connected to Ramses or project settings not loaded.")
 
     # -- Pipeline stages -----------------------------------------------------
 
-    def load_delivery(
-        self,
-        paths: str | Path | list[str | Path],
-        rules: list[NamingRule] | None = None,
-        progress_callback: Callable[[str], None] | None = None,
-    ) -> list[IngestPlan]:
-        """Scan one or more delivery paths and return plans for user review.
-
-        Steps: scan → match → probe → build_plans → resolve_paths.
-
-        Raises:
-            RuntimeError: If not connected to Ramses daemon.
-        """
+    def load_delivery(self, paths: str | Path | list[str | Path], rules: list[NamingRule] | None = None, progress_callback: Callable[[str], None] | None = None) -> list[IngestPlan]:
         self._require_connection()
-
-        def _log(msg: str) -> None:
-            if progress_callback:
-                progress_callback(msg)
-
-        if not isinstance(paths, list):
-            paths = [paths]
-
-        # Normalize all paths to forward slashes for consistency
+        _log = lambda m: progress_callback(m) if progress_callback else None
+        if not isinstance(paths, list): paths = [paths]
         paths = [normalize_path(p) for p in paths]
-
-        # Process all paths (files and directories) through unified grouping logic
-        if progress_callback:
-            progress_callback("Identifying sequences and movie clips...")
-
-        # 1. Collect all explicit files and files within selected directories
+        
         all_candidate_files = []
         for p in paths:
-            if os.path.isfile(p):
-                all_candidate_files.append(p)
+            if os.path.isfile(p): all_candidate_files.append(p)
             elif os.path.isdir(p):
                 for root, _, filenames in os.walk(p):
-                    for f in filenames:
-                        all_candidate_files.append(os.path.join(root, f))
+                    for f in filenames: all_candidate_files.append(os.path.join(root, f))
 
-        # 2. Delegate grouping to centralized smart logic
-        from ramses_ingest.scanner import group_files
-        all_clips = group_files(all_candidate_files)
+        all_clips = group_files(all_candidate_files); _log(f"  Found {len(all_clips)} clip(s).")
+        matches = match_clips(all_clips, rules if rules is not None else self._rules)
 
-        _log(f"  Found {len(all_clips)} clip(s).")
-
-        effective_rules = rules if rules is not None else (self._rules or None)
-        _log("Matching clips to naming rules...")
-        matches = match_clips(all_clips, effective_rules)
-
-        _log("Probing media info (Parallel)...")
-        media_infos: dict[str, MediaInfo] = {}
-        
-        def _probe_one(clip: Clip) -> tuple[str, MediaInfo]:
-            try:
-                return clip.first_file, probe_file(clip.first_file)
-            except Exception as e:
-                logger.error(f"Probe failed for {clip.first_file}: {e}")
-                return clip.first_file, MediaInfo()
-
+        _log("Probing media info...")
+        media_infos = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=_optimal_io_workers()) as executor:
-            future_to_clip = {executor.submit(_probe_one, c): c for c in all_clips}
-            for future in concurrent.futures.as_completed(future_to_clip):
-                file_path, info = future.result()
-                media_infos[file_path] = info
+            fut = {executor.submit(lambda c: (c.first_file, probe_file(c.first_file)), cl): cl for cl in all_clips}
+            for f in concurrent.futures.as_completed(fut):
+                fp, info = f.result(); media_infos[fp] = info
 
-        _log("Building ingest plans...")
-        plans = build_plans(
-            matches,
-            media_infos,
-            project_id=self._project_id or "PROJ",
-            project_name=self._project_name or self._project_id or "Project",
-            step_id=self._step_id,
-            existing_sequences=self._existing_sequences,
-            existing_shots=self._existing_shots,
-        )
-
-        # Resolve target paths
-        if self._connected and self._shot_objects:
-            resolve_paths_from_daemon(plans, self._shot_objects)
-        if self._project_path:
-            # Fill in any plans that the daemon didn't resolve
-            resolve_paths(
-                [p for p in plans if not p.target_publish_dir],
-                self._project_path,
-            )
-
-        # Log theoretical paths for matched clips
-        _log("Theoretical target paths:")
-        for p in plans:
-            if p.match.matched and p.target_publish_dir:
-                _log(f"  {p.shot_id} -> {p.target_publish_dir}")
-
-        # Enhancement #9: Check for duplicate versions
-        _log("Checking for duplicate versions...")
-        from ramses_ingest.publisher import check_for_duplicates, check_for_path_collisions
-        check_for_duplicates(plans)
+        plans = build_plans(matches, media_infos, project_id=self._project_id or "PROJ", project_name=self._project_name or "Project", step_id=self._step_id, existing_sequences=self._existing_sequences, existing_shots=self._existing_shots)
+        if self._connected and self._shot_objects: resolve_paths_from_daemon(plans, self._shot_objects)
+        if self._project_path: resolve_paths([p for p in plans if not p.target_publish_dir], self._project_path)
         
-        # New: Check for collisions within the current batch
-        check_for_path_collisions(plans)
-
-        matched = sum(1 for p in plans if p.match.matched)
-        duplicates = sum(1 for p in plans if p.is_duplicate)
-        if duplicates > 0:
-            _log(f"Ready: {matched} matched, {len(plans) - matched} unmatched, {duplicates} duplicates detected.")
-        else:
-            _log(f"Ready: {matched} matched, {len(plans) - matched} unmatched.")
+        check_for_duplicates(plans); check_for_path_collisions(plans)
         return plans
 
-    def execute(
-        self,
-        plans: list[IngestPlan],
-        generate_thumbnails: bool = True,
-        generate_proxies: bool = False,
-        progress_callback: Callable[[str], None] | None = None,
-        update_status: bool = False,
-        export_json_audit: bool = False,
-        dry_run: bool = False,
-        fast_verify: bool = True,
-    ) -> list[IngestResult]:
-        """Execute all approved (can_execute) plans.
-
-        Args:
-            plans: List of IngestPlan objects to execute
-            generate_thumbnails: Generate JPEG previews
-            generate_proxies: Generate MP4 proxies
-            progress_callback: Optional callback for progress updates
-            update_status: Update Ramses production status to "OK" on success
-            export_json_audit: Generate machine-readable JSON audit trail
-            dry_run: Preview operations without actually copying files (Enhancement #8)
-            fast_verify: If True, only verify MD5 for first/middle/last frames.
-
-        Returns one ``IngestResult`` per plan.
-        """
-        def _log(msg: str) -> None:
-            if progress_callback:
-                progress_callback(msg)
-
-        try:
-            self._require_connection()
-        except RuntimeError as e:
-            _log(f"ERROR: {e}")
-            return [IngestResult(plan=p, error=str(e)) for p in plans]
+    def execute(self, plans: list[IngestPlan], generate_thumbnails: bool = True, generate_proxies: bool = False, progress_callback: Callable[[str], None] | None = None, update_status: bool = False, export_json_audit: bool = False, dry_run: bool = False, fast_verify: bool = True) -> list[IngestResult]:
+        _log = lambda m: progress_callback(m) if progress_callback else None
+        try: self._require_connection()
+        except RuntimeError as e: return [IngestResult(plan=p, error=str(e)) for p in plans]
 
         executable = [p for p in plans if p.can_execute]
-        
-        # 0. State Assignment: Set state based on user choice before path resolution
         target_state = "OK" if update_status else "WIP"
-        needs_re_resolve = False
-
+        
+        to_resolve = []
         for p in executable:
-            # Check if state is actually changing from what was resolved in load_delivery
-            old_state = p.state
-            
-            # HERO HIERARCHY: Only 'No Resource' clips update the shot status
-            if not p.resource:
-                p.state = target_state
-            else:
-                p.state = "WIP" 
-            
-            if p.state != old_state:
-                needs_re_resolve = True
-                # Clear previous resolution to force fresh path building with new state
-                p.target_publish_dir = ""
-                p.target_preview_dir = ""
-            
-        # Re-resolve paths only if state changed (e.g. WIP -> OK) 
-        # or if they were never resolved (safety)
-        to_resolve = [p for p in executable if needs_re_resolve or not p.target_publish_dir]
+            if not p.resource and p.state != target_state:
+                p.state = target_state; p.target_publish_dir = ""; p.target_preview_dir = ""; to_resolve.append(p)
         
         if to_resolve:
-            if self._connected and self._shot_objects:
-                resolve_paths_from_daemon(to_resolve, self._shot_objects)
-            if self._project_path:
-                resolve_paths(
-                    [p for p in to_resolve if not p.target_publish_dir],
-                    self._project_path,
-                )
+            if self._connected and self._shot_objects: resolve_paths_from_daemon(to_resolve, self._shot_objects)
+            if self._project_path: resolve_paths([p for p in to_resolve if not p.target_publish_dir], self._project_path)
 
-        total = len(executable)
-        _log(f"Starting ingest for {total} clips...")
-
-        # Enhancement: Disk Space Guard
         if not dry_run and executable:
-            total_required = sum(p.match.clip.frame_count * 1024 * 1024 if p.match.clip.is_sequence else 10 * 1024 * 1024 for p in executable) # Rough estimate if media info missing
-            # More accurate if we have media info
-            total_required = 0
+            total_req = 0
             for p in executable:
-                if p.match.clip.is_sequence:
-                    # Estimate based on first file size * frame count
-                    try:
-                        sz = os.path.getsize(p.match.clip.first_file)
-                        total_required += sz * p.match.clip.frame_count
-                    except Exception:
-                        total_required += 10 * 1024 * 1024 * p.match.clip.frame_count # 10MB fallback
-                else:
-                    try:
-                        total_required += os.path.getsize(p.match.clip.first_file)
-                    except Exception:
-                        total_required += 500 * 1024 * 1024 # 500MB fallback
+                try:
+                    fp = p.match.clip.first_file
+                    if fp: total_req += os.path.getsize(fp) * (p.match.clip.frame_count if p.match.clip.is_sequence else 1)
+                    else: total_req += 500 * 1024 * 1024
+                except Exception: total_req += 500 * 1024 * 1024
+            ok, err = check_disk_space(self.project_path or ".", total_req)
+            if not ok: return [IngestResult(plan=p, error=err) for p in plans]
 
-            from ramses_ingest.publisher import check_disk_space
-            ok, err = check_disk_space(self.project_path or ".", total_required)
-            if not ok:
-                _log(f"CRITICAL: {err}")
-                return [IngestResult(plan=p, error=err) for p in plans]
-
-        # Reuse cached metadata from connect_ramses (no redundant daemon queries)
-        seq_cache = self._sequence_uuids  # Already fetched in connect phase
-        shot_cache = self._shot_objects   # Already cached in connect_ramses
-
-        # Phase 1: Register Ramses Objects (Sequential, Thread-Safe)
         if not dry_run:
-            _log("Phase 1: Registering shots in Ramses database...")
-            registered_keys: set[tuple[str, str]] = set() # (shot_id, sequence_id)
-            
-            for i, plan in enumerate(executable, 1):
-                # Optimization: Only register each unique shot/sequence once per batch
-                reg_key = (plan.shot_id.upper(), plan.sequence_id.upper())
-                
-                try:
-                    # HERO HIERARCHY: Only 'No Resource' clips are allowed to update the shot status.
-                    # If a resource exists, we register the file but skip the status/state change.
-                    skip_status = bool(plan.resource)
-                    
-                    if reg_key not in registered_keys:
-                        if skip_status:
-                            _log(f"  Registering auxiliary resource: {plan.resource} for {plan.shot_id} (Skipping status update)")
-                        
-                        from ramses_ingest.publisher import register_ramses_objects
-                        register_ramses_objects(
-                            plan, 
-                            lambda _: None, 
-                            sequence_cache=seq_cache,
-                            shot_cache=shot_cache,
-                            skip_status_update=skip_status
-                        )
-                        registered_keys.add(reg_key)
-                    elif not skip_status:
-                        # If we already registered the shot via an auxiliary clip,
-                        # but NOW we have the Hero clip, we MUST push the status update.
-                        from ramses_ingest.publisher import update_ramses_status
-                        update_ramses_status(plan, plan.state, shot_cache=shot_cache)
-                        
-                except Exception as exc:
-                    _log(f"  Warning: Failed to register {plan.shot_id}: {exc}")
-        else:
-            _log("Dry-run mode: Skipping Ramses registration...")
+            _log("Phase 1: Database Registration...")
+            registered = set()
+            for plan in executable:
+                rk = (plan.shot_id.upper(), plan.sequence_id.upper())
+                if rk not in registered:
+                    try:
+                        register_ramses_objects(plan, lambda _: None, sequence_cache=self._sequence_uuids, shot_cache=self._shot_objects, skip_status_update=bool(plan.resource))
+                        registered.add(rk)
+                    except Exception as e: _log(f"  Warning: DB Fail {plan.shot_id}: {e}")
+                elif not plan.resource: update_ramses_status(plan, plan.state, shot_cache=self._shot_objects)
 
-        # Phase 2: Parallel Execution (Copy + FFmpeg)
-        action_msg = "Simulating" if dry_run else "Processing"
-        _log(f"Phase 2: {action_msg} files (Parallel)...")
-        results: list[IngestResult] = []
-
-        # Initialize results with failed entries for non-executable plans
-        # so they show up in the report as skipped/failed.
-        executed_plans = set()
-
-        # Helper for thread pool
-        def _run_one(args) -> IngestResult:
-            plan, copy_workers = args
-            # Use per-clip colorspace override if set, otherwise fall back to global setting
-            colorspace = plan.colorspace_override or self.ocio_in
-            return execute_plan(
-                plan,
-                generate_thumbnail=generate_thumbnails,
-                generate_proxy=generate_proxies,
-                progress_callback=None,
-                ocio_config=self.ocio_config,
-                ocio_in=colorspace,
-                ocio_out="sRGB",
-                skip_ramses_registration=True,
-                dry_run=dry_run,  # Enhancement #8: Dry-run mode
-                fast_verify=fast_verify,
-                copy_max_workers=copy_workers, # Limit copy threads per plan
-            )
-
+        _log("Phase 2: Data Transfer...")
+        results, executed_ids = [], set()
         if executable:
-            # Determine parallel workers
-            max_workers = _optimal_io_workers()
-            num_plans = len(executable)
-            
-            # Divide IO budget among parallel plans
-            # If we run 8 plans, give each 4 threads (Total ~32)
-            # Ensure at least 1 thread per plan
-            copy_workers_per_plan = max(1, 32 // min(num_plans, max_workers))
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # Pass tuple of (plan, copy_workers)
-                future_to_plan = {
-                    executor.submit(_run_one, (p, copy_workers_per_plan)): p 
-                    for p in executable
-                }
-                
-                for i, future in enumerate(concurrent.futures.as_completed(future_to_plan), 1):
-                    plan = future_to_plan[future]
-                    executed_plans.add(id(plan))
-                    try:
-                        res = future.result()
-                        results.append(res)
-                        prefix = "OK" if res.success else "FAILED"
-                        _log(f"[{i}/{total}] {res.plan.shot_id}: {prefix}")
-                        if not res.success:
-                            _log(f"  Error: {res.error}")
-                    except Exception as exc:
-                        _log(f"[{i}/{total}] CRITICAL ERROR processing {plan.shot_id}: {exc}")
-                        results.append(IngestResult(plan=plan, error=str(exc)))
+            max_w = _optimal_io_workers()
+            copy_w_per_plan = max(1, 32 // min(len(executable), max_w))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
+                fut_to_p = {executor.submit(execute_plan, p, generate_thumbnail=generate_thumbnails, generate_proxy=generate_proxies, ocio_config=self.ocio_config, ocio_in=p.colorspace_override or self.ocio_in, skip_ramses_registration=True, dry_run=dry_run, fast_verify=fast_verify, copy_max_workers=copy_w_per_plan): p for p in executable}
+                for i, f in enumerate(concurrent.futures.as_completed(fut_to_p), 1):
+                    res = f.result(); results.append(res); executed_ids.add(id(res.plan))
+                    _log(f"[{i}/{len(executable)}] {res.plan.shot_id}: {'OK' if res.success else 'FAILED'}")
 
-        # Add skipped plans to results for the report
         for p in plans:
-            if id(p) not in executed_plans:
-                results.append(IngestResult(plan=p, error=p.error or "Skipped or not executable"))
+            if id(p) not in executed_ids: results.append(IngestResult(plan=p, error=p.error or "Skipped"))
 
-        # Phase 2.5: Parallel Thumbnail Generation (OPT #1)
-        # Process all thumbnail jobs in parallel to avoid sequential FFmpeg calls
-        thumbnail_jobs = [(res, res._thumbnail_job) for res in results if hasattr(res, '_thumbnail_job') and res._thumbnail_job]
+        jobs = [(r, r._thumbnail_job) for r in results if hasattr(r, '_thumbnail_job') and r._thumbnail_job]
+        if jobs and generate_thumbnails:
+            _log(f"Phase 2.5: Thumbnails...")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+                f_to_r = {executor.submit(_generate_one_thumbnail, j): r for r, j in jobs}
+                for f in concurrent.futures.as_completed(f_to_r):
+                    path, ok = f.result()
+                    if ok: f_to_r[f].preview_path = path
 
-        if thumbnail_jobs and generate_thumbnails:
-            import multiprocessing
-            _log(f"Phase 2.5: Generating {len(thumbnail_jobs)} thumbnails in parallel...")
-
-            # Limit workers to prevent resource exhaustion
-            # FFmpeg thumbnail generation is I/O bound (disk reads), not CPU bound
-            # ThreadPoolExecutor avoids ProcessPoolExecutor's pickle serialization issues on Windows
-            max_workers = min(multiprocessing.cpu_count() * 2, 8)
-
-            # Use module-level function (defined at top of file) for thumbnail generation
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                job_list = [job for _, job in thumbnail_jobs]
-                future_to_idx = {executor.submit(_generate_one_thumbnail, job): idx 
-                                for idx, job in enumerate(job_list)}
-                
-                for future in concurrent.futures.as_completed(future_to_idx):
-                    idx = future_to_idx[future]
-                    # Bounds check: Validate idx before accessing thumbnail_jobs
-                    if idx < 0 or idx >= len(thumbnail_jobs):
-                        logger.error(f"Invalid thumbnail job index {idx} (max: {len(thumbnail_jobs)-1})")
-                        continue
-                    result_obj, _ = thumbnail_jobs[idx]
-                    try:
-                        thumb_path, success = future.result(timeout=120)
-                        if success and thumb_path:
-                            result_obj.preview_path = thumb_path
-                    except concurrent.futures.TimeoutExpired:
-                        logger.warning(f"Thumbnail generation timed out after 120s for {result_obj.plan.shot_id}")
-                    except concurrent.futures.CancelledError:
-                        logger.warning(f"Thumbnail generation was cancelled for {result_obj.plan.shot_id}")
-                    except Exception as e:
-                        logger.error(f"Thumbnail generation failed for {result_obj.plan.shot_id}: {e}")
-                        
-            _log(f"  Generated thumbnails for {len([r for r in results if r.preview_path])} clips")
-
-        # Phase 3: Update Lifecycle Status (Feature 5)
         if update_status:
-            _log("Phase 3: Finalizing production statuses in Ramses...")
-            from ramses_ingest.publisher import update_ramses_status
             for res in results:
-                # HERO HIERARCHY: Only 'No Resource' clips are allowed to finalize status
-                if res.success and not res.plan.resource:
-                    try:
-                        update_ramses_status(res.plan, "OK", shot_cache=shot_cache)
-                    except Exception:
-                        pass
+                if res.success and not res.plan.resource: update_ramses_status(res.plan, "OK", shot_cache=self._shot_objects)
 
-        # Phase 4: Generate Reports (HTML + JSON Audit Trail)
-        _log(f"Phase 4: Generating ingest manifest for {len(results)} items...")
-        from ramses_ingest.reporting import generate_html_report, generate_json_audit_trail
-
-        timestamp = int(time.time())
-        report_dir = os.path.join(self.project_path, "_ingest_reports") if self.project_path else "."
-
-        # Generate client-facing HTML report
-        html_name = f"Ingest_Report_{self.project_id}_{timestamp}.html"
-        html_path = os.path.join(report_dir, html_name)
-        self.last_report_path = html_path
-
-        if generate_html_report(results, html_path, studio_name=self.studio_name, studio_logo_path=self.studio_logo, operator=self._operator_name):
-            _log(f"  HTML manifest created: {html_path}")
-        else:
-            _log(f"  ERROR: Failed to write HTML manifest to {html_path}")
-
-        # CLEANUP: Delete temporary thumbnails for auxiliary resources (Audit cleanup)
-        import tempfile
-        t_dir = tempfile.gettempdir()
-        for res in results:
-            if res.preview_path and res.preview_path.startswith(t_dir):
-                try:
-                    os.remove(res.preview_path)
-                except Exception:
-                    pass
-
-        # Generate machine-readable JSON audit trail (optional, for database integration)
+        _log("Phase 4: Reports...")
+        ts, report_dir = int(time.time()), (os.path.join(self.project_path, "_ingest_reports") if self.project_path else ".")
+        h_path = os.path.join(report_dir, f"Ingest_Report_{self.project_id}_{ts}.html")
+        if generate_html_report(results, h_path, studio_name=self.studio_name, studio_logo_path=self.studio_logo, operator=self._operator_name):
+            self.last_report_path = h_path; _log(f"  Report: {h_path}")
+        
         if export_json_audit:
-            json_name = f"Ingest_Audit_{self.project_id}_{timestamp}.json"
-            json_path = os.path.join(report_dir, json_name)
+            j_path = os.path.join(report_dir, f"Ingest_Audit_{self.project_id}_{ts}.json")
+            generate_json_audit_trail(results, j_path, project_id=self.project_id, operator=self._operator_name)
 
-            if generate_json_audit_trail(results, json_path, project_id=self.project_id, operator=self._operator_name):
-                _log(f"  JSON audit trail created: {json_path}")
-            else:
-                _log(f"  WARNING: Failed to write JSON audit trail to {json_path}")
-
-        succeeded = sum(1 for r in results if r.success)
-        _log(f"Done: {succeeded}/{len(plans)} succeeded.")
-
-        # Flush metadata cache to disk (batched write for performance)
-        flush_cache()
-
-        return results
+        flush_cache(); return results
 
 
 def main():
-    """CLI / GUI entry point."""
     from ramses_ingest.gui import launch_gui
     launch_gui()

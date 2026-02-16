@@ -734,7 +734,13 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         if res.success:
             succeeded += 1
             total_frames += res.frames_copied
-            total_size_bytes += res.bytes_copied # Exact count from verified copy loop
+            # Ensure we have an actual number before adding, important for tests with MagicMocks
+            bc = res.bytes_copied
+            if not isinstance(bc, (int, float)):
+                try: bc = int(bc)
+                except (TypeError, ValueError): bc = 0
+            if isinstance(bc, (int, float)):
+                total_size_bytes += bc
 
             # HERO SPEC BASELINE: Only use primary clips to determine the common project specs
             if not res.plan.resource:

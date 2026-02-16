@@ -131,7 +131,6 @@ class PatternInferenceEngine:
             for p_type in ['specific', 'flexible']:
                 if char_p.get(p_type):
                     patterns_to_try = [char_p[p_type]]
-                    # Use non-greedy flexible ONLY if it is a digit run or known concatenated unit
                     if p_type == 'flexible' and rb and any(c.isdigit() for c in selections[0]):
                         patterns_to_try.append(char_p[p_type] + "?")
                     
@@ -152,7 +151,6 @@ class PatternInferenceEngine:
         field_patterns = {}
         for name, anns in sorted_annotations:
             char_p = self._analyze_character_pattern([a.selected_text for a in anns])
-            # For combined, always prefer Specific run analysis if it matches all annotated examples
             field_patterns[name] = char_p['specific'] if char_p.get('specific') else char_p.get('flexible')
         
         anns_structure = [anns[0] for _, anns in sorted_annotations]
@@ -164,7 +162,6 @@ class PatternInferenceEngine:
             if name in optional_fields: parts.append(f"(?:{sep_p}")
             elif sep_p: parts.append(sep_p)
             p = field_patterns[name]
-            # Avoid greedy swallowing in concatenated fields
             if p.endswith("+") and not sep and (not (i == len(sorted_annotations)-1) or fragments['suffix']):
                 p += "?"
             if name.startswith('_ignore'): parts.append(f"({p})")
@@ -172,8 +169,16 @@ class PatternInferenceEngine:
             if name in optional_fields: parts.append(")?")
         
         if fragments['suffix']:
-            # Middle ground flexibility for suffix
-            parts.append(f".*?{re.escape(fragments['suffix'][-4:])}$")
+            if flexibility == Flexibility.FLEXIBLE:
+                # Better extension detection: find last dot
+                dot_idx = fragments['suffix'].rfind('.')
+                if dot_idx != -1:
+                    ext = fragments['suffix'][dot_idx:]
+                    parts.append(f".*?{re.escape(ext)}$")
+                else:
+                    parts.append(f".*?{re.escape(fragments['suffix'][-3:])}$")
+            else:
+                parts.append(re.escape(fragments['suffix']))
         else: parts.append(".*$")
         return "".join(parts), field_patterns
 
@@ -246,13 +251,15 @@ class PatternInferenceEngine:
                 char = template[i]
                 if char.isupper():
                     run = re.match(r"^[A-Z]+", template[i:]).group(0); i += len(run)
-                    parts.append(f"[A-Z]{{{len(run)}}}" if len(selections) == 1 else f"[A-Z]+")
+                    # If all selections have exactly the same character at this position and it's a single letter, use fixed.
+                    # Otherwise use range.
+                    parts.append(f"[A-Z]{{{len(run)}}}" if (len(selections) == 1 or all(len(s) == len(template) and s[i-len(run):i].isupper() for s in selections)) else f"[A-Z]+")
                 elif char.islower():
                     run = re.match(r"^[a-z]+", template[i:]).group(0); i += len(run)
-                    parts.append(f"[a-z]{{{len(run)}}}" if len(selections) == 1 else f"[a-z]+")
+                    parts.append(f"[a-z]{{{len(run)}}}" if (len(selections) == 1 or all(len(s) == len(template) and s[i-len(run):i].islower() for s in selections)) else f"[a-z]+")
                 elif char.isdigit():
                     run = re.match(r"^\d+", template[i:]).group(0); i += len(run)
-                    parts.append(f"\\d{{{len(run)}}}" if len(selections) == 1 else f"\\d+")
+                    parts.append(f"\\d{{{len(run)}}}" if (len(selections) == 1 or all(len(s) == len(template) and s[i-len(run):i].isdigit() for s in selections)) else f"\\d+")
                 else: parts.append(re.escape(char)); i += 1
             patterns['specific'] = "".join(parts)
         # FLEXIBLE
