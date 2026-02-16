@@ -123,7 +123,7 @@ class IngestEngine:
 
             self._steps = []
             try:
-                from ramses.ram_step import StepType
+                from ramses import StepType
                 for step in project.steps(StepType.SHOT_PRODUCTION): self._steps.append(step.shortName())
             except Exception: pass
             if self._steps:
@@ -131,7 +131,10 @@ class IngestEngine:
             else: self._steps = ["PLATE"]
 
             self._connected = True; return True
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] connect_ramses exception: {e}")
+            import traceback
+            traceback.print_exc()
             self._project_fps = None; self._project_width = None; self._project_height = None; return False
 
     def _require_connection(self) -> None:
