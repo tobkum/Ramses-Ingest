@@ -9,13 +9,6 @@ _lib = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
 if _lib not in sys.path:
     sys.path.insert(0, _lib)
 
-# APPLY RUNTIME PATCHES
-try:
-    from ramses_ingest import ramses_patches
-    ramses_patches.apply()
-except ImportError:
-    print("[Ramses] Warning: ramses_patches module not found. Critical fixes may be missing.")
-
 from ramses_ingest.app import main
 
 if __name__ == "__main__":
