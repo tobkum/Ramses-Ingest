@@ -21,6 +21,23 @@ if TYPE_CHECKING:
     from ramses_ingest.publisher import IngestPlan
     from ramses_ingest.scanner import Clip
 
+# Matches the trailing frame number in a filename: e.g. "shot.0001.exr" → 1
+_RE_TRAILING_FRAME = re.compile(r"(\d+)\.[^.]+$")
+
+
+def _first_frame_filename(file_list: list[str]) -> str:
+    """Return the filename with the lowest frame number.
+
+    Falls back to the alphabetically-first name if no frame numbers are found,
+    so the function is safe for movie files and non-sequenced directories too.
+    """
+    def _sort_key(name: str):
+        m = _RE_TRAILING_FRAME.search(name)
+        # (has_frame_number inverted for ascending, frame_int, name)
+        return (0, int(m.group(1)), name) if m else (1, 0, name)
+
+    return min(file_list, key=_sort_key)
+
 
 @dataclass
 class ColorspaceIssue:
@@ -201,10 +218,9 @@ def check_for_duplicate_version(
         if not clip_first_md5:
             continue
 
-        # Find first file in version directory
+        # Find first frame in version directory by frame number (not alphabet)
         if version_files:
-            # Sort version files to find the first frame consistently
-            version_first_file = os.path.join(version_dir, sorted(version_files)[0])
+            version_first_file = os.path.join(version_dir, _first_frame_filename(version_files))
             version_first_md5 = _calculate_md5_safe(version_first_file)
 
             if clip_first_md5 == version_first_md5:
