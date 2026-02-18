@@ -103,7 +103,7 @@ def group_files(file_paths: list[str | Path]) -> list[Clip]:
 
     The 'Smart Way':
     1. Filter by extension first (Movies are always standalone).
-    2. Group remaining files by (Directory, BaseName, Padding, Extension).
+    2. Group remaining files by (Directory, BaseName, Separator, Extension).
     3. Return a unified list of movie and sequence Clips.
     """
     movie_clips: list[Clip] = []
@@ -149,16 +149,20 @@ def group_files(file_paths: list[str | Path]) -> list[Clip]:
                     first_file=str(p)
                 ))
 
-    # 2. Group Images (Padding Aware)
-    # Key includes: Directory, BaseName, Separator, Padding, and Extension
+    # 2. Group Images
+    # Key intentionally omits per-frame digit count so that frames crossing a
+    # padding boundary (e.g. shot.0099.exr / shot.0100.exr / shot.101.exr) are
+    # kept in the same sequence rather than split into separate clips.
     buckets = defaultdict(list)
     for base, sep, frame, ext, full_path, directory, padding in image_files:
-        key = (str(directory), base, sep, padding, ext)
-        buckets[key].append((frame, full_path))
+        key = (str(directory), base, sep, ext)
+        buckets[key].append((frame, full_path, padding))
 
     sequence_clips: list[Clip] = []
-    for (dir_path, base, sep, padding, ext), frames in buckets.items():
+    for (dir_path, base, sep, ext), frames in buckets.items():
         frames.sort()
+        # Representative padding comes from the first (lowest-numbered) frame.
+        first_padding = frames[0][2]
         sequence_clips.append(Clip(
             base_name=base,
             extension=ext,
@@ -166,7 +170,7 @@ def group_files(file_paths: list[str | Path]) -> list[Clip]:
             is_sequence=True,
             frames=[f[0] for f in frames],
             first_file=frames[0][1],
-            _padding=padding,
+            _padding=first_padding,
             _separator=sep
         ))
 

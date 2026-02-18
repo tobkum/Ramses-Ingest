@@ -444,10 +444,17 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequen
             for s in project.shots(lazyLoading=False):
                 if s.shortName().upper() == shot_up: shot_obj = s; break
         shot_nm = RamFileInfo(); shot_nm.project, shot_nm.ramType, shot_nm.shortName = plan.project_id, ItemType.SHOT, plan.shot_id
-        duration = (info.frame_count or plan.match.clip.frame_count) / info.fps if info.fps and info.fps > 0 else 5.0
-        shot_data = {"shortName": plan.shot_id, "name": plan.shot_id, "folderPath": join_normalized(project.folderPath(), FolderNames.shots, shot_nm.fileName()), "project": project_uuid, "duration": duration}
-        if not plan.resource: shot_data["sourceMedia"] = plan.match.clip.base_name
-        elif shot_obj and shot_obj.get("sourceMedia"): shot_data["sourceMedia"] = shot_obj.get("sourceMedia")
+        shot_data = {"shortName": plan.shot_id, "name": plan.shot_id, "folderPath": join_normalized(project.folderPath(), FolderNames.shots, shot_nm.fileName()), "project": project_uuid}
+        if not plan.resource:
+            # Primary clip: update duration and source media from the ingested clip
+            duration = (info.frame_count or plan.match.clip.frame_count) / info.fps if info.fps and info.fps > 0 else 5.0
+            shot_data["duration"] = duration
+            shot_data["sourceMedia"] = plan.match.clip.base_name
+        else:
+            # Resource clip: preserve existing duration and source media so a short
+            # reference/resource never overwrites the hero plate's metadata
+            if shot_obj and shot_obj.get("duration"): shot_data["duration"] = shot_obj.get("duration")
+            if shot_obj and shot_obj.get("sourceMedia"): shot_data["sourceMedia"] = shot_obj.get("sourceMedia")
         if seq_obj: shot_data["sequence"] = seq_obj.uuid()
         if not shot_obj:
             log(f"  Creating shot {plan.shot_id}..."); shot_obj = RamShot(data=shot_data, create=True)
