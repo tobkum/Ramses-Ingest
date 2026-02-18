@@ -110,7 +110,7 @@ def generate_proxy(
         padding = clip.padding
         input_pattern = os.path.join(
             str(clip.directory),
-            f"{clip.base_name}.%0{padding}d.{clip.extension}",
+            f"{clip.base_name}{clip.separator}%0{padding}d.{clip.extension}",
         )
         cmd = [
             "ffmpeg", "-y",
@@ -155,7 +155,7 @@ def _thumbnail_from_sequence(
     padding = clip.padding
     src_file = os.path.join(
         str(clip.directory),
-        f"{clip.base_name}.{str(target_frame).zfill(padding)}.{clip.extension}",
+        f"{clip.base_name}{clip.separator}{str(target_frame).zfill(padding)}.{clip.extension}",
     )
 
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]

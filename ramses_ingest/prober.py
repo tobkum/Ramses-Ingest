@@ -20,6 +20,8 @@ import atexit
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 try:
     import OpenImageIO as oiio
 except ImportError:
@@ -31,8 +33,6 @@ _OIIO_PAR_EXTENSIONS = {".exr", ".dpx", ".tif", ".tiff", ".hdr"}
 
 # Subprocess creation flags to hide console windows on Windows
 _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-
-logger = logging.getLogger(__name__)
 
 # FFmpeg/ISO color-space integer-to-string mappings (shared by PyAV and cache deserialization)
 _COLORSPACE_MAP = {0: "RGB", 1: "BT709", 2: "Unspecified", 4: "FCC", 5: "BT470BG", 6: "SMPTE170M", 7: "SMPTE240M", 8: "YCGCO", 9: "BT2020NC", 10: "BT2020C"}

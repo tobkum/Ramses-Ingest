@@ -56,6 +56,7 @@ class IngestEngine:
         self._rules, self.studio_name, self.studio_logo = load_rules()
         self.last_report_path = None
         self.ocio_config = os.getenv("OCIO"); self.ocio_in = "sRGB"
+        self._steps: list[str] = []
 
     # -- Properties ----------------------------------------------------------
 
@@ -170,7 +171,7 @@ class IngestEngine:
         check_for_duplicates(plans); check_for_path_collisions(plans)
         return plans
 
-    def execute(self, plans: list[IngestPlan], generate_thumbnails: bool = True, generate_proxies: bool = False, progress_callback: Callable[[str], None] | None = None, update_status: bool = False, export_json_audit: bool = False, dry_run: bool = False, fast_verify: bool = True) -> list[IngestResult]:
+    def execute(self, plans: list[IngestPlan], generate_thumbnails: bool = True, generate_proxies: bool = False, progress_callback: Callable[[str], None] | None = None, update_status: bool = False, export_json_audit: bool = False, dry_run: bool = False, fast_verify: bool = True, cancel_check: Callable[[], bool] | None = None) -> list[IngestResult]:
         _log = lambda m: progress_callback(m) if progress_callback else None
         try: self._require_connection()
         except RuntimeError as e: return [IngestResult(plan=p, error=str(e)) for p in plans]
@@ -184,8 +185,9 @@ class IngestEngine:
                 p.state = target_state; p.target_publish_dir = ""; p.target_preview_dir = ""; to_resolve.append(p)
         
         if to_resolve:
-            if self._connected and self._shot_objects: resolve_paths_from_daemon(to_resolve, self._shot_objects)
-            if self._project_path: resolve_paths([p for p in to_resolve if not p.target_publish_dir], self._project_path)
+            # Use filesystem-based resolution only (daemon calls belong on the main thread).
+            # The main thread already ran resolve_paths_from_daemon during _resolve_all_paths().
+            if self._project_path: resolve_paths(to_resolve, self._project_path)
 
         if not dry_run and executable:
             total_req = 0
@@ -212,17 +214,29 @@ class IngestEngine:
 
         _log("Phase 2: Data Transfer...")
         results, executed_ids = [], set()
+        if cancel_check and cancel_check():
+            _log("Ingest cancelled before transfer.")
+            for p in plans: results.append(IngestResult(plan=p, error="Cancelled"))
+            flush_cache(); return results
         if executable:
             max_w = _optimal_io_workers()
             copy_w_per_plan = max(1, 32 // min(len(executable), max_w))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
                 fut_to_p = {executor.submit(execute_plan, p, generate_thumbnail=generate_thumbnails, generate_proxy=generate_proxies, ocio_config=self.ocio_config, ocio_in=p.colorspace_override or self.ocio_in, skip_ramses_registration=True, dry_run=dry_run, fast_verify=fast_verify, copy_max_workers=copy_w_per_plan): p for p in executable}
                 for i, f in enumerate(concurrent.futures.as_completed(fut_to_p), 1):
+                    if cancel_check and cancel_check():
+                        _log("Ingest cancelled — stopping after current items.")
+                        for pending in fut_to_p:
+                            pending.cancel()
+                        break
                     res = f.result(); results.append(res); executed_ids.add(id(res.plan))
                     _log(f"[{i}/{len(executable)}] {res.plan.shot_id}: {'OK' if res.success else 'FAILED'}")
 
         for p in plans:
-            if id(p) not in executed_ids: results.append(IngestResult(plan=p, error=p.error or "Skipped"))
+            if id(p) not in executed_ids: results.append(IngestResult(plan=p, error=p.error or ("Cancelled" if cancel_check and cancel_check() else "Skipped")))
+
+        if cancel_check and cancel_check():
+            flush_cache(); return results
 
         jobs = [(r, r._thumbnail_job) for r in results if hasattr(r, '_thumbnail_job') and r._thumbnail_job]
         if jobs and generate_thumbnails:

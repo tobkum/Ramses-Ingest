@@ -782,6 +782,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         )
     )
 
+    # Build a stable id→original-index map before sorting (avoids index(res) on sorted list)
+    result_idx_map = {id(r): i for i, r in enumerate(results)}
+
     # 3. Build Rows & Track Deviations
     rows = []
     has_deviations = False
@@ -862,8 +865,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             return tooltips.get(value.lower(), value)
 
         # Check for colorspace issues from validator
-        plan_idx = results.index(res)
-        cs_issue = colorspace_issues.get(plan_idx)
+        plan_idx = result_idx_map.get(id(res))
+        cs_issue = colorspace_issues.get(plan_idx) if plan_idx is not None else None
 
         color_parts = []
         has_critical_cs_issue = cs_issue and cs_issue.severity == "critical"

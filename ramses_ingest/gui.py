@@ -28,8 +28,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QComboBox,
     QPushButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QCheckBox,
     QTextEdit,
     QProgressBar,
@@ -432,6 +430,11 @@ class IngestWorker(QThread):
         self._fast_verify = fast_verify
         self._dry_run = dry_run
         self._count = 0
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        """Request cooperative cancellation. Current items finish atomically."""
+        self._cancel_requested = True
 
     def run(self) -> None:
         try:
@@ -450,6 +453,7 @@ class IngestWorker(QThread):
                 update_status=self._update_status,
                 fast_verify=self._fast_verify,
                 dry_run=self._dry_run,
+                cancel_check=lambda: self._cancel_requested,
             )
             self.finished_results.emit(results)
         except Exception as exc:
@@ -2595,9 +2599,6 @@ class IngestWindow(QMainWindow):
     def _on_ocio_in_changed(self, text: str) -> None:
         self._engine.ocio_in = text
 
-    def _on_ocio_out_changed(self, text: str) -> None:
-        self._engine.ocio_out = text
-
     def _on_studio_changed(self, text: str) -> None:
         """Update engine and persist studio name and logo to config."""
         self._engine.studio_name = text
@@ -2642,11 +2643,6 @@ class IngestWindow(QMainWindow):
             self._chk_status.setText("Set status to OK")
 
         self._update_summary()
-
-    def _on_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
-        """Update the button summary when a checkbox is toggled."""
-        if column == 0:
-            self._update_summary()
 
     def _on_context_menu(self, pos) -> None:
         """Show context menu for selected clips"""
@@ -2698,8 +2694,8 @@ class IngestWindow(QMainWindow):
         # Single selection actions
         if len(selected_rows) == 1:
             row = selected_rows[0]
-            if row < len(self._plans):
-                plan = self._plans[row]
+            plan = self._get_plan_from_row(row)
+            if plan:
 
                 act_src = QAction("Open Source Folder", self)
                 act_src.triggered.connect(
@@ -2721,10 +2717,6 @@ class IngestWindow(QMainWindow):
         menu.addAction(act_remove)
 
         menu.exec(self._table.viewport().mapToGlobal(pos))
-
-    def _remove_plan_at(self, index: int) -> None:
-        self._plans.pop(index)
-        self._populate_table()
 
     def _on_drop(self, paths: list[str]) -> None:
         if self._scan_worker and self._scan_worker.isRunning():
@@ -2778,11 +2770,9 @@ class IngestWindow(QMainWindow):
 
     def _on_cancel(self, _=None) -> None:
         if self._ingest_worker and self._ingest_worker.isRunning():
-            self._ingest_worker.terminate()
-            self._log("Ingest cancelled by user.")
-            self._btn_cancel.setVisible(False)
-            self._btn_ingest.setEnabled(True)
-            self._progress.setVisible(False)
+            self._ingest_worker.cancel()
+            self._btn_cancel.setEnabled(False)
+            self._log("Cancel requested — finishing current items before stopping...")
 
     def _on_ingest(self, _=None) -> None:
         enabled = self._get_enabled_plans()
@@ -2823,8 +2813,12 @@ class IngestWindow(QMainWindow):
             self._btn_view_report.setVisible(True)
 
         ok = sum(1 for r in results if r.success)
-        fail = len(results) - ok
-        self._log(f"Ingest complete: {ok} succeeded, {fail} failed.")
+        cancelled = sum(1 for r in results if not r.success and r.error == "Cancelled")
+        fail = len(results) - ok - cancelled
+        if cancelled:
+            self._log(f"Ingest cancelled: {ok} succeeded, {fail} failed, {cancelled} not started.")
+        else:
+            self._log(f"Ingest complete: {ok} succeeded, {fail} failed.")
 
     def _on_ingest_error(self, msg: str) -> None:
         self._btn_cancel.setVisible(False)
