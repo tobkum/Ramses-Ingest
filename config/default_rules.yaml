@@ -1,8 +1,6 @@
-studio_name: Overmind Studios
-studio_logo: X:/Geteilte Ablagen/CI/favicon.png
+studio_name: Ramses Studio
+studio_logo: ''
 rules:
-- pattern: ^(?P<shot>[A-Z]+\d+)
-- pattern: ^(?P<shot>[A-Z]+\d+)
 - pattern: (?P<sequence>[A-Za-z]*\d+)[_-](?P<shot>[A-Za-z]*\d+)
 - pattern: (?P<shot>[A-Za-z]*\d+)
   use_parent_dir_as_sequence: true

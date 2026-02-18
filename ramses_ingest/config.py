@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import logging
 from pathlib import Path
 
@@ -11,20 +12,31 @@ from ramses_ingest.matcher import NamingRule
 
 logger = logging.getLogger(__name__)
 
-# Default rules file shipped with the tool
+# Default rules file shipped with the tool (read-only; never written by the app)
 DEFAULT_RULES_PATH = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "config", "default_rules.yaml"
 )
+
+# User-specific rules file — survives package upgrades and lives outside the
+# package directory so it cannot be clobbered by a pip install.
+if sys.platform == "win32":
+    _cfg_base = Path(os.getenv("APPDATA", str(Path.home())))
+else:
+    _cfg_base = Path.home() / ".config"
+USER_RULES_PATH = str(_cfg_base / "ramses_ingest" / "rules.yaml")
 
 
 def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str, str]:
     """Parse a YAML rules file into ``NamingRule`` objects, a studio name, and a logo path.
 
+    When *path* is ``None`` the user config (``USER_RULES_PATH``) is preferred
+    over the shipped defaults so that customisations survive package upgrades.
+
     Returns:
         tuple: (list of NamingRule instances, studio_name string, studio_logo string).
     """
     if path is None:
-        path = DEFAULT_RULES_PATH
+        path = USER_RULES_PATH if os.path.isfile(USER_RULES_PATH) else DEFAULT_RULES_PATH
 
     path = str(path)
     studio_name = "Ramses Studio"
@@ -74,8 +86,14 @@ def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str, s
     return rules, studio_name, studio_logo
 
 
-def save_rules(rules: list[NamingRule], path: str | Path, studio_name: str = "Ramses Studio", studio_logo: str = "") -> None:
-    """Persist ``NamingRule`` objects and studio name back to a YAML file."""
+def save_rules(rules: list[NamingRule], path: str | Path | None = None, studio_name: str = "Ramses Studio", studio_logo: str = "") -> None:
+    """Persist ``NamingRule`` objects and studio name back to a YAML file.
+
+    When *path* is ``None`` the rules are written to ``USER_RULES_PATH`` so
+    that the shipped ``default_rules.yaml`` is never modified.
+    """
+    if path is None:
+        path = USER_RULES_PATH
     import yaml
 
     entries = []

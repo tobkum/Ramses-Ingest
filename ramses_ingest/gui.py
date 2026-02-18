@@ -49,7 +49,7 @@ from PySide6.QtWidgets import (
 
 from ramses_ingest.app import IngestEngine
 from ramses_ingest.publisher import IngestPlan, IngestResult
-from ramses_ingest.config import load_rules, save_rules, DEFAULT_RULES_PATH
+from ramses_ingest.config import load_rules, save_rules, DEFAULT_RULES_PATH, USER_RULES_PATH
 from ramses_ingest.prober import check_ffprobe, has_av
 
 # Import reusable components
@@ -1448,7 +1448,6 @@ class IngestWindow(QMainWindow):
             self._engine.studio_logo = new_logo
             save_rules(
                 self._engine.rules,
-                DEFAULT_RULES_PATH,
                 studio_name=self._engine.studio_name,
                 studio_logo=new_logo,
             )
@@ -2602,7 +2601,7 @@ class IngestWindow(QMainWindow):
     def _on_studio_changed(self, text: str) -> None:
         """Update engine and persist studio name and logo to config."""
         self._engine.studio_name = text
-        save_rules(self._engine.rules, DEFAULT_RULES_PATH, studio_name=text, studio_logo=self._engine.studio_logo)
+        save_rules(self._engine.rules, studio_name=text, studio_logo=self._engine.studio_logo)
 
     def _browse_studio_logo(self, path_edit: QLineEdit) -> None:
         """Browse for studio logo image file."""
@@ -2827,7 +2826,18 @@ class IngestWindow(QMainWindow):
         self._log(f"INGEST ERROR: {msg}")
 
     def _on_edit_rules(self, _=None) -> None:
-        dlg = RulesEditorDialog(DEFAULT_RULES_PATH, parent=self)
+        # Seed the user config from the currently-loaded rules on first use so
+        # the editor always has something meaningful to display.
+        if not os.path.isfile(USER_RULES_PATH):
+            try:
+                save_rules(
+                    self._engine.rules,
+                    studio_name=self._engine.studio_name,
+                    studio_logo=self._engine.studio_logo,
+                )
+            except Exception:
+                pass
+        dlg = RulesEditorDialog(USER_RULES_PATH, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             # Load updated rules from disk first
             rules, studio, logo = load_rules()
@@ -2860,10 +2870,9 @@ class IngestWindow(QMainWindow):
             self._engine.studio_name = "Ramses Studio"
             self._studio_edit.setText(self._engine.studio_name)
 
-            # Save to disk
+            # Persist to user config (overwrites any accumulated custom rules)
             save_rules(
                 self._engine.rules,
-                DEFAULT_RULES_PATH,
                 studio_name=self._engine.studio_name,
             )
 
@@ -2881,25 +2890,28 @@ class IngestWindow(QMainWindow):
             regex = dlg.get_final_regex()
 
             if regex:
-                # Add to engine's rules and persist
-                new_rule = NamingRule(pattern=regex, name="New Smart Rule")
-                current_rules = self._engine.rules
-                current_rules.insert(0, new_rule)
-                self._engine.rules = current_rules
-                try:
-                    save_rules(
-                        self._engine.rules,
-                        DEFAULT_RULES_PATH,
-                        studio_name=self._engine.studio_name,
-                    )
-                    self._log("Added new naming rule from Smart Pattern builder.")
-                except Exception as e:
-                    self._log(f"Warning: Could not save rules to config: {e}")
+                existing_patterns = {r.pattern for r in self._engine.rules}
+                if regex in existing_patterns:
+                    self._log("Pattern already exists in rules — not added again.")
+                else:
+                    # Add to engine's rules and persist
+                    new_rule = NamingRule(pattern=regex, name="New Smart Rule")
+                    current_rules = self._engine.rules
+                    current_rules.insert(0, new_rule)
+                    self._engine.rules = current_rules
+                    try:
+                        save_rules(
+                            self._engine.rules,
+                            studio_name=self._engine.studio_name,
+                        )
+                        self._log("Added new naming rule from Smart Pattern builder.")
+                    except Exception as e:
+                        self._log(f"Warning: Could not save rules to config: {e}")
 
-                # Refresh UI
-                self._populate_rule_combo()
-                self._rule_combo.setCurrentIndex(1)  # Select the newly created rule
-                self._log(f"New rule created: {regex}")
+                    # Refresh UI
+                    self._populate_rule_combo()
+                    self._rule_combo.setCurrentIndex(1)  # Select the newly created rule
+                    self._log(f"New rule created: {regex}")
             else:
                 self._log("Smart Pattern builder returned empty rule - skipping.")
 
