@@ -276,12 +276,25 @@ def _get_next_version(publish_root: str) -> int:
     2. ``_folder_lock`` (O_CREAT | O_EXCL file lock) — prevents two separate ingest
        processes from both reading version N and both trying to publish as N+1.
 
-    ``publish_root`` is created if it does not yet exist so the lock file can be
-    placed inside it.
+    Lock-target selection (no directories are ever created here):
+    - If ``publish_root`` already exists: lock inside it directly.
+    - Otherwise: lock inside its parent (the step folder, which exists for any
+      real Ramses shot) and re-check ``publish_root`` inside the lock to close
+      the TOCTOU window.
+    - If neither directory exists: return 1 immediately (brand-new shot).
     """
     publish_root = normalize_path(publish_root)
-    os.makedirs(publish_root, exist_ok=True)
-    with _VERSION_LOCK, _folder_lock(publish_root):
+
+    if os.path.isdir(publish_root):
+        lock_dir = publish_root
+    else:
+        lock_dir = os.path.dirname(publish_root)
+        if not os.path.isdir(lock_dir):
+            return 1  # Neither _published nor its parent exist yet — version 1.
+
+    with _VERSION_LOCK, _folder_lock(lock_dir):
+        if not os.path.isdir(publish_root):
+            return 1  # Still absent inside the lock — no prior versions.
         max_v = 0
         version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
         try:
