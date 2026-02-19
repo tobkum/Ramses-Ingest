@@ -125,10 +125,15 @@ class TestValidateBatchColorspace(unittest.TestCase):
         ]
         issues = validate_batch_colorspace(plans)
 
-        # Should not flag critical mismatch if UNKNOWN is present
-        for issue in issues.values():
-            if issue.severity == "critical":
-                self.assertNotIn("Primaries mismatch", issue.message)
+        # When UNKNOWN is present the validator must not raise a critical
+        # primaries-mismatch — collect all offenders so failure output is
+        # explicit rather than a vacuous loop that passes on an empty dict.
+        critical_primaries = [
+            issue for issue in issues.values()
+            if issue.severity == "critical" and "Primaries mismatch" in issue.message
+        ]
+        self.assertEqual(critical_primaries, [],
+            "UNKNOWN primaries should suppress critical mismatch flagging")
 
     def test_missing_metadata_some_clips_critical(self):
         """Some clips with UNKNOWN primaries when others have metadata is critical."""

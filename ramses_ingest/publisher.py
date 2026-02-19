@@ -451,8 +451,8 @@ def execute_plan(
                 _log("  Rollback successful.")
                 result.error = f"Ingest failed (Rolled back): {error_msg}"
                 return result
-            except Exception as re:
-                _log(f"  Rollback failed: {re}")
+            except Exception as rollback_err:
+                _log(f"  Rollback failed: {rollback_err}")
                 result.error = f"Ingest failed AND rollback failed: {error_msg}"
                 return result
         result.error = f"Ingest failed: {error_msg}"

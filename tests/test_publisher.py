@@ -665,11 +665,12 @@ class TestPublisherConcurrency(unittest.TestCase):
         with patch('ramses_ingest.publisher._calculate_md5', side_effect=track_md5):
             copy_frames(clip, dest_dir, "PROJ", "SH010", "PLATE", fast_verify=True)
 
-        # Should call MD5 for: first (0001), middle (0005), last (0010)
-        # Each frame calls MD5 twice (source + dest), but we're counting source calls
+        # fast_verify hashes exactly first (0001), middle (0005), and last (0010).
+        # _calculate_md5 is called once for the source and once for the destination
+        # of each sampled frame, so exactly 3 source-side calls are expected.
         source_md5_calls = [c for c in md5_calls if src_dir in c]
-        # First, middle, last = 3 frames * 2 (src+dst) = 6 calls
-        self.assertLessEqual(len(source_md5_calls), 6)
+        self.assertEqual(len(source_md5_calls), 3,
+            "fast_verify must hash exactly first, middle, and last source frames")
 
 
 if __name__ == "__main__":

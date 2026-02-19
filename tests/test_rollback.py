@@ -23,14 +23,11 @@ from ramses_ingest.prober import MediaInfo
 
 class TestRollback(unittest.TestCase):
     def setUp(self):
-        self.test_dir = "tests/tmp_rollback"
-        if os.path.exists(self.test_dir):
-            shutil.rmtree(self.test_dir)
-        os.makedirs(self.test_dir)
+        import tempfile
+        self.test_dir = tempfile.mkdtemp()
 
     def tearDown(self):
-        if os.path.exists(self.test_dir):
-            shutil.rmtree(self.test_dir)
+        shutil.rmtree(self.test_dir, ignore_errors=True)
 
     @patch("ramses_ingest.publisher.copy_frames")
     @patch("ramses_ingest.publisher._write_ramses_metadata")

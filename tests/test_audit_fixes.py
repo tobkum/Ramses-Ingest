@@ -74,70 +74,98 @@ class TestAuditFixesOriginal(unittest.TestCase):
 
 
 class TestAuditFix2_FutureTimeouts(unittest.TestCase):
-    """Fix #2: Future timeout logging (concurrent.futures.TimeoutExpired, CancelledError)."""
+    """copy_frames future exceptions propagate to execute_plan's rollback handler."""
 
-    @patch('concurrent.futures.ThreadPoolExecutor')
-    def test_timeout_expired_caught(self, mock_executor):
-        """Verify TimeoutError is caught and logged."""
-        # Simulate future that times out
-        mock_future = MagicMock()
-        mock_future.result.side_effect = concurrent.futures.TimeoutError()
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
 
-        mock_executor_instance = MagicMock()
-        mock_executor_instance.submit.return_value = mock_future
-        mock_executor.return_value.__enter__.return_value = mock_executor_instance
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-        # Should not raise, just log warning
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(lambda: None)
-                future.result(timeout=120)
-        except concurrent.futures.TimeoutError:
-            pass  # Expected
+    def _make_plan(self, target_dir):
+        from ramses_ingest.publisher import IngestPlan
+        from ramses_ingest.matcher import MatchResult
+        from ramses_ingest.prober import MediaInfo
+        clip = Clip(base_name="test", extension="exr", directory=Path(self.temp_dir),
+                    is_sequence=True, frames=[1],
+                    first_file=os.path.join(self.temp_dir, "test.0001.exr"))
+        match = MatchResult(clip=clip, matched=True)
+        return IngestPlan(match=match, media_info=MediaInfo(), project_id="PROJ",
+                          shot_id="SH010", target_publish_dir=target_dir,
+                          target_preview_dir=self.temp_dir)
 
-    @patch('concurrent.futures.ThreadPoolExecutor')
-    def test_cancelled_error_caught(self, mock_executor):
-        """Verify CancelledError is caught and logged."""
-        mock_future = MagicMock()
-        mock_future.result.side_effect = concurrent.futures.CancelledError()
+    def test_timeout_propagates_and_triggers_rollback(self):
+        """TimeoutError from copy_frames propagates and triggers directory rollback."""
+        from ramses_ingest.publisher import execute_plan
+        target_dir = os.path.join(self.temp_dir, "v001")
+        plan = self._make_plan(target_dir)
 
-        mock_executor_instance = MagicMock()
-        mock_executor_instance.submit.return_value = mock_future
-        mock_executor.return_value.__enter__.return_value = mock_executor_instance
+        def copy_raises(*args, **kwargs):
+            os.makedirs(target_dir, exist_ok=True)
+            raise concurrent.futures.TimeoutError("frame copy timed out")
 
-        # Should not raise
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(lambda: None)
-                future.result()
-        except concurrent.futures.CancelledError:
-            pass  # Expected
+        with patch('ramses_ingest.publisher.copy_frames', side_effect=copy_raises):
+            result = execute_plan(plan, generate_thumbnail=False, skip_ramses_registration=True)
+
+        self.assertFalse(result.success)
+        self.assertIn("timed out", result.error.lower())
+        self.assertFalse(os.path.exists(target_dir),
+                         "execute_plan must roll back the partial directory")
+
+    def test_cancelled_error_propagates_and_triggers_rollback(self):
+        """CancelledError from copy_frames propagates and triggers directory rollback."""
+        from ramses_ingest.publisher import execute_plan
+        target_dir = os.path.join(self.temp_dir, "v002")
+        plan = self._make_plan(target_dir)
+
+        def copy_raises(*args, **kwargs):
+            os.makedirs(target_dir, exist_ok=True)
+            raise concurrent.futures.CancelledError("frame copy cancelled")
+
+        with patch('ramses_ingest.publisher.copy_frames', side_effect=copy_raises):
+            result = execute_plan(plan, generate_thumbnail=False, skip_ramses_registration=True)
+
+        self.assertFalse(result.success)
+        self.assertFalse(os.path.exists(target_dir),
+                         "execute_plan must roll back the partial directory")
 
 
-class TestAuditFix5_BoundsChecking(unittest.TestCase):
-    """Fix #5: Bounds checking for thumbnail_jobs array access."""
+class TestAuditFix5_ThumbnailJobCollection(unittest.TestCase):
+    """Thumbnail jobs are collected only from results that have a non-None _thumbnail_job."""
 
-    def test_negative_index_rejected(self):
-        """Negative indices should be rejected."""
-        thumbnail_jobs = [("result1", "job1"), ("result2", "job2")]
-        idx = -1
+    def test_only_results_with_job_included(self):
+        """Results without _thumbnail_job or with None value are excluded."""
+        from ramses_ingest.publisher import IngestPlan, IngestResult
+        from ramses_ingest.matcher import MatchResult
+        from ramses_ingest.prober import MediaInfo
 
-        # Should validate bounds
-        self.assertFalse(0 <= idx < len(thumbnail_jobs))
+        clip = Clip(base_name="t", extension="exr", directory=Path("/tmp"))
+        match = MatchResult(clip=clip, matched=True)
+        plan = IngestPlan(match=match, media_info=MediaInfo())
 
-    def test_index_beyond_length_rejected(self):
-        """Indices beyond array length should be rejected."""
-        thumbnail_jobs = [("result1", "job1")]
-        idx = 5
+        r_with_job = IngestResult(plan=plan, success=True)
+        r_with_job._thumbnail_job = {"clip": clip, "path": "/tmp/thumb.jpg"}
 
-        self.assertFalse(0 <= idx < len(thumbnail_jobs))
+        r_null_job = IngestResult(plan=plan, success=True)
+        r_null_job._thumbnail_job = None
 
-    def test_valid_index_accepted(self):
-        """Valid indices should be accepted."""
-        thumbnail_jobs = [("result1", "job1"), ("result2", "job2")]
-        idx = 1
+        r_no_attr = IngestResult(plan=plan, success=False, error="copy failed")
+        # r_no_attr has no _thumbnail_job attribute at all
 
-        self.assertTrue(0 <= idx < len(thumbnail_jobs))
+        results = [r_with_job, r_null_job, r_no_attr]
+        jobs = [(r, r._thumbnail_job) for r in results
+                if hasattr(r, '_thumbnail_job') and r._thumbnail_job]
+
+        self.assertEqual(len(jobs), 1)
+        self.assertIs(jobs[0][0], r_with_job)
+        self.assertEqual(jobs[0][1]["path"], "/tmp/thumb.jpg")
+
+    def test_empty_results_gives_empty_jobs(self):
+        """No results means no thumbnail jobs."""
+        jobs = [(r, r._thumbnail_job) for r in []
+                if hasattr(r, '_thumbnail_job') and r._thumbnail_job]
+        self.assertEqual(jobs, [])
 
 
 class TestAuditFix6_VersionLockRaceCondition(unittest.TestCase):
@@ -250,44 +278,52 @@ class TestAuditFix10_SubprocessValidation(unittest.TestCase):
 
 
 class TestAuditFix11_FileHandleCleanup(unittest.TestCase):
-    """Fix #11: File handle cleanup on Windows (finally block)."""
+    """Windows FlushFileBuffers handle is always closed via the finally block in copy_frames."""
 
-    @patch('sys.platform', 'win32')
-    @patch('ctypes.windll.kernel32.CreateFileW')
-    @patch('ctypes.windll.kernel32.CloseHandle')
-    def test_handle_closed_on_success(self, mock_close, mock_create):
-        """File handle should be closed even on success."""
-        mock_create.return_value = 123  # Valid handle
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
 
-        # Simulate the finally block logic from copy_frames
-        handle = mock_create("/dummy/path", 0x40000000, 0, None, 3, 0, None)
-        try:
-            # Simulate normal operation
-            pass
-        finally:
-            if handle != -1:
-                mock_close(handle)
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-        mock_close.assert_called_once_with(123)
+    def _make_single_frame_clip(self):
+        src = os.path.join(self.temp_dir, "test.0001.exr")
+        with open(src, "wb") as f:
+            f.write(b"frame_data")
+        return Clip(base_name="test", extension="exr",
+                    directory=Path(self.temp_dir), is_sequence=True,
+                    frames=[1], first_file=src, _separator=".")
 
-    @patch('sys.platform', 'win32')
-    @patch('ctypes.windll.kernel32.CreateFileW')
-    @patch('ctypes.windll.kernel32.CloseHandle')
-    def test_handle_closed_on_exception(self, mock_close, mock_create):
-        """File handle should be closed even on exception."""
-        mock_create.return_value = 123
+    @unittest.skipUnless(sys.platform == "win32", "Windows-only flush path")
+    def test_handle_closed_on_successful_flush(self):
+        """CloseHandle is called after FlushFileBuffers succeeds."""
+        from ramses_ingest.publisher import copy_frames
+        clip = self._make_single_frame_clip()
+        dest = os.path.join(self.temp_dir, "dest")
 
-        # Simulate exception during operation
-        handle = mock_create("/dummy/path", 0x40000000, 0, None, 3, 0, None)
-        try:
-            raise Exception("Simulated error")
-        except Exception:
-            pass
-        finally:
-            if handle != -1:
-                mock_close(handle)
+        with patch("ctypes.windll.kernel32.CreateFileW", return_value=42), \
+             patch("ctypes.windll.kernel32.FlushFileBuffers"), \
+             patch("ctypes.windll.kernel32.CloseHandle") as mock_close:
+            copy_frames(clip, dest, "PROJ", "SH010", "PLATE")
 
-        mock_close.assert_called_once()
+        mock_close.assert_called_once_with(42)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows-only flush path")
+    def test_handle_closed_when_flush_raises(self):
+        """CloseHandle is called even when FlushFileBuffers raises an exception."""
+        from ramses_ingest.publisher import copy_frames
+        clip = self._make_single_frame_clip()
+        dest = os.path.join(self.temp_dir, "dest2")
+
+        with patch("ctypes.windll.kernel32.CreateFileW", return_value=99), \
+             patch("ctypes.windll.kernel32.FlushFileBuffers",
+                   side_effect=OSError("flush failed")), \
+             patch("ctypes.windll.kernel32.CloseHandle") as mock_close:
+            # copy_frames must not raise — the flush exception is swallowed
+            copy_frames(clip, dest, "PROJ", "SH010", "PLATE")
+
+        mock_close.assert_called_once_with(99)
 
 
 class TestAuditFix12_LRUCachePruning(unittest.TestCase):
@@ -338,7 +374,7 @@ class TestAuditFix13_AtomicMetadataWrites(unittest.TestCase):
         folder = os.path.join(self.temp_dir, "version")
         os.makedirs(folder)
 
-        _write_ramses_metadata(folder, "test.exr", 1, "Test comment")
+        _write_ramses_metadata(folder, 1, comment="Test comment")
 
         # Final file should exist
         meta_path = os.path.join(folder, "_ramses_data.json")
@@ -356,7 +392,7 @@ class TestAuditFix13_AtomicMetadataWrites(unittest.TestCase):
         # Cause rename to fail by making folder read-only (platform-specific)
         with patch('os.replace', side_effect=OSError("Simulated failure")):
             try:
-                _write_ramses_metadata(folder, "test.exr", 1)
+                _write_ramses_metadata(folder, 1)
             except Exception:
                 pass
 
@@ -528,23 +564,52 @@ class TestAuditFix19_ExceptionPatterns(unittest.TestCase):
     """Fix #19: Exception patterns (log + return vs re-raise)."""
 
     def test_non_fatal_errors_logged_not_raised(self):
-        """Non-fatal errors should be logged but not re-raised."""
-        # This is tested implicitly by the execute_plan function
-        # Proxy generation errors are non-fatal
-        pass  # Implementation verified by code review
+        """Errors from register_ramses_objects are reported via callback but do not fail the ingest."""
+        from ramses_ingest.publisher import execute_plan, IngestPlan
+        from ramses_ingest.matcher import MatchResult
+        from ramses_ingest.prober import MediaInfo
+
+        temp_dir = tempfile.mkdtemp()
+        target_dir = os.path.join(temp_dir, "v001")
+        try:
+            clip = Clip(base_name="test", extension="exr", directory=Path(temp_dir),
+                        is_sequence=False, frames=[],
+                        first_file=os.path.join(temp_dir, "test.exr"))
+            match = MatchResult(clip=clip, matched=True)
+            plan = IngestPlan(match=match, media_info=MediaInfo(), project_id="PROJ",
+                              shot_id="SH010", target_publish_dir=target_dir,
+                              target_preview_dir=temp_dir)
+            logged = []
+            with patch('ramses_ingest.publisher.copy_frames', return_value=(1, {}, 100, "test.exr")), \
+                 patch('ramses_ingest.publisher._write_ramses_metadata'), \
+                 patch('ramses_ingest.publisher.register_ramses_objects',
+                       side_effect=RuntimeError("daemon unreachable")):
+                result = execute_plan(
+                    plan, generate_thumbnail=False, skip_ramses_registration=False,
+                    progress_callback=logged.append,
+                )
+
+            self.assertTrue(result.success,
+                            "Ingest must succeed even when DB registration raises")
+            self.assertEqual(result.error, "")
+            self.assertTrue(any("daemon unreachable" in m for m in logged),
+                            "DB error must be forwarded to the progress callback")
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 class TestAuditFix20_IDSanitization(unittest.TestCase):
     """Fix #20: ID sanitization (slashes, backslashes, dots)."""
 
-    def test_slash_in_resource_sanitized(self):
-        """Slashes in resource names should be sanitized."""
+    def test_slash_in_resource_sanitized_in_thumbnail_path(self):
+        """Slashes in resource names are replaced with underscores in the thumbnail job path."""
         from ramses_ingest.publisher import execute_plan, IngestPlan
         from ramses_ingest.matcher import MatchResult
         from ramses_ingest.prober import MediaInfo
 
-        # Resource with slash
-        clip = Clip(base_name="test", extension="exr", directory=Path("/tmp"), frames=[1], first_file="/tmp/test.0001.exr", is_sequence=True)
+        clip = Clip(base_name="test", extension="exr", directory=Path("/tmp"),
+                    frames=[1], first_file="/tmp/test.0001.exr", is_sequence=True)
         match = MatchResult(clip=clip, matched=True)
         plan = IngestPlan(
             match=match,
@@ -556,11 +621,18 @@ class TestAuditFix20_IDSanitization(unittest.TestCase):
             target_preview_dir="/tmp/preview",
         )
 
-        # Should sanitize to DEPTH_PASS
-        with patch('ramses_ingest.publisher.copy_frames', return_value=(1, "abc", 100, "file.exr")):
-            with patch('os.makedirs'):
-                result = execute_plan(plan, generate_thumbnail=False, skip_ramses_registration=True)
-                # Should not crash due to path traversal
+        with patch('ramses_ingest.publisher.copy_frames', return_value=(1, {}, 100, "file.exr")), \
+             patch('ramses_ingest.publisher._write_ramses_metadata'), \
+             patch('os.makedirs'):
+            result = execute_plan(plan, generate_thumbnail=True, skip_ramses_registration=True)
+
+        self.assertTrue(result.success, f"execute_plan should succeed: {result.error}")
+        self.assertIsNotNone(result._thumbnail_job, "Thumbnail job should be set for resource clips")
+        thumb_filename = os.path.basename(result._thumbnail_job["path"])
+        self.assertNotIn("/", thumb_filename,
+                         "Slash in resource must not appear in the thumbnail filename")
+        self.assertIn("DEPTH_PASS", thumb_filename,
+                      "Slash should be replaced with underscore")
 
     def test_backslash_in_resource_sanitized(self):
         """Backslashes should be sanitized."""
