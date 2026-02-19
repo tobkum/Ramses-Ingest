@@ -12,6 +12,7 @@ Responsibilities:
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import hashlib
 import json
 import logging
@@ -58,7 +59,50 @@ def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
 
 _RAMSES_CACHE_LOCK = threading.Lock()
 _VERSION_LOCK = threading.Lock()
+
+# Thread-local lock for in-process serialisation (still needed so multiple
+# threads in the same process don't race on the file-lock acquisition).
 _METADATA_WRITE_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _folder_lock(folder: str, timeout: float = 10.0):
+    """Cross-process advisory lock using an exclusive lock file.
+
+    Uses O_CREAT | O_EXCL (atomic on POSIX and Windows NTFS) so two
+    processes can never both believe they hold the lock.  Stale locks
+    (left by a crashed process) are removed after ``timeout`` seconds.
+    """
+    lock_path = os.path.join(folder, ".ram_write.lock")
+    deadline = time.monotonic() + timeout
+    acquired = False
+    while not acquired:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(fd, str(os.getpid()).encode())
+            os.close(fd)
+            acquired = True
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                # Assume the lock is stale and forcibly remove it.
+                try:
+                    os.remove(lock_path)
+                except OSError:
+                    pass
+                # One final attempt; if it still fails, propagate.
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                os.write(fd, str(os.getpid()).encode())
+                os.close(fd)
+                acquired = True
+            else:
+                time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            os.remove(lock_path)
+        except OSError:
+            pass
 
 
 @dataclass
@@ -319,8 +363,15 @@ def resolve_paths_from_daemon(plans: list[IngestPlan], shot_objects: dict[str, o
 
 
 def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None) -> None:
-    """Write metadata and completion marker atomically."""
-    with _METADATA_WRITE_LOCK:
+    """Write metadata and completion marker atomically.
+
+    Uses two layers of locking:
+    1. ``_METADATA_WRITE_LOCK`` (threading.Lock) — serialises threads within
+       the same process.
+    2. ``_folder_lock`` (O_CREAT | O_EXCL file lock) — prevents concurrent
+       writes from separate ingest processes running against the same folder.
+    """
+    with _METADATA_WRITE_LOCK, _folder_lock(folder):
         meta_path = os.path.join(folder, "_ramses_data.json")
         data = {}
         if os.path.isfile(meta_path):
