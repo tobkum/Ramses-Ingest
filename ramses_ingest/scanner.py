@@ -20,11 +20,15 @@ import pyseq
 
 logger = logging.getLogger(__name__)
 
-# Matches frame numbers at the END of the filename (before extension)
-# Examples: name.0001.exr, name_0001.exr, name-0001.exr, project_v01_shot_0030.exr (matches 0030, not 01)
-# Uses GREEDY .+ to explicitly match from the end (VFX convention: frames always at end)
-# Changed to \d+ to support single digit frames (e.g. .1.exr)
-RE_FRAME_PADDING = re.compile(r"^(?P<base>.+)(?P<sep>[\._-])(?P<frame>\d+)\.(?P<ext>[a-zA-Z0-9]+)$")
+# Matches frame numbers at the END of the filename (before extension).
+# Examples: name.0001.exr, name_0001.exr, name-0001.exr, name0001.exr
+#
+# Uses a LAZY base (.+?) so the regex engine stops as soon as the trailing
+# digits can be claimed as the frame number.  The separator is OPTIONAL
+# ([\._-]?) to handle deliveries without a separator (e.g. shot0001.exr).
+# When no separator is present, sep captures an empty string, which is stored
+# on Clip._separator and used verbatim when reconstructing source paths.
+RE_FRAME_PADDING = re.compile(r"^(?P<base>.+?)(?P<sep>[\._-]?)(?P<frame>\d+)\.(?P<ext>[a-zA-Z0-9]+)$")
 
 # Common media extensions (lowercase)
 IMAGE_EXTENSIONS = {

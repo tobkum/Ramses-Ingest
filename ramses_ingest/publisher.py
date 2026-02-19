@@ -269,10 +269,19 @@ def copy_frames(
 
 
 def _get_next_version(publish_root: str) -> int:
-    """Find next available version number."""
-    with _VERSION_LOCK:
-        publish_root = normalize_path(publish_root)
-        if not os.path.isdir(publish_root): return 1
+    """Find next available version number.
+
+    Protected by two layers of locking:
+    1. ``_VERSION_LOCK`` (threading.Lock) — serialises threads within this process.
+    2. ``_folder_lock`` (O_CREAT | O_EXCL file lock) — prevents two separate ingest
+       processes from both reading version N and both trying to publish as N+1.
+
+    ``publish_root`` is created if it does not yet exist so the lock file can be
+    placed inside it.
+    """
+    publish_root = normalize_path(publish_root)
+    os.makedirs(publish_root, exist_ok=True)
+    with _VERSION_LOCK, _folder_lock(publish_root):
         max_v = 0
         version_re = re.compile(r"^(?:(?P<res>[^_]+)_)?(?P<ver>\d{3})(?:_(?P<state>.*))?$")
         try:
@@ -414,10 +423,6 @@ def execute_plan(
         result.error = "No target publish directory resolved."
         return result
 
-    if not skip_ramses_registration and not dry_run:
-        try: register_ramses_objects(plan, _log)
-        except Exception as e: _log(f"  Ramses DB (non-fatal): {e}")
-
     try:
         _log(f"  {'Simulating' if dry_run else 'Copying'} files...")
         count, sums, bts, first = copy_frames(plan.match.clip, plan.target_publish_dir, plan.project_id, plan.shot_id, plan.step_id, resource=plan.resource, progress_callback=progress_callback, dry_run=dry_run, fast_verify=fast_verify, max_workers=copy_max_workers)
@@ -439,6 +444,13 @@ def execute_plan(
                 return result
         result.error = f"Ingest failed: {error_msg}"
         return result
+
+    # Register in the Ramses DB only after files are confirmed on disk.
+    # Registering before copy_frames would leave orphaned shots/sequences if
+    # the copy fails and is rolled back (zombie DB entries).
+    if not skip_ramses_registration and not dry_run:
+        try: register_ramses_objects(plan, _log)
+        except Exception as e: _log(f"  Ramses DB (non-fatal): {e}")
 
     result._thumbnail_job = None
     if generate_thumbnail and not dry_run:

@@ -66,7 +66,7 @@ CACHE_PATH_MSGPACK = os.path.join(os.path.expanduser("~"), ".ramses_ingest_cache
 CACHE_PATH_JSON = os.path.join(os.path.expanduser("~"), ".ramses_ingest_cache.json")  # Legacy
 _METADATA_CACHE: dict[str, dict] = {}
 _CACHE_ACCESS_TIMES: dict[str, float] = {}  # Track last access time for LRU
-_CACHE_LOCK = threading.Lock()  # Thread-safe cache access
+_CACHE_LOCK = threading.RLock()  # Reentrant: _load_cache may nest into _save_cache under the same lock
 _CACHE_DIRTY = False  # Batch writes instead of writing on every probe (must be accessed with _CACHE_LOCK)
 _MAX_CACHE_SIZE = 5000
 
@@ -180,8 +180,11 @@ def flush_cache():
         if _CACHE_DIRTY:
             _save_cache()
 
-# Initialize cache on module load
-_load_cache()
+# Initialize cache on module load, protected by the cache lock so any
+# future caller that imports this module on a thread cannot observe a
+# partially-populated cache.
+with _CACHE_LOCK:
+    _load_cache()
 
 # Register atexit handler to ensure cache is saved even on crash/SIGINT
 atexit.register(flush_cache)
