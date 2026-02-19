@@ -243,7 +243,10 @@ def copy_frames(
                 if handle != -1:
                     import threading
                     done = threading.Event()
-                    def _f(): ctypes.windll.kernel32.FlushFileBuffers(handle); done.set()
+                    def _f():
+                        try: ctypes.windll.kernel32.FlushFileBuffers(handle)
+                        except Exception: pass
+                        finally: done.set()
                     t = threading.Thread(target=_f, daemon=True); t.start()
                     if not done.wait(timeout=15): logger.warning(f"FlushFileBuffers timed out for {dst_name}")
             except Exception: pass
