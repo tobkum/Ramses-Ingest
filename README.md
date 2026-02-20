@@ -4,7 +4,7 @@ Technical ingest tool for [Ramses](https://ramses.rxlab.guide/) production manag
 
 ## Core Pipeline
 
-1.  **Discovery**: Recursive directory scanning for image sequences and movie files using `pyseq`. Supports all standard VFX formats (EXR, DPX, TIF, MOV, MXF, etc.).
+1.  **Discovery**: Recursive directory scanning for image sequences and movie files. Supports all standard VFX formats (EXR, DPX, TIF, MOV, MXF, etc.) and both `.` and `_` frame separators.
 2.  **Matching**: Regex-based identification of Sequence/Shot/Step from filenames or parent directories. Includes a visual "Naming Architect" for building and testing custom rules.
 3.  **Probing**: Automatic extraction of resolution, framerate, and start timecode via `ffprobe`.
 4.  **Verification**: 

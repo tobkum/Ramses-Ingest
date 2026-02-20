@@ -14,7 +14,8 @@
 - **ADDED**: Integrated GUI Log Panel with syntax highlighting for Errors/Warnings/Success.
 
 #### Robust Scanning Engine
-- **ADDED**: Integration with `pyseq` for industry-standard image sequence detection.
+
+- **ADDED**: Custom image sequence scanner supporting both `.` and `_` frame separators with padding-boundary grouping.
 - **IMPROVED**: Scanner now supports both `.` and `_` frame separators (e.g., `shot.1001.exr` and `shot_1001.exr`).
 - **ADDED**: Recursive directory walking with proper error handling for permission issues.
 
@@ -64,7 +65,7 @@
 | UI Layout | ❌ Crowded/Single | ✅ Professional 3-Panel |
 | Data Safety | ❌ Zombie folders | ✅ Transactional Rollback |
 | Responsiveness | ❌ UI Freezes | ✅ Async Background Threads |
-| Sequence Support | ❌ Strict regex | ✅ `pyseq` + flexible separators |
+| Sequence Support | ❌ Strict regex | ✅ Custom scanner + flexible separators |
 | Error Handling | ⚠️ Silent failures | ✅ Explicit GUI logging + Alerts |
 
 ---

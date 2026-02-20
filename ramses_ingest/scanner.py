@@ -16,8 +16,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import pyseq
-
 logger = logging.getLogger(__name__)
 
 # Matches frame numbers at the END of the filename (before extension).

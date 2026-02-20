@@ -21,7 +21,7 @@ Before running the Ingest tool, perform these steps in the **Ramses Client** app
 3.  **Select Source**: 
     *   Drag and drop folders or files onto the center **"Drop Zone"**.
     *   The tool uses **PyAV (FFmpeg C-bindings)** for near-instant metadata extraction (10-20x faster than traditional scanning).
-    *   It uses `pyseq` to group image sequences, supporting both `.` and `_` separators.
+    *   It groups image sequences using a custom scanner that supports both `.` and `_` separators.
 4.  **Editorial Mapping (Optional)**:
     *   If the delivery includes a **CMX 3600 EDL**, click **"Load EDL..."** in the Options dialog.
     *   The tool will automatically map clip names to shot IDs based on EDL comments.
