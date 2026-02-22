@@ -92,34 +92,19 @@ def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIs
         return issues  # Single clip or all unmatched - nothing to compare
 
     # 1. Check for mixed primaries (CRITICAL - different color gamuts)
-    primaries_set = set(p['primaries'] for p in profiles)
+    known_primaries = set(p['primaries'] for p in profiles if p['primaries'] != 'UNKNOWN')
 
-    # Define incompatible primaries combinations (Uppercase)
-    incompatible_pairs = [
-        ('BT709', 'BT2020'),
-        ('BT709', 'FILM'),
-        ('BT2020', 'FILM'),
-        ('SMPTE170M', 'BT2020'),
-    ]
-
-    # Check if any incompatible pairs exist in the batch
-    has_critical_mismatch = False
-    for p1, p2 in incompatible_pairs:
-        if p1 in primaries_set and p2 in primaries_set:
-            has_critical_mismatch = True
-            break
-
-    if has_critical_mismatch and 'UNKNOWN' not in primaries_set:
-        # Flag all clips with non-standard primaries
-        most_common = max(set(p['primaries'] for p in profiles),
+    if len(known_primaries) > 1:
+        # Find the most common primary to determine the "standard" for this batch
+        most_common = max(known_primaries,
                          key=lambda x: sum(1 for p in profiles if p['primaries'] == x))
 
         for profile in profiles:
-            if profile['primaries'] != most_common:
+            if profile['primaries'] != 'UNKNOWN' and profile['primaries'] != most_common:
                 issues[profile['plan_idx']] = ColorspaceIssue(
                     severity="critical",
-                    message=f"Primaries mismatch: {profile['primaries']} (batch has mixed {', '.join(sorted(primaries_set))})",
-                    affected_primaries=primaries_set
+                    message=f"Primaries mismatch: {profile['primaries']} (batch has mixed {', '.join(sorted(known_primaries))})",
+                    affected_primaries=known_primaries
                 )
 
     # 2. Check for missing metadata (CRITICAL - ambiguous assumptions)
