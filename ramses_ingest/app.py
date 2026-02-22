@@ -23,6 +23,7 @@ from ramses_ingest.publisher import (
     register_ramses_objects, IngestPlan, IngestResult, check_for_duplicates,
     update_ramses_status, check_disk_space, check_for_path_collisions
 )
+from ramses_ingest.validator import validate_batch_colorspace
 from ramses_ingest.config import load_rules
 from ramses_ingest.reporting import generate_html_report, generate_json_audit_trail
 from ramses_ingest.path_utils import normalize_path, validate_path_within_root
@@ -169,6 +170,14 @@ class IngestEngine:
         if self._project_path: resolve_paths([p for p in plans if not p.target_publish_dir], self._project_path)
         
         check_for_duplicates(plans); check_for_path_collisions(plans)
+        
+        # Colorspace Validation
+        cs_issues = validate_batch_colorspace(plans)
+        for idx, issue in cs_issues.items():
+            if idx < len(plans):
+                msg = f"COLORSPACE: {issue.message}"
+                plans[idx].error = f"{plans[idx].error} | {msg}" if plans[idx].error else msg
+
         return plans
 
     def execute(self, plans: list[IngestPlan], generate_thumbnails: bool = True, generate_proxies: bool = False, progress_callback: Callable[[str], None] | None = None, update_status: bool = False, export_json_audit: bool = False, dry_run: bool = False, fast_verify: bool = True, cancel_check: Callable[[], bool] | None = None) -> list[IngestResult]:
