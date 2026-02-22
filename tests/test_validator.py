@@ -116,8 +116,8 @@ class TestValidateBatchColorspace(unittest.TestCase):
         self.assertTrue(len(issues) > 0)
         self.assertTrue(any(i.severity == "critical" for i in issues.values()))
 
-    def test_mixed_primaries_with_unknown_ignored(self):
-        """UNKNOWN in primaries set should prevent critical flagging."""
+    def test_mixed_primaries_with_known_and_unknown(self):
+        """Known primary mismatches should still be flagged even if UNKNOWN is present."""
         plans = [
             self._make_plan(primaries="bt709"),
             self._make_plan(primaries="bt2020"),
@@ -125,15 +125,15 @@ class TestValidateBatchColorspace(unittest.TestCase):
         ]
         issues = validate_batch_colorspace(plans)
 
-        # When UNKNOWN is present the validator must not raise a critical
-        # primaries-mismatch — collect all offenders so failure output is
-        # explicit rather than a vacuous loop that passes on an empty dict.
-        critical_primaries = [
-            issue for issue in issues.values()
-            if issue.severity == "critical" and "Primaries mismatch" in issue.message
-        ]
-        self.assertEqual(critical_primaries, [],
-            "UNKNOWN primaries should suppress critical mismatch flagging")
+        # We expect two types of critical issues:
+        # 1. Primaries mismatch (BT709 vs BT2020)
+        # 2. Missing metadata (the UNKNOWN one)
+        
+        mismatch_found = any("Primaries mismatch" in iss.message for iss in issues.values())
+        missing_found = any("Missing colorspace metadata" in iss.message for iss in issues.values())
+        
+        self.assertTrue(mismatch_found, "Known primaries mismatch should be flagged")
+        self.assertTrue(missing_found, "Missing metadata should be flagged")
 
     def test_missing_metadata_some_clips_critical(self):
         """Some clips with UNKNOWN primaries when others have metadata is critical."""
