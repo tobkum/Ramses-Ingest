@@ -148,14 +148,16 @@ class IngestEngine:
         if not isinstance(paths, list): paths = [paths]
         paths = [normalize_path(p) for p in paths]
         
-        all_candidate_files = []
-        for p in paths:
-            if os.path.isfile(p): all_candidate_files.append(p)
-            elif os.path.isdir(p):
-                for root, _, filenames in os.walk(p):
-                    for f in filenames: all_candidate_files.append(os.path.join(root, f))
+        def _iter_candidate_files():
+            for p in paths:
+                if os.path.isfile(p):
+                    yield p
+                elif os.path.isdir(p):
+                    for root, _, filenames in os.walk(p, followlinks=False):
+                        for f in filenames:
+                            yield os.path.join(root, f)
 
-        all_clips = group_files(all_candidate_files); _log(f"  Found {len(all_clips)} clip(s).")
+        all_clips = group_files(_iter_candidate_files()); _log(f"  Found {len(all_clips)} clip(s).")
         matches = match_clips(all_clips, rules if rules is not None else self._rules)
 
         _log("Probing media info...")

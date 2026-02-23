@@ -185,18 +185,29 @@ def scan_directory(root: str | Path) -> list[Clip]:
     Recursively collects all files and delegates grouping to group_files.
     Explicitly prevents symlink recursion.
     """
-    root = Path(root)
+    from ramses_ingest.path_utils import validate_path_within_root
+
+    root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Not a directory: {root}")
 
     all_files = []
+    skipped = 0
     try:
         # followlinks=False prevents infinite recursion via symlinks
         for root_dir, _, filenames in os.walk(root, followlinks=False):
             for f in filenames:
-                all_files.append(os.path.join(root_dir, f))
+                full_path = os.path.join(root_dir, f)
+                if not validate_path_within_root(full_path, root):
+                    logger.warning("Skipping file outside scan root (path traversal?): %s", full_path)
+                    skipped += 1
+                    continue
+                all_files.append(full_path)
     except (PermissionError, OSError) as e:
         logger.warning(f"Error accessing {root}: {e}")
+
+    if skipped:
+        logger.warning("Skipped %d file(s) that resolved outside the scan root.", skipped)
 
     return group_files(all_files)
 

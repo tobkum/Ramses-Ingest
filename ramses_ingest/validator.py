@@ -128,8 +128,12 @@ def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIs
         primaries_to_transfers[key].add(p['transfer'])
 
     for primary, transfers in primaries_to_transfers.items():
-        if len(transfers) > 1 and 'UNKNOWN' not in transfers and primary != 'UNKNOWN':
-            # Multiple transfer functions for same primaries
+        # Compare only clips whose transfer function is known; UNKNOWN entries
+        # represent missing metadata and should not silence a real mismatch
+        # between clips that *do* have embedded transfer metadata.
+        known_transfers = transfers - {'UNKNOWN'}
+        if len(known_transfers) > 1 and primary != 'UNKNOWN':
+            # Multiple distinct known transfer functions for the same primaries
             for profile in profiles:
                 if profile['primaries'] == primary and profile['plan_idx'] not in issues:
                     # Only add warning if not already flagged as critical
@@ -296,11 +300,20 @@ class EDLValidator:
                         m = re.match(r"^([A-Za-z0-9_-]+)[:\s]+(\d+)-(\d+)$", comment)
                         if m:
                             shot_id, first, last = m.groups()
+                            first_int, last_int = int(first), int(last)
+                            if first_int > last_int:
+                                import logging as _log
+                                _log.getLogger(__name__).warning(
+                                    "EDL comment has inverted frame range for %s: "
+                                    "%d-%d (first > last). Swapping.",
+                                    shot_id, first_int, last_int,
+                                )
+                                first_int, last_int = last_int, first_int
                             exp = EDLExpectation(
                                 clip_name=last_clip,
                                 shot_id=shot_id,
-                                expected_first_frame=int(first),
-                                expected_last_frame=int(last),
+                                expected_first_frame=first_int,
+                                expected_last_frame=last_int,
                             )
                             self.expectations[last_clip] = exp
         except Exception:

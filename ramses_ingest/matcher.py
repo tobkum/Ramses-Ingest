@@ -97,7 +97,19 @@ class NamingRule:
     def compile(self) -> re.Pattern:
         """Compile the pattern, using cache to avoid redundant compilation."""
         if self.pattern not in _PATTERN_CACHE:
-            _PATTERN_CACHE[self.pattern] = re.compile(self.pattern, re.IGNORECASE)
+            if len(self.pattern) > 1024:
+                raise ValueError(
+                    f"NamingRule pattern is excessively long ({len(self.pattern)} chars). "
+                    "Possible misconfiguration."
+                )
+            try:
+                compiled = re.compile(self.pattern, re.IGNORECASE)
+            except re.error as exc:
+                raise ValueError(f"NamingRule has invalid regex pattern: {exc}") from exc
+            # Keep cache bounded to prevent unbounded memory growth
+            if len(_PATTERN_CACHE) >= 256:
+                _PATTERN_CACHE.clear()
+            _PATTERN_CACHE[self.pattern] = compiled
         return _PATTERN_CACHE[self.pattern]
 
 

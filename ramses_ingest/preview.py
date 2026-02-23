@@ -24,29 +24,41 @@ _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 
 
 def _escape_ffmpeg_filter_path(path: str) -> str:
     """Escape file path for use in FFmpeg filter strings.
-    
+
     FFmpeg filter syntax requires escaping colons, but Windows drive letters
     (C:, D:, etc.) must be preserved. This also handles UNC paths on network shares.
-    
+
     Args:
         path: File path (Windows or Unix)
-        
+
     Returns:
         Properly escaped path for FFmpeg filter string
-        
+
     Examples:
         C:\\OCIO\\config.ocio → C:/OCIO/config.ocio
-        \\\\server\\share\\config.ocio → //server/share/config.ocio  
+        \\\\server\\share\\config.ocio → //server/share/config.ocio
         /mnt/ocio:v2/config.ocio → /mnt/ocio\\:v2/config.ocio
     """
-    # Convert backslashes to forward slashes for FFmpeg
-    clean = path.replace("\\", "/")
-    
+    # Preserve UNC paths: \\server\share → //server/share
+    if path.startswith("\\\\"):
+        path = "//" + path[2:].replace("\\", "/")
+    else:
+        # Convert backslashes to forward slashes for FFmpeg
+        path = path.replace("\\", "/")
+
     # Escape ALL colons except Windows drive letters (single letter followed by colon at start)
     # Pattern: Match colons not preceded by start-of-string + single letter
-    clean = re.sub(r'(?<!^[A-Za-z]):', r'\\:', clean)
-    
+    clean = re.sub(r'(?<!^[A-Za-z]):', r'\\:', path)
+
     return clean
+
+
+def _escape_ffmpeg_filter_label(label: str) -> str:
+    """Escape a colorspace label for use inside an FFmpeg filter option value.
+
+    Colons and semicolons are special in FFmpeg filter syntax and must be escaped.
+    """
+    return label.replace("\\", "\\\\").replace(":", "\\:").replace(";", "\\;")
 
 # Thumbnail settings
 THUMB_WIDTH = 960
@@ -102,7 +114,7 @@ def generate_proxy(
     vf_chain = [f"scale={PROXY_WIDTH}:-2"]
     if ocio_config and os.path.isfile(ocio_config):
         clean_path = _escape_ffmpeg_filter_path(ocio_config)
-        vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label=sRGB")
+        vf_chain.append(f"ocio=config={clean_path}:in_label={_escape_ffmpeg_filter_label(ocio_in)}:out_label=sRGB")
 
     vf_str = ",".join(vf_chain)
 
@@ -135,8 +147,22 @@ def generate_proxy(
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS, timeout=600)
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        if result.returncode != 0:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "ffmpeg proxy generation failed (rc=%d): %s",
+                result.returncode,
+                result.stderr[-2000:] if result.stderr else "(no stderr)",
+            )
+            return False
+        return True
+    except FileNotFoundError:
+        import logging as _logging
+        _logging.getLogger(__name__).error("ffmpeg not found. Install ffmpeg and ensure it is on PATH.")
+        return False
+    except subprocess.TimeoutExpired:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("ffmpeg proxy generation timed out for: %s", clip.first_file)
         return False
 
 
@@ -161,7 +187,7 @@ def _thumbnail_from_sequence(
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]
     if ocio_config and os.path.isfile(ocio_config):
         clean_path = _escape_ffmpeg_filter_path(ocio_config)
-        vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label=sRGB")
+        vf_chain.append(f"ocio=config={clean_path}:in_label={_escape_ffmpeg_filter_label(ocio_in)}:out_label=sRGB")
     vf_str = ",".join(vf_chain)
 
     cmd = [
@@ -176,8 +202,22 @@ def _thumbnail_from_sequence(
     try:
         # 90s timeout for 8K footage, network storage, and heavy codecs (H.265, ProRes RAW)
         result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS, timeout=90)
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        if result.returncode != 0:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "ffmpeg thumbnail (sequence) failed (rc=%d): %s",
+                result.returncode,
+                result.stderr[-2000:] if result.stderr else "(no stderr)",
+            )
+            return False
+        return True
+    except FileNotFoundError:
+        import logging as _logging
+        _logging.getLogger(__name__).error("ffmpeg not found. Install ffmpeg and ensure it is on PATH.")
+        return False
+    except subprocess.TimeoutExpired:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("ffmpeg thumbnail timed out for sequence: %s", clip.first_file)
         return False
 
 
@@ -206,7 +246,7 @@ def _thumbnail_from_movie(
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]
     if ocio_config and os.path.isfile(ocio_config):
         clean_path = _escape_ffmpeg_filter_path(ocio_config)
-        vf_chain.append(f"ocio=config={clean_path}:in_label={ocio_in}:out_label=sRGB")
+        vf_chain.append(f"ocio=config={clean_path}:in_label={_escape_ffmpeg_filter_label(ocio_in)}:out_label=sRGB")
     vf_str = ",".join(vf_chain)
 
     cmd = [
@@ -222,6 +262,20 @@ def _thumbnail_from_movie(
     try:
         # 90s timeout for 8K footage, network storage, and heavy codecs (H.265, ProRes RAW)
         result = subprocess.run(cmd, capture_output=True, text=True, creationflags=_SUBPROCESS_FLAGS, timeout=90)
-        return result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
+        if result.returncode != 0:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "ffmpeg thumbnail (movie) failed (rc=%d): %s",
+                result.returncode,
+                result.stderr[-2000:] if result.stderr else "(no stderr)",
+            )
+            return False
+        return True
+    except FileNotFoundError:
+        import logging as _logging
+        _logging.getLogger(__name__).error("ffmpeg not found. Install ffmpeg and ensure it is on PATH.")
+        return False
+    except subprocess.TimeoutExpired:
+        import logging as _logging
+        _logging.getLogger(__name__).warning("ffmpeg thumbnail timed out for movie: %s", clip.first_file)
         return False

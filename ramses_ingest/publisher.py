@@ -236,22 +236,32 @@ def copy_frames(
             raise
         dst_sz = os.path.getsize(dst)
         if sys.platform == "win32":
-            handle = -1
+            _handle = -1
             try:
                 import ctypes
-                handle = ctypes.windll.kernel32.CreateFileW(dst, 0x40000000, 0, None, 3, 0, None)
-                if handle != -1:
-                    import threading
-                    done = threading.Event()
-                    def _f():
-                        try: ctypes.windll.kernel32.FlushFileBuffers(handle)
-                        except Exception: pass
-                        finally: done.set()
-                    t = threading.Thread(target=_f, daemon=True); t.start()
-                    if not done.wait(timeout=15): logger.warning(f"FlushFileBuffers timed out for {dst_name}")
-            except Exception: pass
+                # GENERIC_WRITE (0x40000000) | OPEN_EXISTING (3) to flush the copied file
+                _handle = ctypes.windll.kernel32.CreateFileW(dst, 0x40000000, 0, None, 3, 0, None)
+                if _handle != -1:
+                    import threading as _thr
+                    _done = _thr.Event()
+                    def _flush(_h=_handle, _ev=_done):
+                        ok = ctypes.windll.kernel32.FlushFileBuffers(_h)
+                        if not ok:
+                            logger.warning("FlushFileBuffers failed (err=%d) for %s",
+                                           ctypes.windll.kernel32.GetLastError(), dst_name)
+                        _ev.set()
+                    _t = _thr.Thread(target=_flush, daemon=True)
+                    _t.start()
+                    if not _done.wait(timeout=15):
+                        logger.warning("FlushFileBuffers timed out for %s", dst_name)
+                else:
+                    logger.debug("CreateFileW returned INVALID_HANDLE for %s (err=%d), skipping flush",
+                                 dst_name, ctypes.windll.kernel32.GetLastError())
+            except Exception as _flush_exc:
+                logger.debug("Windows flush skipped for %s: %s", dst_name, _flush_exc)
             finally:
-                if handle != -1: ctypes.windll.kernel32.CloseHandle(handle)
+                if _handle != -1:
+                    ctypes.windll.kernel32.CloseHandle(_handle)
         if src_sz != dst_sz: raise OSError(f"Size mismatch after copy: {dst_name}")
         checksum = ""
         if needs_md5:
@@ -352,8 +362,9 @@ def resolve_paths(plans: list[IngestPlan], project_root: str, shots_folder: str 
     for plan in plans:
         if not plan.can_execute: continue
         proj_id, shot_id, step_id = plan.project_id, plan.shot_id.upper(), plan.step_id
-        if any(c in proj_id + shot_id + step_id for c in "/\\") or ".." in proj_id + shot_id + step_id:
-            plan.error = "Invalid IDs contain path separators"; continue
+        _all_ids = proj_id + shot_id + step_id + plan.resource + plan.state
+        if any(c in _all_ids for c in "/\\") or ".." in _all_ids:
+            plan.error = "Invalid IDs contain path separators or '..'"; continue
         
         snm = RamFileInfo(); snm.project, snm.ramType, snm.shortName = proj_id, ItemType.SHOT, shot_id
         shot_root = os.path.join(project_root, shots_folder, snm.fileName())
@@ -442,7 +453,15 @@ def execute_plan(
     try:
         _log(f"  {'Simulating' if dry_run else 'Copying'} files...")
         count, sums, bts, first = copy_frames(plan.match.clip, plan.target_publish_dir, plan.project_id, plan.shot_id, plan.step_id, resource=plan.resource, progress_callback=progress_callback, dry_run=dry_run, fast_verify=fast_verify, max_workers=copy_max_workers)
-        result.frames_copied = plan.media_info.frame_count if not plan.match.clip.is_sequence and plan.media_info.frame_count > 0 else count
+        if plan.match.clip.is_sequence:
+            result.frames_copied = count
+        else:
+            fc = plan.media_info.frame_count
+            # Secondary fallback: compute from duration × fps when the prober
+            # couldn't read nb_frames directly (common for MXF/ProRes containers).
+            if fc <= 0 and plan.media_info.duration_seconds > 0 and plan.media_info.fps > 0:
+                fc = int(round(plan.media_info.duration_seconds * plan.media_info.fps))
+            result.frames_copied = fc if fc > 0 else count
         result.checksums, result.bytes_copied, result.published_path = sums, bts, plan.target_publish_dir
         if first in sums: result.checksum = sums[first]
         if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums)
@@ -465,8 +484,17 @@ def execute_plan(
     # Registering before copy_frames would leave orphaned shots/sequences if
     # the copy fails and is rolled back (zombie DB entries).
     if not skip_ramses_registration and not dry_run:
-        try: register_ramses_objects(plan, _log)
-        except Exception as e: _log(f"  Ramses DB (non-fatal): {e}")
+        try:
+            register_ramses_objects(plan, _log)
+        except Exception as e:
+            # DB registration failure does NOT mean the files weren't copied — the
+            # ingest result is still success.  Be explicit in the log so the
+            # operator knows the DB may be out of sync.
+            logger.warning(
+                "Ramses DB registration failed for %s/%s (files are on disk): %s",
+                plan.shot_id, plan.step_id, e,
+            )
+            _log(f"  WARNING: Ramses DB registration failed (files are on disk): {e}")
 
     result._thumbnail_job = None
     if generate_thumbnail and not dry_run:
@@ -502,6 +530,7 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequen
     project_uuid = project.uuid()
 
     seq_obj = None
+    seq_was_new = False
     if plan.sequence_id:
         seq_up = plan.sequence_id.upper()
         if sequence_cache and seq_up in sequence_cache: seq_obj = RamSequence(sequence_cache[seq_up])
@@ -511,6 +540,7 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequen
         seq_data = {"shortName": plan.sequence_id, "name": plan.sequence_id, "folderPath": join_normalized(project.folderPath(), FolderNames.shots, plan.sequence_id), "project": project_uuid, "overrideResolution": True, "width": info.width or 1920, "height": info.height or 1080, "overrideFramerate": True, "framerate": info.fps or 24.0, "overridePixelAspectRatio": True, "pixelAspectRatio": info.pixel_aspect_ratio}
         if not seq_obj:
             log(f"  Creating sequence {plan.sequence_id}..."); seq_obj = RamSequence(data=seq_data, create=True)
+            seq_was_new = True
             if sequence_cache is not None:
                 with _RAMSES_CACHE_LOCK: sequence_cache[seq_up] = seq_obj.uuid()
         else:
@@ -536,15 +566,25 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequen
             if shot_obj and shot_obj.get("sourceMedia"): shot_data["sourceMedia"] = shot_obj.get("sourceMedia")
         if seq_obj: shot_data["sequence"] = seq_obj.uuid()
         if not shot_obj:
-            log(f"  Creating shot {plan.shot_id}..."); shot_obj = RamShot(data=shot_data, create=True)
-            if shot_cache is not None:
-                with _RAMSES_CACHE_LOCK: shot_cache[shot_up] = shot_obj
+            try:
+                log(f"  Creating shot {plan.shot_id}..."); shot_obj = RamShot(data=shot_data, create=True)
+                if shot_cache is not None:
+                    with _RAMSES_CACHE_LOCK: shot_cache[shot_up] = shot_obj
+            except Exception as shot_err:
+                if seq_was_new:
+                    logger.warning(
+                        "Shot creation failed for %s after sequence %s was created in DB. "
+                        "The sequence may be orphaned — manual cleanup may be required. Error: %s",
+                        plan.shot_id, plan.sequence_id, shot_err,
+                    )
+                raise
         else:
             if any(shot_obj.data().get(k) != v for k, v in shot_data.items()): shot_obj.setData(shot_data)
     if not skip_status_update: update_ramses_status(plan, plan.state, shot_cache=shot_cache)
 
 
 _USER_ASSIGNMENT_SUPPORTED = True
+_USER_ASSIGNMENT_LOCK = threading.Lock()
 
 def update_ramses_status(plan: IngestPlan, status_name: str = "OK", shot_cache: dict[str, object] | None = None) -> bool:
     global _USER_ASSIGNMENT_SUPPORTED
@@ -564,10 +604,15 @@ def update_ramses_status(plan: IngestPlan, status_name: str = "OK", shot_cache: 
             state = next((s for s in ram.states() if s.shortName().upper() == status_name.upper()), None)
             if state:
                 status.setState(state); status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
-                if _USER_ASSIGNMENT_SUPPORTED:
-                    try: status.setUser()
+                with _USER_ASSIGNMENT_LOCK:
+                    do_assign = _USER_ASSIGNMENT_SUPPORTED
+                if do_assign:
+                    try:
+                        status.setUser()
                     except Exception as e:
-                        if "unknown query" in str(e).lower(): _USER_ASSIGNMENT_SUPPORTED = False
+                        if "unknown query" in str(e).lower():
+                            with _USER_ASSIGNMENT_LOCK:
+                                _USER_ASSIGNMENT_SUPPORTED = False
                 return True
         return False
     except Exception: return False

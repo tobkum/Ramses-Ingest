@@ -113,14 +113,22 @@ def _load_cache():
             # Auto-migrate to msgpack if available
             if _USE_MSGPACK and _METADATA_CACHE:
                 logger.info(f"Migrating cache from JSON to msgpack ({len(_METADATA_CACHE)} entries)")
-                with _CACHE_LOCK:
-                    _CACHE_DIRTY = True
-                    _save_cache()  # This will save in msgpack format
-                # Clean up old JSON file after successful migration
+                # _CACHE_LOCK is already held by the caller (_load_cache is always called
+                # inside "with _CACHE_LOCK:"). Use _save_cache() directly.
+                _CACHE_DIRTY = True
                 try:
-                    os.remove(CACHE_PATH_JSON)
-                except Exception:
-                    pass
+                    _save_cache()  # Save in msgpack format
+                    # Only remove the JSON file if the msgpack write succeeded
+                    # (_save_cache sets _CACHE_DIRTY = False on success)
+                    if not _CACHE_DIRTY:
+                        try:
+                            os.remove(CACHE_PATH_JSON)
+                        except OSError:
+                            pass
+                    else:
+                        logger.warning("msgpack migration write failed; keeping JSON cache.")
+                except Exception as save_exc:
+                    logger.warning(f"msgpack migration failed: {save_exc}; keeping JSON cache.")
         except Exception as e:
             logger.warning(f"Failed to load JSON cache: {e}")
             # Already initialized to empty above
