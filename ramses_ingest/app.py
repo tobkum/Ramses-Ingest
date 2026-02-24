@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, List, Dict, Optional, Any
 from collections import Counter
 
-from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING, group_files
+from ramses_ingest.scanner import scan_directory, Clip, RE_FRAME_PADDING, group_files, walk_scandir
 from ramses_ingest.matcher import match_clips, NamingRule, MatchResult
 from ramses_ingest.prober import probe_file, MediaInfo, flush_cache
 from ramses_ingest.publisher import (
@@ -150,12 +150,11 @@ class IngestEngine:
         
         def _iter_candidate_files():
             for p in paths:
-                if os.path.isfile(p):
+                p_obj = Path(p)
+                if p_obj.is_file():
                     yield p
-                elif os.path.isdir(p):
-                    for root, _, filenames in os.walk(p, followlinks=False):
-                        for f in filenames:
-                            yield os.path.join(root, f)
+                elif p_obj.is_dir():
+                    yield from walk_scandir(p, p_obj)
 
         all_clips = group_files(_iter_candidate_files()); _log(f"  Found {len(all_clips)} clip(s).")
         matches = match_clips(all_clips, rules if rules is not None else self._rules)

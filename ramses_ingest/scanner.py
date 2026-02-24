@@ -13,6 +13,7 @@ import os
 import re
 import logging
 from collections import defaultdict
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -100,8 +101,8 @@ class Clip:
         return sorted(full_range - set(self.frames))
 
 
-def group_files(file_paths: list[str | Path]) -> list[Clip]:
-    """Consolidate a list of file paths into a list of Clips.
+def group_files(file_paths: Iterable[str | Path]) -> list[Clip]:
+    """Consolidate an iterable of file paths into a list of Clips.
 
     The 'Smart Way':
     1. Filter by extension first (Movies are always standalone).
@@ -179,35 +180,40 @@ def group_files(file_paths: list[str | Path]) -> list[Clip]:
     return movie_clips + sequence_clips
 
 
-def scan_directory(root: str | Path) -> list[Clip]:
-    """Scan *root* for media files and return detected clips.
+def walk_scandir(path: str | Path, scan_root: Path):
+    """Recursive generator using scandir for high-performance file discovery.
 
-    Recursively collects all files and delegates grouping to group_files.
-    Explicitly prevents symlink recursion.
+    Explicitly prevents symlink recursion by setting follow_symlinks=False.
     """
     from ramses_ingest.path_utils import validate_path_within_root
 
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                # is_dir() and is_file() cache the metadata from the initial
+                # directory listing, avoiding thousands of redundant stat() calls.
+                if entry.is_dir(follow_symlinks=False):
+                    yield from walk_scandir(entry.path, scan_root)
+                elif entry.is_file(follow_symlinks=False):
+                    if validate_path_within_root(entry.path, scan_root):
+                        yield entry.path
+                    else:
+                        logger.warning("Skipping file outside scan root (path traversal?): %s", entry.path)
+    except (PermissionError, OSError) as e:
+        logger.warning(f"Error accessing {path}: {e}")
+
+
+def scan_directory(root: str | Path) -> list[Clip]:
+    """Scan *root* for media files and return detected clips.
+
+    Recursively collects all files using a high-performance scandir walker
+    and delegates grouping to group_files.
+    """
     root = Path(root).resolve()
     if not root.is_dir():
         raise FileNotFoundError(f"Not a directory: {root}")
 
-    all_files = []
-    skipped = 0
-    try:
-        # followlinks=False prevents infinite recursion via symlinks
-        for root_dir, _, filenames in os.walk(root, followlinks=False):
-            for f in filenames:
-                full_path = os.path.join(root_dir, f)
-                if not validate_path_within_root(full_path, root):
-                    logger.warning("Skipping file outside scan root (path traversal?): %s", full_path)
-                    skipped += 1
-                    continue
-                all_files.append(full_path)
-    except (PermissionError, OSError) as e:
-        logger.warning(f"Error accessing {root}: {e}")
-
-    if skipped:
-        logger.warning("Skipped %d file(s) that resolved outside the scan root.", skipped)
-
-    return group_files(all_files)
+    # Consume the generator and group files. Note that group_files performs
+    # sorting, so the final result is always deterministic.
+    return group_files(walk_scandir(root, root))
 
