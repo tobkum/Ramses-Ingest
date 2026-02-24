@@ -245,11 +245,15 @@ def copy_frames(
                     import threading as _thr
                     _done = _thr.Event()
                     def _flush(_h=_handle, _ev=_done):
-                        ok = ctypes.windll.kernel32.FlushFileBuffers(_h)
-                        if not ok:
-                            logger.warning("FlushFileBuffers failed (err=%d) for %s",
-                                           ctypes.windll.kernel32.GetLastError(), dst_name)
-                        _ev.set()
+                        try:
+                            ok = ctypes.windll.kernel32.FlushFileBuffers(_h)
+                            if not ok:
+                                logger.warning("FlushFileBuffers failed (err=%d) for %s",
+                                               ctypes.windll.kernel32.GetLastError(), dst_name)
+                        except Exception as e:
+                            logger.debug("Background flush thread failed: %s", e)
+                        finally:
+                            _ev.set()
                     _t = _thr.Thread(target=_flush, daemon=True)
                     _t.start()
                     if not _done.wait(timeout=15):
