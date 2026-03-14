@@ -2027,6 +2027,23 @@ class IngestWindow(QMainWindow):
 
             self._update_summary()
 
+    def _on_context_filename_as_shot(self) -> None:
+        """Set each selected clip's filename stem as its shot ID"""
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        for row in selected_rows:
+            plan = self._get_plan_from_row(row)
+            if plan:
+                shot_id = plan.match.clip.base_name
+                plan.shot_id = shot_id
+                item = self._table.item(row, 3)  # Shot column
+                if item:
+                    item.setText(shot_id)
+
+        self._update_summary()
+
     def _on_context_override_seq(self) -> None:
         """Override sequence ID for selected clips"""
         from PySide6.QtWidgets import QInputDialog
@@ -2659,6 +2676,10 @@ class IngestWindow(QMainWindow):
         act_override = QAction("Override Shot ID...", self)
         act_override.triggered.connect(self._on_context_override_shot)
         menu.addAction(act_override)
+
+        act_filename_as_shot = QAction("Set Filename as Shot ID", self)
+        act_filename_as_shot.triggered.connect(self._on_context_filename_as_shot)
+        menu.addAction(act_filename_as_shot)
 
         act_override_seq = QAction("Override Sequence ID...", self)
         act_override_seq.triggered.connect(self._on_context_override_seq)
