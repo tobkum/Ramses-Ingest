@@ -164,18 +164,35 @@ def _save_cache():
             "access_times": _CACHE_ACCESS_TIMES
         }
 
+        import tempfile
         if _USE_MSGPACK:
-            # Use msgpack (10x faster)
             cache_path = CACHE_PATH_MSGPACK
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            with open(cache_path, "wb") as f:
-                msgpack.pack(cache_data, f)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(cache_path), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "wb") as f:
+                    msgpack.pack(cache_data, f)
+                os.replace(tmp, cache_path)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
         else:
-            # Fallback to JSON
             cache_path = CACHE_PATH_JSON
             os.makedirs(os.path.dirname(cache_path), exist_ok=True)
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(cache_data, f)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(cache_path), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    json.dump(cache_data, f)
+                os.replace(tmp, cache_path)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
 
         _CACHE_DIRTY = False
     except Exception:

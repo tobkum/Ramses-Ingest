@@ -76,11 +76,16 @@ def _folder_lock(folder: str, timeout: float = 10.0):
     lock_path = os.path.join(folder, ".ram_write.lock")
     deadline = time.monotonic() + timeout
     acquired = False
+    def _write_and_close(fd: int) -> None:
+        try:
+            os.write(fd, str(os.getpid()).encode())
+        finally:
+            os.close(fd)
+
     while not acquired:
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, str(os.getpid()).encode())
-            os.close(fd)
+            _write_and_close(fd)
             acquired = True
         except FileExistsError:
             if time.monotonic() >= deadline:
@@ -91,8 +96,7 @@ def _folder_lock(folder: str, timeout: float = 10.0):
                     pass
                 # One final attempt; if it still fails, propagate.
                 fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                os.write(fd, str(os.getpid()).encode())
-                os.close(fd)
+                _write_and_close(fd)
                 acquired = True
             else:
                 time.sleep(0.05)
@@ -350,10 +354,16 @@ def check_for_duplicates(plans: list[IngestPlan]) -> None:
 
 def check_for_path_collisions(plans: list[IngestPlan]) -> None:
     from collections import defaultdict
+    # On case-insensitive filesystems (Windows, macOS HFS+) fold to lowercase so
+    # that paths differing only in case are correctly detected as collisions.
+    # On case-sensitive filesystems (Linux ext4/xfs) keep the original case.
+    _case_insensitive = sys.platform in ("win32", "darwin")
     path_to_plans = defaultdict(list)
     for plan in plans:
         if not plan.match.matched or not plan.target_publish_dir: continue
-        path_to_plans[os.path.normpath(plan.target_publish_dir).lower()].append(plan)
+        norm = os.path.normpath(plan.target_publish_dir)
+        key = norm.lower() if _case_insensitive else norm
+        path_to_plans[key].append(plan)
     for colliding in path_to_plans.values():
         if len(colliding) > 1:
             for p in colliding:
@@ -402,7 +412,7 @@ def resolve_paths_from_daemon(plans: list[IngestPlan], shot_objects: dict[str, o
         except Exception: pass
 
 
-def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None) -> None:
+def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None, state: str = "wip") -> None:
     """Write metadata and completion marker atomically.
 
     Uses two layers of locking:
@@ -422,7 +432,7 @@ def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecod
         timestamp = int(time.time())
         filenames = list(checksums.keys()) if checksums else [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)) and not f.startswith("._") and f not in {".DS_Store", "Thumbs.db", "_ramses_data.json", ".ramses_complete"}]
         for fname in filenames:
-            entry = {"version": version, "comment": comment, "state": "wip", "date": timestamp}
+            entry = {"version": version, "comment": comment, "state": state.lower(), "date": timestamp}
             if timecode: entry["timecode"] = timecode
             if checksums and fname in checksums: entry["md5"] = checksums[fname]
             data[fname] = entry
@@ -468,7 +478,7 @@ def execute_plan(
             result.frames_copied = fc if fc > 0 else count
         result.checksums, result.bytes_copied, result.published_path = sums, bts, plan.target_publish_dir
         if first in sums: result.checksum = sums[first]
-        if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums)
+        if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums, state=plan.state)
     except Exception as exc:
         error_msg = str(exc)
         if not dry_run and os.path.exists(plan.target_publish_dir):

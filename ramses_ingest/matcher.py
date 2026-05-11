@@ -106,9 +106,10 @@ class NamingRule:
                 compiled = re.compile(self.pattern, re.IGNORECASE)
             except re.error as exc:
                 raise ValueError(f"NamingRule has invalid regex pattern: {exc}") from exc
-            # Keep cache bounded to prevent unbounded memory growth
+            # Keep cache bounded: evict the oldest entry (FIFO) rather than
+            # clearing all, so the 255 recently-used patterns stay warm.
             if len(_PATTERN_CACHE) >= 256:
-                _PATTERN_CACHE.clear()
+                _PATTERN_CACHE.pop(next(iter(_PATTERN_CACHE)))
             _PATTERN_CACHE[self.pattern] = compiled
         return _PATTERN_CACHE[self.pattern]
 

@@ -203,10 +203,30 @@ class IngestEngine:
             total_req = 0
             for p in executable:
                 try:
-                    fp = p.match.clip.first_file
-                    if fp: total_req += os.path.getsize(fp) * (p.match.clip.frame_count if p.match.clip.is_sequence else 1)
-                    else: total_req += 500 * 1024 * 1024
-                except Exception: total_req += 500 * 1024 * 1024
+                    clip = p.match.clip
+                    if clip.is_sequence and len(clip.frames) > 1:
+                        # Sample first, middle, and last frame sizes to estimate
+                        # average; avoids under-counting variable-depth EXR sequences.
+                        sample_indices = {0, len(clip.frames) // 2, len(clip.frames) - 1}
+                        sample_sizes = []
+                        for idx in sample_indices:
+                            frame = clip.frames[idx]
+                            src = os.path.join(str(clip.directory), f"{clip.base_name}{clip.separator}{str(frame).zfill(clip.padding)}.{clip.extension}")
+                            try:
+                                sample_sizes.append(os.path.getsize(src))
+                            except OSError:
+                                pass
+                        if sample_sizes:
+                            avg_size = sum(sample_sizes) // len(sample_sizes)
+                            total_req += avg_size * clip.frame_count
+                        else:
+                            total_req += 500 * 1024 * 1024
+                    elif clip.first_file:
+                        total_req += os.path.getsize(clip.first_file)
+                    else:
+                        total_req += 500 * 1024 * 1024
+                except Exception:
+                    total_req += 500 * 1024 * 1024
             ok, err = check_disk_space(self.project_path or ".", total_req)
             if not ok: return [IngestResult(plan=p, error=err) for p in plans]
 
