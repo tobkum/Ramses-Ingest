@@ -6,7 +6,7 @@ from ramses_ingest.pattern_inference import (
     PatternInferenceEngine,
     Annotation,
     Flexibility,
-    test_pattern
+    test_pattern as _test_pattern,
 )
 
 
@@ -43,7 +43,7 @@ class TestPatternInference(unittest.TestCase):
 
         # Best candidate should extract all shot IDs correctly
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "shot")
+        extractions = _test_pattern(best.pattern, examples, "shot")
 
         expected = ["A077", "A081", "A027", "A016"]
         self.assertEqual(extractions, expected)
@@ -68,7 +68,7 @@ class TestPatternInference(unittest.TestCase):
 
         candidates = self.engine.infer_pattern([annotation], test_examples=examples)
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "resource")
+        extractions = _test_pattern(best.pattern, examples, "resource")
 
         # Should extract resources where present, None where absent
         # Note: Basic pattern might extract from all - that's OK for now
@@ -96,7 +96,7 @@ class TestPatternInference(unittest.TestCase):
 
         candidates = self.engine.infer_pattern([annotation], test_examples=examples)
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "shot")
+        extractions = _test_pattern(best.pattern, examples, "shot")
 
         expected = ["030", "030", "120"]
         self.assertEqual(extractions, expected)
@@ -120,7 +120,7 @@ class TestPatternInference(unittest.TestCase):
 
         candidates = self.engine.infer_pattern([annotation], test_examples=examples)
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "sequence")
+        extractions = _test_pattern(best.pattern, examples, "sequence")
 
         # All should extract "A1"
         expected = ["A1", "A1", "A1"]
@@ -145,7 +145,7 @@ class TestPatternInference(unittest.TestCase):
 
         candidates = self.engine.infer_pattern([annotation], test_examples=examples)
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "resource")
+        extractions = _test_pattern(best.pattern, examples, "resource")
 
         # Should extract "REF" from second example
         self.assertEqual(extractions[1], "REF")
@@ -171,7 +171,7 @@ class TestPatternInference(unittest.TestCase):
 
         candidates = self.engine.infer_pattern([annotation], test_examples=examples)
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "shot")
+        extractions = _test_pattern(best.pattern, examples, "shot")
 
         expected = ["27", "67", "35"]
         self.assertEqual(extractions, expected)
@@ -199,7 +199,7 @@ class TestPatternInference(unittest.TestCase):
         # (User would pick the right one from the list in real usage)
         found_correct = False
         for candidate in candidates:
-            extractions = test_pattern(candidate.pattern, examples, "resource")
+            extractions = _test_pattern(candidate.pattern, examples, "resource")
             if extractions[2] == "Proxy":
                 found_correct = True
                 break
@@ -227,7 +227,7 @@ class TestPatternInference(unittest.TestCase):
 
         candidates = self.engine.infer_pattern([annotation], test_examples=examples)
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "sequence")
+        extractions = _test_pattern(best.pattern, examples, "sequence")
 
         expected = ["012", "010", "010"]
         self.assertEqual(extractions, expected)
@@ -251,7 +251,7 @@ class TestPatternInference(unittest.TestCase):
 
         candidates = self.engine.infer_pattern([annotation], test_examples=examples)
         best = candidates[0]
-        extractions = test_pattern(best.pattern, examples, "shot")
+        extractions = _test_pattern(best.pattern, examples, "shot")
 
         expected = ["0500", "0090", "0110"]
         self.assertEqual(extractions, expected)
@@ -290,7 +290,7 @@ class TestPatternInference(unittest.TestCase):
         self.assertGreater(best.confidence, 0.5)
 
         # Should still extract correctly
-        extractions = test_pattern(best.pattern, examples, "shot")
+        extractions = _test_pattern(best.pattern, examples, "shot")
         expected = ["A077", "A081"]
         self.assertEqual(extractions, expected)
 

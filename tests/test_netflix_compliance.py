@@ -6,7 +6,7 @@ import re
 from ramses_ingest.pattern_inference import (
     PatternInferenceEngine,
     Annotation,
-    test_pattern
+    test_pattern as _test_pattern,
 )
 
 class TestNetflixCompliance(unittest.TestCase):

@@ -278,7 +278,7 @@ class TestAuditFix10_SubprocessValidation(unittest.TestCase):
 
 
 class TestAuditFix11_FileHandleCleanup(unittest.TestCase):
-    """Windows FlushFileBuffers handle is always closed via the finally block in copy_frames."""
+    """Windows FlushFileBuffers handle is always closed inside the flush thread's finally block."""
 
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp()
