@@ -58,7 +58,10 @@ def _get_base64_image(path: str, max_width: int | None = None) -> str:
             buffer.open(QIODevice.OpenModeFlag.WriteOnly)
             # Use PNG for better quality/transparency support in logos
             img.save(buffer, "PNG")
-            encoded = base64.b64encode(buffer.data().data()).decode("utf-8")
+            raw = buffer.data()
+            if not raw or len(raw) == 0:
+                return ""
+            encoded = base64.b64encode(raw.data()).decode("utf-8")
             b64_str = f"data:image/png;base64,{encoded}"
         else:
             # Standard encoding for thumbnails (already small)

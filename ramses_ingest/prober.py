@@ -195,8 +195,8 @@ def _save_cache():
                 raise
 
         _CACHE_DIRTY = False
-    except Exception:
-        pass
+    except Exception as _save_exc:
+        logger.warning("Failed to save probe cache: %s", _save_exc)
 
 def flush_cache():
     """Flush dirty cache to disk. Call this at the end of processing."""

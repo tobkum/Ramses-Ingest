@@ -249,13 +249,16 @@ class IngestEngine:
             for p in plans: results.append(IngestResult(plan=p, error="Cancelled"))
             flush_cache(); return results
         if executable:
+            import threading as _threading
+            stop_event = _threading.Event()
             max_w = _optimal_io_workers()
             copy_w_per_plan = max(1, 32 // min(len(executable), max_w))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-                fut_to_p = {executor.submit(execute_plan, p, generate_thumbnail=generate_thumbnails, generate_proxy=generate_proxies, ocio_config=self.ocio_config, ocio_in=p.colorspace_override or self.ocio_in, skip_ramses_registration=True, dry_run=dry_run, fast_verify=fast_verify, copy_max_workers=copy_w_per_plan): p for p in executable}
+                fut_to_p = {executor.submit(execute_plan, p, generate_thumbnail=generate_thumbnails, generate_proxy=generate_proxies, ocio_config=self.ocio_config, ocio_in=p.colorspace_override or self.ocio_in, skip_ramses_registration=True, dry_run=dry_run, fast_verify=fast_verify, copy_max_workers=copy_w_per_plan, stop_event=stop_event): p for p in executable}
                 for i, f in enumerate(concurrent.futures.as_completed(fut_to_p), 1):
                     if cancel_check and cancel_check():
                         _log("Ingest cancelled — stopping after current items.")
+                        stop_event.set()
                         for pending in fut_to_p:
                             pending.cancel()
                         break

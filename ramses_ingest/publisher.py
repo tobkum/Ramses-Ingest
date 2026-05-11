@@ -206,6 +206,7 @@ def copy_frames(
     clip: Clip, dest_dir: str, project_id: str, shot_id: str, step_id: str,
     resource: str = "", progress_callback: Callable[[str], None] | None = None,
     dry_run: bool = False, fast_verify: bool = True, max_workers: int | None = None,
+    stop_event: "threading.Event | None" = None,
 ) -> tuple[int, dict[str, str], int, str]:
     """Copy clip frames into *dest_dir* with parallel processing and verification."""
     max_workers = max_workers or min(32, (os.cpu_count() or 1) + 4)
@@ -232,6 +233,8 @@ def copy_frames(
 
     def _process_one(args):
         src, dst, dst_name, needs_md5, is_first, use_sampling = args
+        if stop_event and stop_event.is_set():
+            raise InterruptedError("Ingest cancelled")
         if dry_run: return ("dry_run_skipped" if needs_md5 else "skipped"), os.path.getsize(src), dst_name, is_first
         src_sz = os.path.getsize(src)
         try: shutil.copy2(src, dst)
@@ -240,26 +243,27 @@ def copy_frames(
             raise
         dst_sz = os.path.getsize(dst)
         if sys.platform == "win32":
-            _handle = -1
             try:
                 import ctypes
+                import threading as _thr
                 # GENERIC_WRITE (0x40000000) | OPEN_EXISTING (3) to flush the copied file
                 _handle = ctypes.windll.kernel32.CreateFileW(dst, 0x40000000, 0, None, 3, 0, None)
                 if _handle != -1:
-                    import threading as _thr
                     _done = _thr.Event()
                     def _flush(_h=_handle, _ev=_done):
+                        # CloseHandle lives inside the thread so it always runs
+                        # AFTER FlushFileBuffers — never while flush is in progress.
                         try:
                             ok = ctypes.windll.kernel32.FlushFileBuffers(_h)
                             if not ok:
                                 logger.warning("FlushFileBuffers failed (err=%d) for %s",
                                                ctypes.windll.kernel32.GetLastError(), dst_name)
-                        except Exception as e:
-                            logger.debug("Background flush thread failed: %s", e)
+                        except Exception as _e:
+                            logger.debug("Background flush thread failed: %s", _e)
                         finally:
+                            ctypes.windll.kernel32.CloseHandle(_h)
                             _ev.set()
-                    _t = _thr.Thread(target=_flush, daemon=True)
-                    _t.start()
+                    _thr.Thread(target=_flush, daemon=True).start()
                     if not _done.wait(timeout=15):
                         logger.warning("FlushFileBuffers timed out for %s", dst_name)
                 else:
@@ -267,9 +271,6 @@ def copy_frames(
                                  dst_name, ctypes.windll.kernel32.GetLastError())
             except Exception as _flush_exc:
                 logger.debug("Windows flush skipped for %s: %s", dst_name, _flush_exc)
-            finally:
-                if _handle != -1:
-                    ctypes.windll.kernel32.CloseHandle(_handle)
         if src_sz != dst_sz: raise OSError(f"Size mismatch after copy: {dst_name}")
         checksum = ""
         if needs_md5:
@@ -454,6 +455,7 @@ def execute_plan(
     progress_callback: Callable[[str], None] | None = None, ocio_config: str | None = None,
     ocio_in: str = "sRGB", ocio_out: str = "sRGB", skip_ramses_registration: bool = False,
     dry_run: bool = False, fast_verify: bool = True, copy_max_workers: int | None = None,
+    stop_event: "threading.Event | None" = None,
 ) -> IngestResult:
     _log = lambda m: progress_callback(m) if progress_callback else None
     result = IngestResult(plan=plan, missing_frames=plan.match.clip.missing_frames)
@@ -466,7 +468,7 @@ def execute_plan(
 
     try:
         _log(f"  {'Simulating' if dry_run else 'Copying'} files...")
-        count, sums, bts, first = copy_frames(plan.match.clip, plan.target_publish_dir, plan.project_id, plan.shot_id, plan.step_id, resource=plan.resource, progress_callback=progress_callback, dry_run=dry_run, fast_verify=fast_verify, max_workers=copy_max_workers)
+        count, sums, bts, first = copy_frames(plan.match.clip, plan.target_publish_dir, plan.project_id, plan.shot_id, plan.step_id, resource=plan.resource, progress_callback=progress_callback, dry_run=dry_run, fast_verify=fast_verify, max_workers=copy_max_workers, stop_event=stop_event)
         if plan.match.clip.is_sequence:
             result.frames_copied = count
         else:
