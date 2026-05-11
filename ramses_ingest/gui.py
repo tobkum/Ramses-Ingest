@@ -2972,6 +2972,35 @@ class IngestWindow(QMainWindow):
         else:
             self._log("  No matches found in EDL.")
 
+    def closeEvent(self, event) -> None:
+        """Cancel and join background workers before the window is destroyed."""
+        if self._ingest_worker and self._ingest_worker.isRunning():
+            self._ingest_worker.cancel()
+            if not self._ingest_worker.wait(5000):
+                try:
+                    self._ingest_worker.finished_results.disconnect()
+                    self._ingest_worker.progress.disconnect()
+                    self._ingest_worker.step_done.disconnect()
+                    self._ingest_worker.error.disconnect()
+                except RuntimeError:
+                    pass
+        if self._scan_worker and self._scan_worker.isRunning():
+            self._scan_worker.quit()
+            if not self._scan_worker.wait(2000):
+                try:
+                    self._scan_worker.finished_plans.disconnect()
+                    self._scan_worker.error.disconnect()
+                except RuntimeError:
+                    pass
+        if self._connection_worker and self._connection_worker.isRunning():
+            self._connection_worker.quit()
+            if not self._connection_worker.wait(2000):
+                try:
+                    self._connection_worker.finished.disconnect()
+                except RuntimeError:
+                    pass
+        super().closeEvent(event)
+
     def _toggle_log(self) -> None:
         visible = not self._log_edit.isVisible()
         self._log_edit.setVisible(visible)
