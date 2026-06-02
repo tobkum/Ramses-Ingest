@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -44,11 +44,7 @@ class ColorspaceIssue:
     """Represents a colorspace validation issue."""
     severity: str  # "critical", "warning", "info"
     message: str
-    affected_primaries: set[str] = None
-
-    def __post_init__(self):
-        if self.affected_primaries is None:
-            self.affected_primaries = set()
+    affected_primaries: set[str] = field(default_factory=set)
 
 
 def validate_batch_colorspace(plans: list[IngestPlan]) -> dict[int, ColorspaceIssue]:

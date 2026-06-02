@@ -89,15 +89,17 @@ def _folder_lock(folder: str, timeout: float = 10.0):
             acquired = True
         except FileExistsError:
             if time.monotonic() >= deadline:
-                # Assume the lock is stale and forcibly remove it.
+                # Assume the lock is stale: remove it, then loop back to
+                # retry atomically rather than making a single unconditional
+                # attempt (which could race against a third process).
                 try:
                     os.remove(lock_path)
                 except OSError:
                     pass
-                # One final attempt; if it still fails, propagate.
-                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-                _write_and_close(fd)
-                acquired = True
+                time.sleep(0.01)  # brief yield so any racing process can win
+                # Reset deadline so we do not immediately stale-remove again
+                # on the very next iteration if another process grabbed it.
+                deadline = time.monotonic() + 1.0
             else:
                 time.sleep(0.05)
     try:
@@ -327,7 +329,8 @@ def _get_next_version(publish_root: str) -> int:
                     if os.path.exists(os.path.join(v_path, ".ramses_complete")):
                         v = int(match.group("ver"))
                         if v > max_v: max_v = v
-        except Exception: pass
+        except Exception as _e:
+            logger.warning("Could not read version list from %s: %s", publish_root, _e)
         return max_v + 1
 
 
@@ -410,7 +413,8 @@ def resolve_paths_from_daemon(plans: list[IngestPlan], shot_objects: dict[str, o
             plan.version = version_cache[publish_root]
             version_str = f"{plan.resource}_{plan.version:03d}_{plan.state}" if plan.resource else f"{plan.version:03d}_{plan.state}"
             plan.target_publish_dir, plan.target_preview_dir = f"{publish_root}/{version_str}", f"{step_root}/_preview"
-        except Exception: pass
+        except Exception as _e:
+            logger.debug("Daemon path resolution skipped for %s (falling back to filesystem): %s", plan.shot_id, _e)
 
 
 def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None, state: str = "wip") -> None:
@@ -428,7 +432,10 @@ def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecod
         if os.path.isfile(meta_path):
             try:
                 with open(meta_path, "r", encoding="utf-8") as f: data = json.load(f)
-            except Exception: pass
+            except json.JSONDecodeError as _e:
+                logger.warning("Corrupt metadata at %s (will overwrite): %s", meta_path, _e)
+            except OSError as _e:
+                logger.warning("Could not read metadata at %s (will overwrite): %s", meta_path, _e)
         
         timestamp = int(time.time())
         filenames = list(checksums.keys()) if checksums else [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)) and not f.startswith("._") and f not in {".DS_Store", "Thumbs.db", "_ramses_data.json", ".ramses_complete"}]

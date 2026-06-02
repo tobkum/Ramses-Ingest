@@ -273,7 +273,7 @@ class IngestEngine:
 
         jobs = [(r, r._thumbnail_job) for r in results if hasattr(r, '_thumbnail_job') and r._thumbnail_job]
         if jobs and generate_thumbnails:
-            _log(f"Phase 2.5: Thumbnails...")
+            _log(f"Phase 3: Thumbnails...")
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
                 f_to_r = {executor.submit(_generate_one_thumbnail, j): r for r, j in jobs}
                 for f in concurrent.futures.as_completed(f_to_r):

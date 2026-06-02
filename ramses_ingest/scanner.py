@@ -153,9 +153,12 @@ def group_files(file_paths: Iterable[str | Path]) -> list[Clip]:
                 ))
 
     # 2. Group Images
-    # Key intentionally omits per-frame digit count so that frames crossing a
-    # padding boundary (e.g. shot.0099.exr / shot.0100.exr / shot.101.exr) are
-    # kept in the same sequence rather than split into separate clips.
+    # Key includes (directory, base_name, separator, extension) but intentionally
+    # omits per-frame digit count so that frames crossing a padding boundary
+    # (e.g. shot.0099.exr → shot.0100.exr → shot.101.exr) are kept in the
+    # same sequence rather than split into separate clips.  The separator IS
+    # part of the key so that a delivery mixing dot- and underscore-separated
+    # files (rare but possible) produces distinct clips rather than merging them.
     buckets = defaultdict(list)
     for base, sep, frame, ext, full_path, directory, padding in image_files:
         key = (str(directory), base, sep, ext)

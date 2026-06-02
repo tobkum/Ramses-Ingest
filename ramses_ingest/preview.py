@@ -46,9 +46,14 @@ def _escape_ffmpeg_filter_path(path: str) -> str:
         # Convert backslashes to forward slashes for FFmpeg
         path = path.replace("\\", "/")
 
-    # Escape ALL colons except Windows drive letters (single letter followed by colon at start)
-    # Pattern: Match colons not preceded by start-of-string + single letter
-    clean = re.sub(r'(?<!^[A-Za-z]):', r'\\:', path)
+    # Escape colons that are NOT a Windows drive letter (C:, D:, etc.).
+    # Python's re module does not support variable-length lookbehinds, so we
+    # handle the drive-letter case explicitly instead of using a regex.
+    if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
+        # Keep the drive colon intact; escape any remaining colons in the rest.
+        clean = path[:2] + path[2:].replace(":", "\\:")
+    else:
+        clean = path.replace(":", "\\:")
 
     return clean
 
@@ -88,7 +93,9 @@ def generate_thumbnail(
     Returns:
         True on success.
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
 
     if clip.is_sequence:
         return _thumbnail_from_sequence(clip, output_path, frame_index, ocio_config, ocio_in)
@@ -109,7 +116,9 @@ def generate_proxy(
     if clip.is_sequence and not clip.frames:
         return False
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    out_dir = os.path.dirname(output_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
 
     vf_chain = [f"scale={PROXY_WIDTH}:-2"]
     if ocio_config and os.path.isfile(ocio_config):
