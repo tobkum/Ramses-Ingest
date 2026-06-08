@@ -446,8 +446,8 @@ class TestPublisherConcurrency(unittest.TestCase):
             with self.assertRaises(OSError):
                 _write_ramses_metadata(folder, version=1, checksums={"test.exr": "md5"})
 
-        # Verify no temp files left behind
-        temp_files = [f for f in os.listdir(folder) if f.startswith(".ramses_data_")]
+        # Verify no temp files left behind (prefix must match mkstemp call in publisher.py)
+        temp_files = [f for f in os.listdir(folder) if f.startswith(".ram_meta_")]
         self.assertEqual(len(temp_files), 0)
 
     def test_version_cache_optimization(self):

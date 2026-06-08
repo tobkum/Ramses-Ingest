@@ -66,10 +66,28 @@ class TestIngestEngine(unittest.TestCase):
         mock_report.assert_called_once()
 
     def test_execute_aborts_on_disconnect(self):
-        self.engine._connected = False
-        results = self.engine.execute([])
-        # Should return an empty list or error results if plans were provided
-        self.assertEqual(len(results), 0)
+        """execute() with a real plan while disconnected must return a failed result, not silently drop it."""
+        import tempfile, shutil
+        tmp = tempfile.mkdtemp()
+        try:
+            src = os.path.join(tmp, "shot.mov")
+            open(src, "wb").close()
+            clip = Clip("shot", "mov", Path(tmp),
+                        is_sequence=False, frames=[], first_file=src)
+            match = MatchResult(clip, matched=True, shot_id="SH010", sequence_id="SEQ")
+            plan = IngestPlan(
+                match=match, media_info=MediaInfo(),
+                sequence_id="SEQ", shot_id="SH010", project_id="TEST",
+                target_publish_dir=os.path.join(tmp, "pub")
+            )
+            self.engine._connected = False
+            results = self.engine.execute([plan])
+            # When disconnected, execute must return one failed result per plan
+            # (not silently drop plans or raise an exception)
+            self.assertEqual(len(results), 1)
+            self.assertFalse(results[0].success)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
 if __name__ == "__main__":
     unittest.main()

@@ -305,11 +305,13 @@ class TestProberThreading(unittest.TestCase):
             for t in threads:
                 t.join()
 
-            # All threads should load successfully
-            self.assertEqual(len(results), 5)
-            # Cache size should be consistent
-            for size in results:
-                self.assertGreaterEqual(size, 0)
+            # After all threads finish, the global cache must contain the 100
+            # entries from the fixture (last-write-wins across the race is fine;
+            # what matters is the cache isn't corrupted/empty at the end).
+            self.assertGreaterEqual(
+                len(prober._METADATA_CACHE), 100,
+                "Cache must contain at least the 100 fixture entries after concurrent load"
+            )
         finally:
             prober.CACHE_PATH_JSON = original_json_path
             prober.CACHE_PATH_MSGPACK = original_msgpack_path

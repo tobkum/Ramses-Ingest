@@ -132,40 +132,94 @@ class TestAuditFix2_FutureTimeouts(unittest.TestCase):
 
 
 class TestAuditFix5_ThumbnailJobCollection(unittest.TestCase):
-    """Thumbnail jobs are collected only from results that have a non-None _thumbnail_job."""
+    """execute() collects thumbnail jobs only from successful results that have a non-None _thumbnail_job."""
 
-    def test_only_results_with_job_included(self):
-        """Results without _thumbnail_job or with None value are excluded."""
-        from ramses_ingest.publisher import IngestPlan, IngestResult
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_only_successful_results_generate_thumbnail_job(self):
+        """execute() must populate _thumbnail_job on success and skip failed results."""
+        from ramses_ingest.app import IngestEngine
+        from ramses_ingest.publisher import IngestPlan
         from ramses_ingest.matcher import MatchResult
         from ramses_ingest.prober import MediaInfo
 
-        clip = Clip(base_name="t", extension="exr", directory=Path("/tmp"))
-        match = MatchResult(clip=clip, matched=True)
-        plan = IngestPlan(match=match, media_info=MediaInfo())
+        # Good clip: actual file on disk so copy_frames succeeds
+        src = os.path.join(self.temp_dir, "test.mov")
+        open(src, "wb").close()
+        clip = Clip(base_name="test", extension="mov", directory=Path(self.temp_dir),
+                    is_sequence=False, frames=[], first_file=src)
+        match = MatchResult(clip=clip, matched=True, shot_id="SH010", sequence_id="SEQ010")
+        pub_dir = os.path.join(self.temp_dir, "pub", "v001")
+        prev_dir = os.path.join(self.temp_dir, "preview")
+        plan = IngestPlan(match=match, media_info=MediaInfo(), project_id="PROJ",
+                          shot_id="SH010", target_publish_dir=pub_dir,
+                          target_preview_dir=prev_dir)
 
-        r_with_job = IngestResult(plan=plan, success=True)
-        r_with_job._thumbnail_job = {"clip": clip, "path": "/tmp/thumb.jpg"}
+        engine = IngestEngine()
+        engine._connected = True
+        engine._project_id = "PROJ"
+        engine._project_path = self.temp_dir
+        engine._project_fps = 24.0
+        engine._project_width = 1920
+        engine._project_height = 1080
 
-        r_null_job = IngestResult(plan=plan, success=True)
-        r_null_job._thumbnail_job = None
+        with patch('ramses_ingest.app.register_ramses_objects'), \
+             patch('ramses_ingest.app.check_disk_space', return_value=(True, "")), \
+             patch('ramses_ingest.app.generate_html_report', return_value=False):
+            results = engine.execute([plan], generate_thumbnails=True,
+                                     generate_proxies=False, update_status=False)
 
-        r_no_attr = IngestResult(plan=plan, success=False, error="copy failed")
-        # r_no_attr has no _thumbnail_job attribute at all
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertTrue(r.success, f"Expected success but got: {r.error}")
+        # execute() must have attached a thumbnail job dict with the expected keys
+        self.assertTrue(hasattr(r, '_thumbnail_job'), "Successful result must have _thumbnail_job")
+        self.assertIsNotNone(r._thumbnail_job, "_thumbnail_job must not be None on success")
+        self.assertIn('clip', r._thumbnail_job)
+        self.assertIn('path', r._thumbnail_job)
 
-        results = [r_with_job, r_null_job, r_no_attr]
-        jobs = [(r, r._thumbnail_job) for r in results
-                if hasattr(r, '_thumbnail_job') and r._thumbnail_job]
+    def test_failed_result_has_no_thumbnail_job(self):
+        """execute() must not attach _thumbnail_job when copy fails."""
+        from ramses_ingest.app import IngestEngine
+        from ramses_ingest.publisher import IngestPlan
+        from ramses_ingest.matcher import MatchResult
+        from ramses_ingest.prober import MediaInfo
 
-        self.assertEqual(len(jobs), 1)
-        self.assertIs(jobs[0][0], r_with_job)
-        self.assertEqual(jobs[0][1]["path"], "/tmp/thumb.jpg")
+        src = os.path.join(self.temp_dir, "test2.mov")
+        open(src, "wb").close()
+        clip = Clip(base_name="test2", extension="mov", directory=Path(self.temp_dir),
+                    is_sequence=False, frames=[], first_file=src)
+        match = MatchResult(clip=clip, matched=True, shot_id="SH020", sequence_id="SEQ010")
+        pub_dir = os.path.join(self.temp_dir, "pub2", "v001")
+        plan = IngestPlan(match=match, media_info=MediaInfo(), project_id="PROJ",
+                          shot_id="SH020", target_publish_dir=pub_dir)
 
-    def test_empty_results_gives_empty_jobs(self):
-        """No results means no thumbnail jobs."""
-        jobs = [(r, r._thumbnail_job) for r in []
-                if hasattr(r, '_thumbnail_job') and r._thumbnail_job]
-        self.assertEqual(jobs, [])
+        engine = IngestEngine()
+        engine._connected = True
+        engine._project_id = "PROJ"
+        engine._project_path = self.temp_dir
+        engine._project_fps = 24.0
+        engine._project_width = 1920
+        engine._project_height = 1080
+
+        with patch('ramses_ingest.app.register_ramses_objects'), \
+             patch('ramses_ingest.app.check_disk_space', return_value=(True, "")), \
+             patch('ramses_ingest.app.generate_html_report', return_value=False), \
+             patch('ramses_ingest.publisher.copy_frames', side_effect=OSError("copy failed")):
+            results = engine.execute([plan], generate_thumbnails=True,
+                                     generate_proxies=False, update_status=False)
+
+        self.assertEqual(len(results), 1)
+        r = results[0]
+        self.assertFalse(r.success)
+        # Failed result must not have a thumbnail job
+        job = getattr(r, '_thumbnail_job', None)
+        self.assertIsNone(job, "Failed result must not carry a thumbnail job")
 
 
 class TestAuditFix6_VersionLockRaceCondition(unittest.TestCase):
@@ -396,8 +450,8 @@ class TestAuditFix13_AtomicMetadataWrites(unittest.TestCase):
             except Exception:
                 pass
 
-        # Temp files should be cleaned up
-        temp_files = [f for f in os.listdir(folder) if f.startswith(".ramses_data_")]
+        # Temp files should be cleaned up — prefix must match mkstemp call in publisher.py
+        temp_files = [f for f in os.listdir(folder) if f.startswith(".ram_meta_")]
         self.assertEqual(len(temp_files), 0)
 
 
@@ -602,6 +656,12 @@ class TestAuditFix19_ExceptionPatterns(unittest.TestCase):
 class TestAuditFix20_IDSanitization(unittest.TestCase):
     """Fix #20: ID sanitization (slashes, backslashes, dots)."""
 
+    def setUp(self):
+        self.temp_dir = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
     def test_slash_in_resource_sanitized_in_thumbnail_path(self):
         """Slashes in resource names are replaced with underscores in the thumbnail job path."""
         from ramses_ingest.publisher import execute_plan, IngestPlan
@@ -634,23 +694,54 @@ class TestAuditFix20_IDSanitization(unittest.TestCase):
         self.assertIn("DEPTH_PASS", thumb_filename,
                       "Slash should be replaced with underscore")
 
-    def test_backslash_in_resource_sanitized(self):
-        """Backslashes should be sanitized."""
-        # Pattern: re.sub(r'[/\\:*?"<>|]', '_', plan.resource)
-        import re
-        resource = "DEPTH\\PASS"
-        safe = re.sub(r'[/\\:*?"<>|]', '_', resource)
-        self.assertEqual(safe, "DEPTH_PASS")
+    def test_backslash_in_resource_sanitized_in_thumbnail_path(self):
+        """Backslashes in resource names must not appear in the thumbnail filename produced by execute_plan."""
+        from ramses_ingest.publisher import execute_plan, IngestPlan
+        from ramses_ingest.matcher import MatchResult
+        from ramses_ingest.prober import MediaInfo
 
-    def test_double_dot_in_resource_sanitized(self):
-        """Double dots should be sanitized."""
-        import re
-        resource = "../../../etc"
-        safe = re.sub(r'[/\\:*?"<>|]', '_', resource)
-        # Remove leading dots
-        if '..' in safe or safe.startswith('.'):
-            safe = safe.replace('..', '_').lstrip('.')
-        self.assertNotIn('..', safe)
+        src = os.path.join(self.temp_dir, "test3.mov")
+        open(src, "wb").close()
+        clip = Clip(base_name="test3", extension="mov", directory=Path(self.temp_dir),
+                    is_sequence=False, frames=[], first_file=src)
+        match = MatchResult(clip=clip, matched=True)
+        plan = IngestPlan(
+            match=match, media_info=MediaInfo(), project_id="PROJ",
+            shot_id="SH010", resource="DEPTH\\PASS",
+            target_publish_dir=os.path.join(self.temp_dir, "pub3"),
+            target_preview_dir=os.path.join(self.temp_dir, "preview3"),
+        )
+
+        with patch('ramses_ingest.publisher.copy_frames', return_value=(1, {}, 100, src)), \
+             patch('ramses_ingest.publisher._write_ramses_metadata'), \
+             patch('os.makedirs'):
+            result = execute_plan(plan, generate_thumbnail=True, skip_ramses_registration=True)
+
+        self.assertTrue(result.success, f"execute_plan should succeed: {result.error}")
+        self.assertIsNotNone(result._thumbnail_job)
+        thumb_filename = os.path.basename(result._thumbnail_job["path"])
+        self.assertNotIn("\\", thumb_filename, "Backslash must not appear in thumbnail filename")
+        self.assertIn("DEPTH_PASS", thumb_filename, "Backslash should be replaced with underscore")
+
+    def test_double_dot_in_resource_rejected_by_resolve_paths(self):
+        """Path-traversal resource names must be rejected by resolve_paths, not silently sanitised."""
+        from ramses_ingest.publisher import resolve_paths, IngestPlan
+        from ramses_ingest.matcher import MatchResult
+        from ramses_ingest.prober import MediaInfo
+
+        clip = Clip(base_name="test", extension="exr", directory=Path("/tmp"))
+        match = MatchResult(clip=clip, matched=True, shot_id="SH010", sequence_id="SEQ")
+        plan = IngestPlan(match=match, media_info=MediaInfo(), project_id="PROJ",
+                          shot_id="SH010", resource="../../../etc")
+
+        resolve_paths([plan], os.path.join(self.temp_dir, "project"))
+
+        # resolve_paths must have rejected the plan — either via an error string or
+        # by leaving target_publish_dir empty (so can_execute is False)
+        self.assertFalse(
+            plan.can_execute,
+            "Plan with path-traversal resource must not be executable"
+        )
 
 
 if __name__ == '__main__':
