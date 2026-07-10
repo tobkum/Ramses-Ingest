@@ -159,8 +159,15 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
         return False
 
 
-def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", studio_logo_path: str = "", operator: str = "Unknown") -> bool:
-    """Generate a clean, professional HTML manifest with exact analytics and technical flagging."""
+def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", studio_logo_path: str = "", operator: str = "Unknown", verification: str = "") -> bool:
+    """Generate a clean, professional HTML manifest with exact analytics and technical flagging.
+
+    Args:
+        verification: How checksums were produced — "fast" (sampled MD5),
+            "full" (bit-perfect), "dry-run" (no files copied), or "" (unknown,
+            badge omitted). Shown in the meta grid so the report is honest
+            about its audit strength.
+    """
     
     css = """
     :root {
@@ -686,11 +693,71 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         font-weight: 500;
     }
 
+    /* Per-clip issue lines (failure reason / warnings inside the Shot cell) */
+    .row-error {
+        margin-top: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--error);
+        max-width: 340px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .row-warning {
+        margin-top: 4px;
+        font-size: 12px;
+        color: var(--warning);
+        max-width: 340px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    /* Table toolbar: search + status filter */
+    .table-toolbar {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin: 24px 0 12px 0;
+        flex-wrap: wrap;
+    }
+    .table-toolbar input[type="search"] {
+        flex: 1;
+        min-width: 220px;
+        max-width: 420px;
+        padding: 8px 14px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--card-bg);
+        color: var(--text-main);
+        font-size: 13px;
+    }
+    .table-toolbar input[type="search"]:focus {
+        outline: none;
+        border-color: var(--accent);
+    }
+    .filter-btn {
+        padding: 7px 14px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--table-header);
+        color: var(--text-muted);
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s ease;
+    }
+    .filter-btn:hover { border-color: var(--accent); color: var(--text-main); }
+    .filter-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .filter-count { opacity: 0.75; font-weight: 500; }
+
     /* Print Styles */
     @media print {
         body { background: white; padding: 0; }
         .report { box-shadow: none; border: none; padding: 20px; }
         .theme-toggle { display: none; }
+        .table-toolbar { display: none; }
         thead th { position: static; }
         tbody tr:hover { background: transparent; }
     }
@@ -795,6 +862,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     has_deviations = False
     row_number = 0
     current_tier = 0 # 0=Hero, 1=Aux
+    status_counts = Counter()  # ok / warn / fail / skip — feeds the filter buttons
 
     for res in sorted_results:
         if not res or not res.plan: continue
@@ -804,7 +872,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         if row_number > 0 and new_tier != current_tier:
             # Add a sub-header row for Auxiliary data
             rows.append(f"""
-            <tr style="background: var(--table-header) !important;">
+            <tr class="tier-divider" style="background: var(--table-header) !important;">
                 <td colspan="10" style="padding: 12px 20px; font-size: 11px; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 2px;">
                     Supporting & Auxiliary Data
                 </td>
@@ -912,9 +980,31 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
 
         source_name = f"{res.plan.match.clip.base_name}.{res.plan.match.clip.extension}"
 
+        # Per-clip issue lines: the failure reason (previously only visible in
+        # the JSON audit) and any non-blocking warnings from the engine.
+        issue_lines = []
+        if not res.success and res.error:
+            issue_lines.append(
+                f'<div class="row-error" title="{_esc(res.error)}">✖ {_esc(res.error)}</div>'
+            )
+        for w in getattr(res.plan, "warnings", []):
+            issue_lines.append(
+                f'<div class="row-warning" title="{_esc(w)}">⚠ {_esc(w)}</div>'
+            )
+        issues_html = "".join(issue_lines)
+
+        # Row status for the client-side filter
+        if not res.success:
+            row_status = "skip" if "skipped" in (res.error or "").lower() else "fail"
+        elif getattr(res.plan, "warnings", []) or res.missing_frames:
+            row_status = "warn"
+        else:
+            row_status = "ok"
+        status_counts[row_status] += 1
+
         row_number += 1
         row_html = f"""
-        <tr>
+        <tr class="clip-row" data-status="{row_status}">
             <td class="row-num">{row_number}</td>
             <td>{img_tag}</td>
             <td>
@@ -922,6 +1012,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
                     <div class="xray-target">{_esc(res.plan.shot_id)}{resource_tag}</div>
                     <div class="xray-source" style="margin-top:2px;">{_esc(res.plan.sequence_id or "")}</div>
                     <div class="xray-source"><span class="xray-arrow">←</span> {_esc(source_name)}</div>
+                    {issues_html}
                 </div>
             </td>
             <td><span class="code">v{res.plan.version:03d}</span></td>
@@ -1010,6 +1101,22 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     operator = _esc(operator)
     step_id = _esc(str(step_id))
 
+    # Verification badge: be explicit about the audit strength of the shown MD5s.
+    verification_labels = {
+        "fast": "Fast (sampled MD5)",
+        "full": "Full (bit-perfect)",
+        "dry-run": "Dry Run (no files copied)",
+    }
+    verification_label = verification_labels.get(verification, "")
+    verification_item = ""
+    if verification_label:
+        verification_item = (
+            '                <div class="meta-item"><span class="meta-label">Verification</span>'
+            f'<span class="meta-value">{_esc(verification_label)}</span></div>'
+        )
+
+    batch_id = time.strftime("%Y%m%d-%H%M%S")
+
     html_parts = [
         "<!DOCTYPE html>",
         '<html data-theme="dark">',
@@ -1025,6 +1132,27 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "            html.setAttribute('data-theme', next);",
         "            document.getElementById('theme-label').textContent = next === 'dark' ? 'LIGHT MODE' : 'DARK MODE';",
         "        }",
+        "        let activeFilter = 'all';",
+        "        function applyFilters() {",
+        "            const q = document.getElementById('clip-search').value.toLowerCase();",
+        "            document.querySelectorAll('tr.clip-row').forEach(function(row) {",
+        "                const statusOk = (activeFilter === 'all') || (row.dataset.status === activeFilter);",
+        "                const textOk = !q || row.textContent.toLowerCase().indexOf(q) !== -1;",
+        "                row.style.display = (statusOk && textOk) ? '' : 'none';",
+        "            });",
+        "            // Hide the auxiliary divider when everything below it is hidden",
+        "            document.querySelectorAll('tr.tier-divider').forEach(function(div) {",
+        "                let sib = div.nextElementSibling, any = false;",
+        "                while (sib) { if (sib.classList.contains('clip-row') && sib.style.display !== 'none') { any = true; break; } sib = sib.nextElementSibling; }",
+        "                div.style.display = any ? '' : 'none';",
+        "            });",
+        "        }",
+        "        function setFilter(btn, status) {",
+        "            activeFilter = status;",
+        "            document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });",
+        "            btn.classList.add('active');",
+        "            applyFilters();",
+        "        }",
         "    </script>",
         "</head>",
         "<body>",
@@ -1039,7 +1167,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '                <button class="theme-toggle" onclick="toggleTheme()">',
         '                    <span id="theme-label">LIGHT MODE</span>',
         '                </button>',
-        f'                <div style="font-size: 13px; color: var(--text-muted); text-align: right; font-weight: 600;">Batch ID: {int(time.time())}<br>{timestamp}</div>',
+        f'                <div style="font-size: 13px; color: var(--text-muted); text-align: right; font-weight: 600;">Batch ID: {batch_id}<br>{timestamp}</div>',
         '            </div>',
         '        </header>',
         '        <div class="health-dashboard">',
@@ -1054,10 +1182,18 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '                <div class="meta-item"><span class="meta-label">Total Volume</span><span class="meta-value">' + size_display + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Clips</span><span class="meta-value">' + f'{succeeded} of {len(results)} ok' + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Frames</span><span class="meta-value">' + str(total_frames) + '</span></div>',
+        verification_item,
         '            </div>',
         '        </div>',
         error_summary_html,
         attention_box,
+        '        <div class="table-toolbar">',
+        '            <input type="search" id="clip-search" placeholder="Search shot, sequence, filename…" oninput="applyFilters()">',
+        f'            <button class="filter-btn active" onclick="setFilter(this, \'all\')">All <span class="filter-count">({row_number})</span></button>',
+        f'            <button class="filter-btn" onclick="setFilter(this, \'ok\')">Passed <span class="filter-count">({status_counts["ok"]})</span></button>',
+        f'            <button class="filter-btn" onclick="setFilter(this, \'warn\')">Warnings <span class="filter-count">({status_counts["warn"]})</span></button>',
+        f'            <button class="filter-btn" onclick="setFilter(this, \'fail\')">Failed <span class="filter-count">({status_counts["fail"]})</span></button>',
+        '        </div>',
         "        <table>",
         "            <thead>",
         "                <tr>",

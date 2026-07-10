@@ -275,6 +275,19 @@ class IngestEngine:
         # and must not stay invisible to the database.
         if not dry_run:
             _log("Phase 2: Database Registration...")
+            # Fetch states/steps ONCE per batch — update_ramses_status would
+            # otherwise re-query both lists from the daemon for every clip.
+            states_cache = steps_cache = None
+            try:
+                from ramses import Ramses, StepType
+                ram = Ramses.instance()
+                if ram.online():
+                    states_cache = ram.states()
+                    project = ram.project()
+                    if project:
+                        steps_cache = project.steps(StepType.SHOT_PRODUCTION)
+            except Exception:
+                pass  # Caches stay None; update_ramses_status falls back per call.
             registered = set()
             for res in results:
                 if not res.success: continue
@@ -282,13 +295,13 @@ class IngestEngine:
                 rk = (plan.shot_id.upper(), plan.sequence_id.upper())
                 if rk not in registered:
                     try:
-                        register_ramses_objects(plan, lambda _: None, sequence_cache=self._sequence_uuids, shot_cache=self._shot_objects, skip_status_update=bool(plan.resource))
+                        register_ramses_objects(plan, lambda _: None, sequence_cache=self._sequence_uuids, shot_cache=self._shot_objects, skip_status_update=bool(plan.resource), states_cache=states_cache, steps_cache=steps_cache)
                         registered.add(rk)
                     except Exception as e: _log(f"  Warning: DB Fail {plan.shot_id}: {e}")
                 elif not plan.resource:
                     # Shot/sequence already registered via another clip (e.g. a
                     # resource) — still push the hero's status/state.
-                    update_ramses_status(plan, plan.state, shot_cache=self._shot_objects)
+                    update_ramses_status(plan, plan.state, shot_cache=self._shot_objects, states_cache=states_cache, steps_cache=steps_cache)
 
         if cancel_check and cancel_check():
             flush_cache(); return results
@@ -303,9 +316,10 @@ class IngestEngine:
                     if ok: f_to_r[f].preview_path = path
 
         _log("Phase 4: Reports...")
+        verification = "dry-run" if dry_run else ("fast" if fast_verify else "full")
         ts, report_dir = int(time.time()), (os.path.join(self.project_path, "_ingest_reports") if self.project_path else ".")
         h_path = os.path.join(report_dir, f"Ingest_Report_{self.project_id}_{ts}.html")
-        if generate_html_report(results, h_path, studio_name=self.studio_name, studio_logo_path=self.studio_logo, operator=self._operator_name):
+        if generate_html_report(results, h_path, studio_name=self.studio_name, studio_logo_path=self.studio_logo, operator=self._operator_name, verification=verification):
             self.last_report_path = h_path; _log(f"  Report: {h_path}")
         
         if export_json_audit:

@@ -546,7 +546,7 @@ def execute_plan(
     return result
 
 
-def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequence_cache: dict[str, str] | None = None, shot_cache: dict[str, object] | None = None, skip_status_update: bool = False) -> None:
+def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequence_cache: dict[str, str] | None = None, shot_cache: dict[str, object] | None = None, skip_status_update: bool = False, states_cache: list | None = None, steps_cache: list | None = None) -> None:
     try:
         from ramses import Ramses
         ram = Ramses.instance()
@@ -610,13 +610,49 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequen
                 raise
         else:
             if any(shot_obj.data().get(k) != v for k, v in shot_data.items()): shot_obj.setData(shot_data)
-    if not skip_status_update: update_ramses_status(plan, plan.state, shot_cache=shot_cache)
+    if not skip_status_update: update_ramses_status(plan, plan.state, shot_cache=shot_cache, states_cache=states_cache, steps_cache=steps_cache)
 
 
 _USER_ASSIGNMENT_SUPPORTED = True
 _USER_ASSIGNMENT_LOCK = threading.Lock()
 
-def update_ramses_status(plan: IngestPlan, status_name: str = "OK", shot_cache: dict[str, object] | None = None) -> bool:
+
+def _apply_status_fields(status, state, plan: IngestPlan, status_name: str) -> None:
+    """Write all status fields in ONE setData round-trip.
+
+    Each RamStatus setter posts a full setData to the daemon, so batching
+    state + completion + version + comment saves three round-trips per shot.
+    Version and comment record ingest provenance: the Ramses Client then shows
+    which version was ingested and which delivery folder it came from.
+    """
+    from datetime import datetime
+    data = status.data()
+    data["state"] = state.uuid()
+    data["completionRatio"] = 100 if status_name.upper() == "OK" else 0
+    data["version"] = plan.version
+    resource_tag = f" [{plan.resource}]" if plan.resource else ""
+    data["comment"] = (
+        f"Ingested v{plan.version:03d}{resource_tag} from "
+        f"{normalize_path(plan.match.clip.directory)} via Ramses-Ingest"
+    )
+    # Upstream date format (see ram_status.py) — including the stray dash.
+    data["date"] = datetime.now().strftime("%Y-%m-%d- %H:%M:%S")
+    status.setData(data)
+
+
+def update_ramses_status(
+    plan: IngestPlan,
+    status_name: str = "OK",
+    shot_cache: dict[str, object] | None = None,
+    states_cache: list | None = None,
+    steps_cache: list | None = None,
+) -> bool:
+    """Update the shot/step status in Ramses.
+
+    ``states_cache`` and ``steps_cache`` avoid re-fetching the (identical)
+    state and step lists from the daemon for every clip of a batch — pass the
+    results of ``ram.states()`` / ``project.steps(StepType.SHOT_PRODUCTION)``.
+    """
     global _USER_ASSIGNMENT_SUPPORTED
     try:
         from ramses import Ramses
@@ -627,13 +663,15 @@ def update_ramses_status(plan: IngestPlan, status_name: str = "OK", shot_cache: 
         target_shot = shot_cache.get(plan.shot_id.upper()) if shot_cache else next((s for s in project.shots(lazyLoading=False) if s.shortName().upper() == plan.shot_id.upper()), None)
         if not target_shot: return False
         from ramses.ram_step import StepType
-        target_step = next((s for s in project.steps(StepType.SHOT_PRODUCTION) if s.shortName() == plan.step_id), None)
+        steps = steps_cache if steps_cache is not None else project.steps(StepType.SHOT_PRODUCTION)
+        target_step = next((s for s in steps if s.shortName() == plan.step_id), None)
         if not target_step: return False
         status = target_shot.currentStatus(target_step)
         if status:
-            state = next((s for s in ram.states() if s.shortName().upper() == status_name.upper()), None)
+            states = states_cache if states_cache is not None else ram.states()
+            state = next((s for s in states if s.shortName().upper() == status_name.upper()), None)
             if state:
-                status.setState(state); status.setCompletionRatio(100 if status_name.upper() == "OK" else 0)
+                _apply_status_fields(status, state, plan, status_name)
                 with _USER_ASSIGNMENT_LOCK:
                     do_assign = _USER_ASSIGNMENT_SUPPORTED
                 if do_assign:
