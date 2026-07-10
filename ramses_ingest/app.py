@@ -34,6 +34,23 @@ def _optimal_io_workers() -> int:
     return min(32, (os.cpu_count() or 1) + 4)
 
 
+def apply_colorspace_validation(plans: List[IngestPlan]) -> None:
+    """Route batch colorspace findings onto the plans.
+
+    Critical issues (mixed primaries, missing metadata) block execution via
+    ``plan.error``; warning-severity issues (e.g. mixed transfer functions)
+    go to ``plan.warnings`` and never block.
+    """
+    cs_issues = validate_batch_colorspace(plans)
+    for idx, issue in cs_issues.items():
+        if idx < len(plans):
+            msg = f"COLORSPACE: {issue.message}"
+            if issue.severity == "critical":
+                plans[idx].error = f"{plans[idx].error} | {msg}" if plans[idx].error else msg
+            else:
+                plans[idx].warnings.append(msg)
+
+
 def _generate_one_thumbnail(job_data):
     """Worker function for parallel thumbnail generation."""
     try:
@@ -172,12 +189,7 @@ class IngestEngine:
         
         check_for_duplicates(plans); check_for_path_collisions(plans)
         
-        # Colorspace Validation
-        cs_issues = validate_batch_colorspace(plans)
-        for idx, issue in cs_issues.items():
-            if idx < len(plans):
-                msg = f"COLORSPACE: {issue.message}"
-                plans[idx].error = f"{plans[idx].error} | {msg}" if plans[idx].error else msg
+        apply_colorspace_validation(plans)
 
         return plans
 
@@ -230,19 +242,7 @@ class IngestEngine:
             ok, err = check_disk_space(self.project_path or ".", total_req)
             if not ok: return [IngestResult(plan=p, error=err) for p in plans]
 
-        if not dry_run:
-            _log("Phase 1: Database Registration...")
-            registered = set()
-            for plan in executable:
-                rk = (plan.shot_id.upper(), plan.sequence_id.upper())
-                if rk not in registered:
-                    try:
-                        register_ramses_objects(plan, lambda _: None, sequence_cache=self._sequence_uuids, shot_cache=self._shot_objects, skip_status_update=bool(plan.resource))
-                        registered.add(rk)
-                    except Exception as e: _log(f"  Warning: DB Fail {plan.shot_id}: {e}")
-                elif not plan.resource: update_ramses_status(plan, plan.state, shot_cache=self._shot_objects)
-
-        _log("Phase 2: Data Transfer...")
+        _log("Phase 1: Data Transfer...")
         results, executed_ids = [], set()
         if cancel_check and cancel_check():
             _log("Ingest cancelled before transfer.")
@@ -268,6 +268,28 @@ class IngestEngine:
         for p in plans:
             if id(p) not in executed_ids: results.append(IngestResult(plan=p, error=p.error or ("Cancelled" if cancel_check and cancel_check() else "Skipped")))
 
+        # Phase 2: Database Registration — deliberately AFTER the transfer so a
+        # failed or rolled-back copy never leaves zombie shots/sequences in the
+        # DB. Only clips whose files are confirmed on disk get registered; this
+        # also runs on cancellation, because already-copied clips exist on disk
+        # and must not stay invisible to the database.
+        if not dry_run:
+            _log("Phase 2: Database Registration...")
+            registered = set()
+            for res in results:
+                if not res.success: continue
+                plan = res.plan
+                rk = (plan.shot_id.upper(), plan.sequence_id.upper())
+                if rk not in registered:
+                    try:
+                        register_ramses_objects(plan, lambda _: None, sequence_cache=self._sequence_uuids, shot_cache=self._shot_objects, skip_status_update=bool(plan.resource))
+                        registered.add(rk)
+                    except Exception as e: _log(f"  Warning: DB Fail {plan.shot_id}: {e}")
+                elif not plan.resource:
+                    # Shot/sequence already registered via another clip (e.g. a
+                    # resource) — still push the hero's status/state.
+                    update_ramses_status(plan, plan.state, shot_cache=self._shot_objects)
+
         if cancel_check and cancel_check():
             flush_cache(); return results
 
@@ -279,10 +301,6 @@ class IngestEngine:
                 for f in concurrent.futures.as_completed(f_to_r):
                     path, ok = f.result()
                     if ok: f_to_r[f].preview_path = path
-
-        if update_status:
-            for res in results:
-                if res.success and not res.plan.resource: update_ramses_status(res.plan, "OK", shot_cache=self._shot_objects)
 
         _log("Phase 4: Reports...")
         ts, report_dir = int(time.time()), (os.path.join(self.project_path, "_ingest_reports") if self.project_path else ".")

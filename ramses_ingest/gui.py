@@ -56,10 +56,21 @@ from ramses_ingest.prober import check_ffprobe, has_av
 from ramses_ingest.gui_widgets import (
     GuiLogHandler,
     DropZone,
-    StatusIndicator,
     EditableDelegate,
     RulesEditorDialog,
 )
+
+# Status column rendering: colored dot per status type. Plain table items are
+# used (not cell widgets) so the dots travel with their rows when the user
+# sorts the table — QTableWidget sorting moves items but NOT cell widgets.
+STATUS_DOT_COLORS = {
+    "ready": "#27ae60",
+    "warning": "#f39c12",
+    "error": "#f44747",
+    "pending": "#666666",
+    "duplicate": "#999999",
+    "skipped": "#444444",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +488,20 @@ class IngestWindow(QMainWindow):
         if not check_ffprobe():
             QTimer.singleShot(500, self._show_ffprobe_warning)
 
+        # Warm the upstream Ramses singletons on the main thread before any
+        # QThread (ConnectionWorker) touches them: the library uses an
+        # unsynchronised double-check-lock singleton pattern, so construction
+        # must complete before concurrent access (same hardening as Hub/Out).
+        try:
+            from ramses import Ramses
+            from ramses.ram_settings import RamSettings
+            from ramses.daemon_interface import RamDaemonInterface
+            RamSettings.instance()
+            RamDaemonInterface.instance()
+            Ramses.instance()
+        except Exception as e:
+            logger.warning("Could not warm Ramses singletons: %s", e)
+
         self._engine = IngestEngine()
         self._plans: list[IngestPlan] = []
         self._scan_worker: ScanWorker | None = None
@@ -526,8 +551,39 @@ class IngestWindow(QMainWindow):
 
     def _on_resolve_timeout(self) -> None:
         """Called after debounce period to resolve paths and update UI."""
+        # Never mutate plans while worker threads are copying into their
+        # target directories — a pending debounce from just before Execute
+        # would otherwise clear/re-resolve paths mid-transfer.
+        if self._ingest_worker and self._ingest_worker.isRunning():
+            return
         self._resolve_all_paths()
         self._populate_table()
+
+    def _set_ui_locked(self, locked: bool) -> None:
+        """Locks every control that can mutate plans while an ingest runs.
+
+        Worker threads read plan target paths during the transfer; edits from
+        the main thread (checkboxes, shot overrides, step changes, removals)
+        would re-resolve those paths mid-copy.
+        """
+        enabled = not locked
+        self._table.setEnabled(enabled)
+        self._drop_zone.setEnabled(enabled)
+        self._drop_zone.setAcceptDrops(enabled)
+        self._search_edit.setEnabled(enabled)
+        self._step_combo.setEnabled(enabled)
+        self._btn_clear.setEnabled(enabled)
+        self._btn_options.setEnabled(enabled)
+        self._chk_dry_run.setEnabled(enabled)
+        for btn in (
+            self._filter_all,
+            self._filter_ready,
+            self._filter_warning,
+            self._filter_error,
+        ):
+            btn.setEnabled(enabled)
+        for chk in (self._chk_sequences, self._chk_movies):
+            chk.setEnabled(enabled)
 
     # -- UI construction -----------------------------------------------------
 
@@ -693,9 +749,9 @@ class IngestWindow(QMainWindow):
         left_lay.addStretch()
 
         # Advanced options button (moved here)
-        btn_options = QPushButton("⚙ Options...")
-        btn_options.clicked.connect(self._show_advanced_options)
-        left_lay.addWidget(btn_options)
+        self._btn_options = QPushButton("⚙ Options...")
+        self._btn_options.clicked.connect(self._show_advanced_options)
+        left_lay.addWidget(self._btn_options)
 
         main_splitter.addWidget(left_panel)
 
@@ -1027,6 +1083,11 @@ class IngestWindow(QMainWindow):
 
     def _on_shortcut_execute(self) -> None:
         """Execute ingest via keyboard shortcut"""
+        # Ignore Return while an inline cell editor is open — the user is
+        # committing a shot/resource edit, not asking to start the ingest.
+        focus = QApplication.focusWidget()
+        if focus is not None and focus is not self._table and self._table.isAncestorOf(focus):
+            return
         if self._btn_ingest.isEnabled():
             self._on_ingest()
 
@@ -1060,14 +1121,12 @@ class IngestWindow(QMainWindow):
 
             # 1. Status filter
             if self._current_filter_status != "all":
-                # Check status column (index 11)
-                status_container = self._table.cellWidget(row, 11)
-                if status_container:
-                    # Find the StatusIndicator inside the container
-                    status_indicator = status_container.findChild(StatusIndicator)
-                    if status_indicator:
-                        if self._current_filter_status != status_indicator.status_type:
-                            show = False
+                # Status type is stored on the status item (column 11)
+                status_item = self._table.item(row, 11)
+                if status_item:
+                    status_type = status_item.data(Qt.ItemDataRole.UserRole)
+                    if status_type and self._current_filter_status != status_type:
+                        show = False
 
             # 2. Type filter
             if show:
@@ -1174,6 +1233,9 @@ class IngestWindow(QMainWindow):
         if plan.error:
             details.append(f"<br><b style='color:#f44747'>Error:</b> {plan.error}")
 
+        for warning in plan.warnings:
+            details.append(f"<br><b style='color:#f39c12'>Warning:</b> {warning}")
+
         if plan.match.clip.missing_frames:
             details.append(
                 f"<br><b style='color:#f39c12'>Missing Frames:</b> {len(plan.match.clip.missing_frames)}"
@@ -1194,7 +1256,17 @@ class IngestWindow(QMainWindow):
         self._populate_ocio_dropdown(self._ocio_in, detected_cs)
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
-        """Handle inline edits in table"""
+        """Handle inline edits and checkbox toggles in the table"""
+        if item.column() == 0:  # Enable/skip checkbox
+            plan = self._get_plan_from_row(item.row())
+            if plan:
+                plan.enabled = item.checkState() == Qt.CheckState.Checked
+                # Debounce the expensive re-resolution (collisions, duplicates,
+                # version numbers hit the filesystem); the timeout repopulates
+                # the table, which also refreshes dimming and status dots.
+                self._resolve_timer.start()
+            return
+
         if item.column() == 3:  # Shot column
             row = item.row()
             plan = self._get_plan_from_row(row)
@@ -1213,6 +1285,10 @@ class IngestWindow(QMainWindow):
 
     def _on_remove_selected(self, _=None) -> None:
         """Remove selected clips from table"""
+        # The Delete key reaches the window even with the table disabled;
+        # never remove plans while worker threads are transferring them.
+        if self._ingest_worker and self._ingest_worker.isRunning():
+            return
         selected_rows = sorted(
             set(item.row() for item in self._table.selectedItems()), reverse=True
         )
@@ -1578,28 +1654,20 @@ class IngestWindow(QMainWindow):
         for idx, plan in enumerate(self._plans):
             clip = plan.match.clip
 
-            # --- Column 0: Checkbox ---
-            chk_widget = self._table.cellWidget(idx, 0)
-            if not chk_widget:
-                # Create new
-                chk = QCheckBox()
-                chk.stateChanged.connect(self._on_checkbox_changed)
-                chk_widget = QWidget()
-                chk_widget.setStyleSheet("background: transparent;")
-                chk_lay = QHBoxLayout(chk_widget)
-                chk_lay.addWidget(chk)
-                chk_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                chk_lay.setContentsMargins(0, 0, 0, 0)
-                chk_lay.setSpacing(0)
-                self._table.setCellWidget(idx, 0, chk_widget)
-            else:
-                # Update existing
-                chk = chk_widget.findChild(QCheckBox)
-
-            if chk:
-                chk.blockSignals(True)
-                chk.setChecked(plan.enabled)
-                chk.blockSignals(False)
+            # --- Column 0: Checkbox (checkable item — travels with row sorting) ---
+            chk_item = self._table.item(idx, 0)
+            if not chk_item:
+                chk_item = QTableWidgetItem()
+                chk_item.setFlags(
+                    Qt.ItemFlag.ItemIsUserCheckable
+                    | Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                )
+                chk_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._table.setItem(idx, 0, chk_item)
+            chk_item.setCheckState(
+                Qt.CheckState.Checked if plan.enabled else Qt.CheckState.Unchecked
+            )
 
             # --- Column 1: Filename ---
             filename = f"{clip.base_name}.{clip.extension}"
@@ -1808,23 +1876,38 @@ class IngestWindow(QMainWindow):
                 cs_item.setText(colorspace)
             cs_item.setForeground(colorspace_color)
 
-            # --- Column 11: Status ---
+            # --- Column 11: Status (plain item — travels with row sorting) ---
             status, status_msg = self._get_plan_status(plan)
+            status_item = self._table.item(idx, 11)
+            if not status_item:
+                status_item = QTableWidgetItem()
+                status_item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+                )
+                status_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                self._table.setItem(idx, 11, status_item)
+            status_item.setText("○" if status == "skipped" else "●")
+            status_item.setForeground(
+                QColor(STATUS_DOT_COLORS.get(status, "#666666"))
+            )
+            status_item.setToolTip(status_msg or status.title())
+            status_item.setData(Qt.ItemDataRole.UserRole, status)
 
-            # Always replace status widget as it's cheap and stateful logic is complex to update
-            status_indicator = StatusIndicator(status)
-            if status_msg:
-                status_indicator.setToolTip(status_msg)
-
-            status_container = QWidget()
-            status_container.setStyleSheet("background: transparent;")
-            status_layout = QHBoxLayout(status_container)
-            status_layout.addWidget(status_indicator)
-            status_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            status_layout.setContentsMargins(0, 0, 0, 0)
-            status_layout.setSpacing(0)
-
-            self._table.setCellWidget(idx, 11, status_container)
+            # --- Row dimming: single source of truth for enabled/disabled look ---
+            default_fg = QColor("#e0e0e0")
+            dim_fg = QColor(120, 120, 120)
+            row_fg = default_fg if plan.enabled else dim_fg
+            for col in (1, 2, 4, 5, 6, 7, 8, 9):
+                it = self._table.item(idx, col)
+                if it:
+                    it.setForeground(row_fg)
+            if not plan.enabled:
+                # Shot (3) and Colorspace (10) set their own colors above;
+                # override them for skipped rows.
+                for col in (3, 10):
+                    it = self._table.item(idx, col)
+                    if it:
+                        it.setForeground(dim_fg)
 
         self._table.blockSignals(False)
         self._table.setSortingEnabled(True)
@@ -1860,15 +1943,32 @@ class IngestWindow(QMainWindow):
         self._update_summary()
 
     def _get_plan_status(self, plan: IngestPlan) -> tuple[str, str]:
-        """Determine the status type and message for a plan."""
+        """Determine the status type and message for a plan.
+
+        Precedence: skipped > blocking error > duplicate > warnings > ready.
+        A plan whose status is "warning" WILL still be ingested; anything with
+        "error"/"duplicate" is blocked (mirrors ``IngestPlan.can_execute``).
+        """
         # 0. Skipped (Disabled)
         if not plan.enabled:
             return "skipped", "Skipped by user"
 
-        # 1. Technical mismatches (Warning) - HERO ONLY
-        # Resources (Auxiliary) are allowed to deviate from project specs without warnings.
-        is_res_mismatch = False
-        is_fps_mismatch = False
+        # 1. Blocking errors (plan.error always blocks execution)
+        if plan.error:
+            return "error", plan.error
+
+        # 2. Duplicate (blocks execution)
+        if plan.is_duplicate:
+            return "duplicate", f"Duplicate of v{plan.duplicate_version:03d}"
+
+        # 3. Non-blocking warnings — HERO ONLY for technical mismatches:
+        # resources (auxiliary) are allowed to deviate from project specs.
+        warning_msgs = list(plan.warnings)
+
+        if plan.match.clip.missing_frames:
+            warning_msgs.insert(
+                0, f"GAPS: {len(plan.match.clip.missing_frames)} missing frames"
+            )
 
         if not plan.resource:
             if (self._engine._project_width or 0) > 0 and plan.media_info.width > 0:
@@ -1876,133 +1976,20 @@ class IngestWindow(QMainWindow):
                     plan.media_info.width != self._engine._project_width
                     or plan.media_info.height != self._engine._project_height
                 ):
-                    is_res_mismatch = True
+                    warning_msgs.append("Technical mismatch (Resolution)")
 
             if (self._engine._project_fps or 0.0) > 0 and plan.media_info.fps > 0:
                 if abs(plan.media_info.fps - (self._engine._project_fps or 0.0)) > 0.001:
-                    is_fps_mismatch = True
+                    warning_msgs.append("Technical mismatch (FPS)")
 
-        if plan.match.clip.missing_frames:
-            return (
-                "warning",
-                f"GAPS: {len(plan.match.clip.missing_frames)} missing frames",
-            )
-
-        if is_res_mismatch or is_fps_mismatch:
-            return "warning", "Technical mismatch (Res/FPS)"
-
-        # 2. Plan Errors (Error or Warning)
-        if plan.error:
-            if "warning" in plan.error.lower():
-                return "warning", plan.error
-            return "error", plan.error
-
-        # 3. Duplicate (Duplicate)
-        if plan.is_duplicate:
-            return "duplicate", f"Duplicate of v{plan.duplicate_version:03d}"
+        if warning_msgs:
+            return "warning", " | ".join(warning_msgs)
 
         # 4. Ready (Success)
         if plan.can_execute:
             return "ready", ""
 
         return "pending", ""
-
-    def _on_checkbox_changed(self, state: int) -> None:
-        """Handle checkbox state changes with immediate visual feedback."""
-        # Find which row changed
-        sender = self.sender()
-        if not sender:
-            return
-
-        target_row = -1
-        for row in range(self._table.rowCount()):
-            chk_widget = self._table.cellWidget(row, 0)
-            if chk_widget and chk_widget.findChild(QCheckBox) == sender:
-                target_row = row
-                break
-
-        if target_row == -1:
-            return
-
-        plan = self._get_plan_from_row(target_row)
-        if not plan:
-            return
-
-        is_checked = state == Qt.CheckState.Checked.value
-        plan.enabled = is_checked
-
-        # 1. Update status dot immediately
-        status, status_msg = self._get_plan_status(plan)
-        status_widget = self._table.cellWidget(target_row, 11)
-        if status_widget:
-            indicator = status_widget.findChild(StatusIndicator)
-            if indicator:
-                indicator.set_status(status)
-                if status_msg:
-                    indicator.setToolTip(status_msg)
-
-        # 2. Visual dimming for the whole row
-        opacity = 255 if is_checked else 100
-        # Columns 1 through 10 (Filename -> Colorspace)
-        for col in range(1, 11):
-            item = self._table.item(target_row, col)
-            if item:
-                # Keep existing color but change alpha
-                current_color = item.foreground().color()
-                # Special case: Error/Warning colors should probably stay colored but dim
-                # For now, just dim the standard text
-                if not is_checked:
-                    item.setForeground(QColor(120, 120, 120))
-                else:
-                    # Restore colors based on simple logic (could be more complex if we stored state)
-                    if col == 3 and not plan.shot_id:  # Shot column
-                        item.setForeground(QColor("#f44747"))
-                    else:
-                        item.setForeground(QColor("#e0e0e0"))
-
-        # 3. Re-resolve collisions (expensive, so maybe debounce? For now, direct)
-        # We need to re-check collisions because unchecking a file might resolve a collision for another
-        self._resolve_all_paths()
-
-        # 4. Refresh other rows that might have changed status due to collision resolution
-        # This is the "Ghost Collision" fix.
-        # We iterate all rows to update their status dots if they were collisions.
-        for row in range(self._table.rowCount()):
-            if row == target_row:
-                continue
-
-            p = self._get_plan_from_row(row)
-            if (
-                p and p.enabled
-            ):  # Only care about enabled ones potentially changing state
-                # Update status dot
-                s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 11)
-                if w:
-                    ind = w.findChild(StatusIndicator)
-                    if ind and ind.status_type != s:
-                        ind.set_status(s)
-                        ind.setToolTip(msg)
-
-                # Update collision highlighting in Filename column (Col 1)
-                file_item = self._table.item(row, 1)
-                if file_item:
-                    if "COLLISION" in (p.error or ""):
-                        file_item.setBackground(QColor(180, 50, 50, 150))
-                        file_item.setToolTip(p.error)
-                    else:
-                        file_item.setBackground(QColor(0, 0, 0, 0))
-                        # Restore filename tooltip
-                        clip = p.match.clip
-                        fname = (
-                            f"{clip.base_name}{clip.separator}####.{clip.extension}"
-                            if clip.is_sequence
-                            else f"{clip.base_name}.{clip.extension}"
-                        )
-                        file_item.setToolTip(fname)
-
-        self._update_summary()
-        self._update_filter_counts()
 
     def _on_context_override_shot(self) -> None:
         """Override shot ID for selected clips"""
@@ -2176,115 +2163,41 @@ class IngestWindow(QMainWindow):
         self._populate_table()
         self._update_summary()
 
-    def _on_context_enable(self) -> None:
-        """Enable selected clips (check them) efficiently."""
-        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+    def _set_selected_enabled(self, enabled: bool) -> None:
+        """Enable/skip the selected clips and schedule a debounced refresh.
+
+        The refresh (``_on_resolve_timeout``) re-resolves collisions/duplicates
+        and repopulates the table, which also updates dimming, status dots,
+        summary, and filter counts — the single source of visual truth.
+        """
+        selected_rows = set(item.row() for item in self._table.selectedItems())
         if not selected_rows:
             return
 
-        # 1. Update data and UI state without triggering expensive signals
-        for row in selected_rows:
-            plan = self._get_plan_from_row(row)
-            if plan:
-                plan.enabled = True
-                chk_widget = self._table.cellWidget(row, 0)
-                if chk_widget:
-                    chk = chk_widget.findChild(QCheckBox)
-                    if chk:
-                        chk.blockSignals(True)
-                        chk.setChecked(True)
-                        chk.blockSignals(False)
+        self._table.blockSignals(True)
+        try:
+            for row in selected_rows:
+                plan = self._get_plan_from_row(row)
+                if not plan:
+                    continue
+                plan.enabled = enabled
+                chk_item = self._table.item(row, 0)
+                if chk_item:
+                    chk_item.setCheckState(
+                        Qt.CheckState.Checked if enabled else Qt.CheckState.Unchecked
+                    )
+        finally:
+            self._table.blockSignals(False)
 
-            # Remove visual dimming
-            for col in range(1, 11):
-                item = self._table.item(row, col)
-                if item:
-                    # Restore default color (light gray)
-                    item.setForeground(QColor("#e0e0e0"))
+        self._resolve_timer.start()
 
-            # Update status dot
-            status, status_msg = self._get_plan_status(plan)
-            status_widget = self._table.cellWidget(row, 11)
-            if status_widget:
-                indicator = status_widget.findChild(StatusIndicator)
-                if indicator:
-                    indicator.set_status(status)
-                    if status_msg:
-                        indicator.setToolTip(status_msg)
-
-        # 2. Update summary counts
-        self._update_summary()
+    def _on_context_enable(self) -> None:
+        """Enable selected clips (check them)."""
+        self._set_selected_enabled(True)
 
     def _on_context_skip(self) -> None:
-        """Skip selected clips (uncheck them) efficiently."""
-        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
-        if not selected_rows:
-            return
-
-        # 1. Update data and UI state without triggering expensive signals
-        for row in selected_rows:
-            plan = self._get_plan_from_row(row)
-            if plan:
-                plan.enabled = False
-                chk_widget = self._table.cellWidget(row, 0)
-                if chk_widget:
-                    chk = chk_widget.findChild(QCheckBox)
-                    if chk:
-                        chk.blockSignals(True)
-                        chk.setChecked(False)
-                        chk.blockSignals(False)
-
-            # Apply visual dimming immediately
-            for col in range(1, 11):
-                item = self._table.item(row, col)
-                if item:
-                    item.setForeground(QColor(120, 120, 120))
-
-            # Update status dot
-            status, status_msg = self._get_plan_status(plan)  # Should be 'skipped'
-            status_widget = self._table.cellWidget(row, 11)
-            if status_widget:
-                indicator = status_widget.findChild(StatusIndicator)
-                if indicator:
-                    indicator.set_status(status)
-                    if status_msg:
-                        indicator.setToolTip(status_msg)
-
-        # 2. Re-resolve collisions once
-        self._resolve_all_paths()
-
-        # 3. Refresh entire table to catch ghost collisions cleared by skipping
-        # (We iterate all rows to ensure any "COLLISION" errors on other rows are cleared)
-        for row in range(self._table.rowCount()):
-            p = self._get_plan_from_row(row)
-            if p and p.enabled:
-                # Refresh status dot
-                s, msg = self._get_plan_status(p)
-                w = self._table.cellWidget(row, 11)
-                if w:
-                    ind = w.findChild(StatusIndicator)
-                    if ind and ind.status_type != s:
-                        ind.set_status(s)
-                        ind.setToolTip(msg)
-
-                # Refresh filename background (collision warning)
-                file_item = self._table.item(row, 1)
-                if file_item:
-                    if "COLLISION" in (p.error or ""):
-                        file_item.setBackground(QColor(180, 50, 50, 150))
-                        file_item.setToolTip(p.error)
-                    else:
-                        file_item.setBackground(QColor(0, 0, 0, 0))
-                        clip = p.match.clip
-                        fname = (
-                            f"{clip.base_name}{clip.separator}####.{clip.extension}"
-                            if clip.is_sequence
-                            else f"{clip.base_name}.{clip.extension}"
-                        )
-                        file_item.setToolTip(fname)
-
-        self._update_summary()
-        self._update_filter_counts()
+        """Skip selected clips (uncheck them)."""
+        self._set_selected_enabled(False)
 
     # -- Helpers -------------------------------------------------------------
 
@@ -2512,20 +2425,18 @@ class IngestWindow(QMainWindow):
         n_enabled = len(enabled_plans)
         n_skipped = total - n_enabled
 
-        # Count status types (only for enabled plans)
-        ready_count = sum(1 for p in enabled_plans if p.can_execute and not p.error)
-        warning_count = sum(
-            1
-            for p in enabled_plans
-            if p.can_execute and p.error and "warning" in p.error.lower()
-        )
-
-        # Errors: Enabled plans that cannot execute OR have an explicit error
-        error_count = sum(
-            1
-            for p in enabled_plans
-            if not p.can_execute or (p.error and "error" in p.error.lower())
-        )
+        # Count status types (only for enabled plans). Derived from
+        # _get_plan_status so summary, filter counts, and status dots always
+        # agree. "warning" plans still execute; "error"/"duplicate" are blocked.
+        ready_count = warning_count = error_count = 0
+        for p in enabled_plans:
+            status, _ = self._get_plan_status(p)
+            if status == "ready":
+                ready_count += 1
+            elif status == "warning":
+                warning_count += 1
+            elif status in ("error", "duplicate"):
+                error_count += 1
 
         # Build summary with color coding
         summary_parts = [f"<b>{total} clips</b>"]
@@ -2799,6 +2710,11 @@ class IngestWindow(QMainWindow):
         if not enabled:
             return
 
+        # Freeze plan-mutating UI for the duration of the ingest: worker
+        # threads read the plans' target paths while copying.
+        self._resolve_timer.stop()
+        self._set_ui_locked(True)
+
         self._btn_ingest.setEnabled(False)
         self._btn_cancel.setVisible(True)
         self._progress.setMaximum(len(enabled))
@@ -2828,6 +2744,8 @@ class IngestWindow(QMainWindow):
     def _on_ingest_done(self, results: list[IngestResult]) -> None:
         self._btn_cancel.setVisible(False)
         self._btn_ingest.setEnabled(True)
+        self._progress.setVisible(False)
+        self._set_ui_locked(False)
 
         if self._engine.last_report_path:
             self._btn_view_report.setVisible(True)
@@ -2844,6 +2762,7 @@ class IngestWindow(QMainWindow):
         self._btn_cancel.setVisible(False)
         self._btn_ingest.setEnabled(True)
         self._progress.setVisible(False)
+        self._set_ui_locked(False)
         self._log(f"INGEST ERROR: {msg}")
 
     def _on_edit_rules(self, _=None) -> None:
@@ -2968,6 +2887,9 @@ class IngestWindow(QMainWindow):
 
         if updated:
             self._log(f"  Mapped {updated} shot(s) from EDL.")
+            # Newly matched plans have no target paths yet — resolve them now,
+            # otherwise execution fails with "No target publish directory".
+            self._resolve_all_paths()
             self._populate_table()
         else:
             self._log("  No matches found in EDL.")

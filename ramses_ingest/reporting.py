@@ -8,6 +8,8 @@ import time
 import base64
 import io
 from collections import Counter
+# Aliased because generate_html_report uses a local variable named `html`.
+from html import escape as _esc
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -835,7 +837,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         fps_dev = (not res.plan.resource and common_fps and abs(fps_val - common_fps) > 0.001)
         fps_display = f'<span class="deviation">{fps_val:.3f}</span>' if fps_dev else f"{fps_val:.3f}"
         
-        codec_val = mi.codec.upper() if mi.codec else "—"
+        codec_val = _esc(mi.codec.upper()) if mi.codec else "—"
         codec_dev = (not res.plan.resource and mi.codec and mi.codec.lower() != common_codec and common_codec)
         codec_display = f'<span class="deviation">{codec_val}</span>' if codec_dev else codec_val
         
@@ -873,31 +875,23 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
 
         color_parts = []
         has_critical_cs_issue = cs_issue and cs_issue.severity == "critical"
+        cs_issue_msg = _esc(cs_issue.message) if cs_issue else ""
 
-        if mi.color_primaries:
-            tooltip = _colorspace_tooltip(mi.color_primaries)
-            # Highlight if this clip has a colorspace issue
+        for color_val in (mi.color_primaries, mi.color_transfer, mi.color_space):
+            if not color_val:
+                continue
             if has_critical_cs_issue:
-                color_parts.append(f'<span class="deviation" title="{cs_issue.message}">{mi.color_primaries}</span>')
+                color_parts.append(
+                    f'<span class="deviation" title="{cs_issue_msg}">{_esc(color_val)}</span>'
+                )
             else:
-                color_parts.append(f'<span title="{tooltip}">{mi.color_primaries}</span>')
-        if mi.color_transfer:
-            tooltip = _colorspace_tooltip(mi.color_transfer)
-            if has_critical_cs_issue:
-                color_parts.append(f'<span class="deviation" title="{cs_issue.message}">{mi.color_transfer}</span>')
-            else:
-                color_parts.append(f'<span title="{tooltip}">{mi.color_transfer}</span>')
-        if mi.color_space:
-            tooltip = _colorspace_tooltip(mi.color_space)
-            if has_critical_cs_issue:
-                color_parts.append(f'<span class="deviation" title="{cs_issue.message}">{mi.color_space}</span>')
-            else:
-                color_parts.append(f'<span title="{tooltip}">{mi.color_space}</span>')
+                tooltip = _esc(_colorspace_tooltip(color_val))
+                color_parts.append(f'<span title="{tooltip}">{_esc(color_val)}</span>')
         color_str = " / ".join(color_parts) if color_parts else '<span title="No color metadata embedded in file">No VUI Tags</span>'
 
         # Add colorspace warning indicator if present
         if cs_issue:
-            color_str += f' <span style="color:#f39c12; font-weight:bold;" title="{cs_issue.message}">⚠</span>'
+            color_str += f' <span style="color:#f39c12; font-weight:bold;" title="{cs_issue_msg}">⚠</span>'
         
         # Format missing frames for display
         if res.missing_frames:
@@ -914,7 +908,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         # Resource Badge logic
         resource_tag = ""
         if res.plan.resource:
-            resource_tag = f'<span class="resource-badge">{res.plan.resource}</span>'
+            resource_tag = f'<span class="resource-badge">{_esc(res.plan.resource)}</span>'
+
+        source_name = f"{res.plan.match.clip.base_name}.{res.plan.match.clip.extension}"
 
         row_number += 1
         row_html = f"""
@@ -923,9 +919,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td>{img_tag}</td>
             <td>
                 <div class="xray-wrap">
-                    <div class="xray-target">{res.plan.shot_id}{resource_tag}</div>
-                    <div class="xray-source" style="margin-top:2px;">{res.plan.sequence_id or ""}</div>
-                    <div class="xray-source"><span class="xray-arrow">←</span> {res.plan.match.clip.base_name}.{res.plan.match.clip.extension}</div>
+                    <div class="xray-target">{_esc(res.plan.shot_id)}{resource_tag}</div>
+                    <div class="xray-source" style="margin-top:2px;">{_esc(res.plan.sequence_id or "")}</div>
+                    <div class="xray-source"><span class="xray-arrow">←</span> {_esc(source_name)}</div>
                 </div>
             </td>
             <td><span class="code">v{res.plan.version:03d}</span></td>
@@ -933,11 +929,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td><b>{res.frames_copied}</b></td>
             <td>{missing_display}</td>
             <td class="tech">
-                <b>{res_display}</b> @ {fps_display} fps{f" | PAR {mi.pixel_aspect_ratio:.2f}" if mi.pixel_aspect_ratio != 1.0 else ""}<br>{codec_display} / {mi.pix_fmt}<br>
+                <b>{res_display}</b> @ {fps_display} fps{f" | PAR {mi.pixel_aspect_ratio:.2f}" if mi.pixel_aspect_ratio != 1.0 else ""}<br>{codec_display} / {_esc(mi.pix_fmt or "")}<br>
                 <div class="color-audit">{color_str}</div>
             </td>
-            <td><span class="code">{mi.start_timecode or "—"}</span></td>
-            <td><span class="code" style="font-size:13px;">{res.checksum or "—"}</span></td>
+            <td><span class="code">{_esc(mi.start_timecode) if mi.start_timecode else "—"}</span></td>
+            <td><span class="code" style="font-size:13px;">{_esc(res.checksum) if res.checksum else "—"}</span></td>
         </tr>
         """
         rows.append(row_html)
@@ -1003,10 +999,16 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         # Resize logo to max 300px width for the report to keep HTML size manageable
         b64_logo = _get_base64_image(studio_logo_path, max_width=300)
         if b64_logo:
-            logo_html = f'<img src="{b64_logo}" class="studio-logo" alt="{studio_name}">'
+            logo_html = f'<img src="{b64_logo}" class="studio-logo" alt="{_esc(studio_name)}">'
 
     timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
     project = getattr(results[0].plan, 'project_name', "") or results[0].plan.project_id if results and results[0].plan else "Unknown"
+
+    # Escape everything user- or file-derived before HTML interpolation.
+    project = _esc(str(project))
+    studio_name = _esc(studio_name)
+    operator = _esc(operator)
+    step_id = _esc(str(step_id))
 
     html_parts = [
         "<!DOCTYPE html>",

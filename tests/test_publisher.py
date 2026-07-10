@@ -376,6 +376,32 @@ class TestPublisherConcurrency(unittest.TestCase):
         v3 = _get_next_version(self.publish_root)
         self.assertEqual(v3, 3)
 
+    def test_version_numbering_counts_foreign_versions(self):
+        """Version folders WITHOUT a .ramses_complete marker (e.g. published by
+        Ramses-Fusion through the upstream API) must still count toward the
+        next version number — otherwise Ingest re-issues their numbers and
+        collides with existing data."""
+        from ramses_ingest.publisher import _get_next_version
+
+        os.makedirs(self.publish_root, exist_ok=True)
+        # Foreign version folder: no marker, state-suffixed name
+        os.makedirs(os.path.join(self.publish_root, "003_OK"), exist_ok=True)
+        # Resource-prefixed foreign version
+        os.makedirs(os.path.join(self.publish_root, "BG_005_WIP"), exist_ok=True)
+
+        self.assertEqual(_get_next_version(self.publish_root), 6)
+
+    def test_version_numbering_ignores_non_version_entries(self):
+        """Stray files and non-version folders must not affect numbering."""
+        from ramses_ingest.publisher import _get_next_version
+
+        os.makedirs(self.publish_root, exist_ok=True)
+        os.makedirs(os.path.join(self.publish_root, "not_a_version"), exist_ok=True)
+        # A file whose NAME looks like a version must not count (dirs only)
+        Path(os.path.join(self.publish_root, "099")).touch()
+
+        self.assertEqual(_get_next_version(self.publish_root), 1)
+
     def test_concurrent_metadata_writes(self):
         """Multiple threads writing to same _ramses_data.json should not corrupt file."""
         import threading

@@ -130,6 +130,9 @@ class IngestPlan:
     target_publish_dir: str = ""
     target_preview_dir: str = ""
     error: str = ""
+    warnings: list[str] = field(default_factory=list)
+    """Non-blocking issues (e.g. transfer-function mismatch). Unlike ``error``,
+    these never prevent execution — they are surfaced in the UI and report."""
     is_duplicate: bool = False
     duplicate_version: int = 0
     duplicate_path: str = ""
@@ -324,11 +327,15 @@ def _get_next_version(publish_root: str) -> int:
         try:
             for item in os.listdir(publish_root):
                 match = version_re.match(item)
-                if match:
-                    v_path = os.path.join(publish_root, item)
-                    if os.path.exists(os.path.join(v_path, ".ramses_complete")):
-                        v = int(match.group("ver"))
-                        if v > max_v: max_v = v
+                if match and os.path.isdir(os.path.join(publish_root, item)):
+                    # Count EVERY version-style folder toward the maximum, not
+                    # only those with a .ramses_complete marker: versions
+                    # published by other tools (e.g. Ramses-Fusion via the
+                    # upstream API) never carry the marker, and reusing their
+                    # numbers would silently collide. The marker remains the
+                    # integrity signal for duplicate comparison, not numbering.
+                    v = int(match.group("ver"))
+                    if v > max_v: max_v = v
         except Exception as _e:
             logger.warning("Could not read version list from %s: %s", publish_root, _e)
         return max_v + 1
