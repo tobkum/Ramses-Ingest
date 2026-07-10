@@ -140,6 +140,72 @@ class TestPlanTableSorting(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_QT, "PySide6 not available")
+class TestOpenDestination(unittest.TestCase):
+    """The 'Open Destination' button appears after a successful ingest and
+    opens the publish folder (or the common parent for several shots)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        import tempfile
+        from ramses_ingest.gui import IngestWindow
+        self.tmp = tempfile.mkdtemp()
+        self.window = IngestWindow()
+
+    def tearDown(self):
+        import shutil
+        self.window.close()
+        self.window.deleteLater()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _result(self, shot, ok=True, dest=None):
+        from unittest.mock import MagicMock
+        published = ""
+        if dest:
+            published = os.path.join(self.tmp, dest)
+            os.makedirs(published, exist_ok=True)
+        return MagicMock(success=ok, published_path=published, error="" if ok else "boom")
+
+    def test_button_visible_after_successful_ingest(self):
+        self.window._on_ingest_done([self._result("SH010", dest="SH010/PLATE/_published/001_OK")])
+        self.assertTrue(self.window._btn_open_dest.isVisibleTo(self.window))
+        self.assertEqual(len(self.window._last_dest_dirs), 1)
+
+    def test_button_hidden_when_all_failed(self):
+        self.window._on_ingest_done([self._result("SH010", ok=False)])
+        self.assertFalse(self.window._btn_open_dest.isVisibleTo(self.window))
+
+    def test_single_destination_opened_directly(self):
+        from unittest.mock import patch
+        self.window._on_ingest_done([self._result("SH010", dest="SH010/_published/001_OK")])
+        with patch.object(self.window, "_open_folder") as mock_open:
+            self.window._on_open_destination()
+        mock_open.assert_called_once_with(self.window._last_dest_dirs[0])
+
+    def test_multiple_destinations_open_common_parent(self):
+        from unittest.mock import patch
+        self.window._on_ingest_done([
+            self._result("SH010", dest="shots/SH010/_published/001_OK"),
+            self._result("SH020", dest="shots/SH020/_published/001_OK"),
+        ])
+        with patch.object(self.window, "_open_folder") as mock_open:
+            self.window._on_open_destination()
+        opened = mock_open.call_args[0][0]
+        self.assertEqual(
+            os.path.normpath(opened),
+            os.path.normpath(os.path.join(self.tmp, "shots")),
+        )
+
+    def test_clear_hides_button(self):
+        self.window._on_ingest_done([self._result("SH010", dest="SH010/_published/001_OK")])
+        self.window._on_clear()
+        self.assertFalse(self.window._btn_open_dest.isVisibleTo(self.window))
+        self.assertEqual(self.window._last_dest_dirs, [])
+
+
+@unittest.skipUnless(HAS_QT, "PySide6 not available")
 class TestEDLLoadResolvesPaths(unittest.TestCase):
     """EDL-mapped plans must get their target paths resolved immediately —
     previously they stayed unresolved and failed at execute time with

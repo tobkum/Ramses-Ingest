@@ -509,6 +509,7 @@ class IngestWindow(QMainWindow):
         self._connection_worker: ConnectionWorker | None = None
         self._current_filter_status = "all"  # For filter sidebar
         self._selected_plan: IngestPlan | None = None  # For detail panel
+        self._last_dest_dirs: list[str] = []  # Publish dirs of the last ingest
 
         self._reconnect_timer = QTimer(self)
         self._reconnect_timer.setInterval(5000)  # Check every 5 seconds
@@ -879,6 +880,15 @@ class IngestWindow(QMainWindow):
         action_bar_lay.addWidget(self._summary_label)
 
         action_bar_lay.addStretch()
+
+        self._btn_open_dest = QPushButton("Open Destination")
+        self._btn_open_dest.setToolTip(
+            "Open the ingested files in the file manager\n"
+            "(the common parent folder when several shots were ingested)"
+        )
+        self._btn_open_dest.clicked.connect(self._on_open_destination)
+        self._btn_open_dest.setVisible(False)
+        action_bar_lay.addWidget(self._btn_open_dest)
 
         self._btn_view_report = QPushButton("View Report")
         self._btn_view_report.clicked.connect(self._on_view_report)
@@ -2541,6 +2551,25 @@ class IngestWindow(QMainWindow):
         if path:
             path_edit.setText(path)
 
+    def _on_open_destination(self, _=None) -> None:
+        """Open the last ingest's destination in the file manager.
+
+        One shot ingested → open its publish folder directly; several →
+        open the deepest common parent so everything is one click away.
+        """
+        if not self._last_dest_dirs:
+            return
+        if len(self._last_dest_dirs) == 1:
+            target = self._last_dest_dirs[0]
+        else:
+            try:
+                target = os.path.commonpath(self._last_dest_dirs)
+            except ValueError:
+                # Different drives — fall back to the first destination
+                target = self._last_dest_dirs[0]
+        if os.path.isdir(target):
+            self._open_folder(target)
+
     def _on_view_report(self, _=None) -> None:
         """Open the last generated HTML report in the system browser."""
         if self._engine.last_report_path and os.path.exists(
@@ -2698,6 +2727,8 @@ class IngestWindow(QMainWindow):
         self._update_summary()
         self._log_edit.clear()
         self._progress.setVisible(False)
+        self._last_dest_dirs = []
+        self._btn_open_dest.setVisible(False)
 
     def _on_cancel(self, _=None) -> None:
         if self._ingest_worker and self._ingest_worker.isRunning():
@@ -2749,6 +2780,13 @@ class IngestWindow(QMainWindow):
 
         if self._engine.last_report_path:
             self._btn_view_report.setVisible(True)
+
+        # Offer to jump straight to the ingested files
+        self._last_dest_dirs = sorted({
+            r.published_path for r in results
+            if r.success and r.published_path and os.path.isdir(r.published_path)
+        })
+        self._btn_open_dest.setVisible(bool(self._last_dest_dirs))
 
         ok = sum(1 for r in results if r.success)
         cancelled = sum(1 for r in results if not r.success and r.error == "Cancelled")
