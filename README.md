@@ -29,7 +29,7 @@ Technical ingest tool for [Ramses](https://ramses.rxlab.guide/) production manag
 
 - **Concurrency**: Parallel processing for I/O-bound tasks (transfers, MD5, metadata probing, and preview generation).
 - **Disk Integrity**: Pre-ingest disk space validation and bit-perfect verification.
-- **Color Management**: Integrated OCIO support for color-accurate preview generation.
+- **Color Management**: Color-accurate previews without special ffmpeg builds: display-render LUTs are **auto-baked via PyOpenColorIO** from the show config (`$OCIO`) or the pinned builtin ACES Studio config (compiled into the wheel — nothing to vendor), cached per colorspace+config, and applied with ffmpeg's universal `lut3d` filter. Manual `.cube` overrides go in `%APPDATA%/ramses_ingest/luts/<colorspace>.cube`. (Scene-linear sources clip >1.0 in the baked preview LUT; camera-log footage bakes exactly.)
 - **Rollback Logic**: Ensures no "zombie" versions are created if an ingest is interrupted.
 
 ## Prerequisites

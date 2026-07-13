@@ -1,7 +1,9 @@
 # Python 3.10+ required.
 # FFmpeg/ffprobe must be on PATH for video probing and preview generation.
-# For color-managed previews, FFmpeg must be compiled with --enable-libOpenColorIO.
+# Color-managed previews need NO special ffmpeg build: LUTs are auto-baked
+# via PyOpenColorIO (builtin ACES Studio config) and applied with lut3d.
 PySide6
 msgpack
 OpenImageIO
 av
+opencolorio

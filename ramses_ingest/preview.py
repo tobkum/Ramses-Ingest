@@ -10,6 +10,8 @@ Responsibilities:
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
 import re
 import subprocess
@@ -17,6 +19,8 @@ import sys
 from pathlib import Path
 
 from ramses_ingest.scanner import Clip
+
+logger = logging.getLogger(__name__)
 
 # Subprocess creation flags to hide console windows on Windows
 _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
@@ -71,6 +75,31 @@ def _escape_ffmpeg_filter_label(label: str) -> str:
 OCIO_DISPLAY = "sRGB - Display"
 OCIO_VIEW = "ACES 1.0 - SDR Video"
 
+# Builtin ACES Studio config, compiled into the PyOpenColorIO wheel — nothing
+# to vendor or download. Pinned (not "-latest") so preview colors never shift
+# under our feet when OCIO updates its bundled configs.
+PINNED_OCIO_CONFIG = "ocio://studio-config-v2.1.0_aces-v1.3_ocio-v2.3"
+
+# Our historical dropdown names -> ACES 1.3 Studio config colorspace names.
+# ("Cineon" has no equivalent in the ACES configs — needs a manual LUT.)
+_LEGACY_COLORSPACE_ALIASES = {
+    "sRGB": "sRGB - Texture",
+    "Linear": "Linear Rec.709 (sRGB)",
+    "Rec.709": "Camera Rec.709",
+    "Rec.2020": "Linear Rec.2020",
+    "LogC": "ARRI LogC3 (EI800)",
+    "S-Log3": "S-Log3 S-Gamut3.Cine",
+    "V-Log": "V-Log V-Gamut",
+    "Gamma 2.2": "Gamma 2.2 Rec.709 - Texture",
+    "Gamma 2.4": "Gamma 2.4 Rec.709 - Texture",
+    "ACES - ACEScct": "ACEScct",
+    "ACES - ACEScc": "ACEScc",
+}
+
+_BAKE_CUBE_SIZE = 33  # preview quality; log/texture inputs need no shaper
+
+_warned_no_pyocio = False
+
 # Windows-invalid filename characters, replaced when mapping a colorspace
 # name to a LUT filename ("ARRI LogC4" -> "ARRI LogC4.cube").
 _INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*]')
@@ -82,26 +111,112 @@ def _luts_dir() -> str:
     return os.path.join(os.path.dirname(USER_RULES_PATH), "luts")
 
 
+def _bake_lut_from_ocio(ocio_in: str, out_path: str, ocio_config: str | None = None) -> bool:
+    """Bakes a display-render .cube for *ocio_in* via PyOpenColorIO.
+
+    Equivalent to ``ociobakelut``: input colorspace -> the config's default
+    display/view (the tone-mapped "dailies look"). Tries the show config
+    first (``$OCIO``), then the pinned builtin ACES Studio config, resolving
+    our legacy dropdown names through ``_LEGACY_COLORSPACE_ALIASES``.
+
+    Limitation: the .cube format has no shaper, so its input domain is
+    [0,1] — camera-log and texture sources (the footage case) are bounded
+    and bake exactly; *scene-linear* sources clip values above 1.0 to the
+    tone-mapped white. Fine for previews; supply a manual LUT for exact
+    linear handling.
+    """
+    global _warned_no_pyocio
+    try:
+        import PyOpenColorIO as ocio
+    except ImportError:
+        if not _warned_no_pyocio:
+            logger.warning(
+                "PyOpenColorIO not installed — previews stay untransformed "
+                "unless a manual LUT exists (pip install opencolorio)."
+            )
+            _warned_no_pyocio = True
+        return False
+
+    for cfg_source in (ocio_config, PINNED_OCIO_CONFIG):
+        if not cfg_source:
+            continue
+        try:
+            cfg = ocio.Config.CreateFromFile(cfg_source)
+        except Exception as exc:
+            logger.warning("Could not load OCIO config %s: %s", cfg_source, exc)
+            continue
+
+        cs = cfg.getColorSpace(ocio_in)
+        if not cs and ocio_in in _LEGACY_COLORSPACE_ALIASES:
+            cs = cfg.getColorSpace(_LEGACY_COLORSPACE_ALIASES[ocio_in])
+        if not cs:
+            continue
+
+        try:
+            baker = ocio.Baker()
+            baker.setConfig(cfg)
+            baker.setFormat("iridas_cube")
+            baker.setInputSpace(cs.getName())
+            display = cfg.getDefaultDisplay()
+            baker.setDisplayView(display, cfg.getDefaultView(display))
+            baker.setCubeSize(_BAKE_CUBE_SIZE)
+            data = baker.bake()
+        except Exception as exc:
+            logger.warning("LUT bake failed for %r in %s: %s", ocio_in, cfg_source, exc)
+            continue
+
+        try:
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            tmp_path = out_path + ".tmp"
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(data)
+            os.replace(tmp_path, out_path)
+            logger.info("Baked preview LUT for %r from %s", ocio_in, cfg_source)
+            return True
+        except OSError as exc:
+            logger.warning("Could not write baked LUT %s: %s", out_path, exc)
+            return False
+
+    logger.warning(
+        "Colorspace %r not found in the OCIO config(s) — previews stay "
+        "untransformed. Add a manual LUT or use a config name.", ocio_in
+    )
+    return False
+
+
 def _color_transform_filter(ocio_config: str | None, ocio_in: str) -> str | None:
     """The ffmpeg filter converting *ocio_in* footage to sRGB for previews.
 
     Priority:
-    1. A ``.cube`` LUT named after the source colorspace in the user LUT
-       folder, applied via ``lut3d`` — works with EVERY ffmpeg build.
-       E.g. drop ARRI's official ``LogC4-to-Gamma24_Rec709`` cube in as
-       ``luts/ARRI LogC4.cube``.
-    2. The ffmpeg ``ocio`` filter with an ACES display/view transform —
+    1. A manual ``.cube`` LUT named after the source colorspace in the user
+       LUT folder (``luts/ARRI LogC4.cube``) — the studio/show override.
+    2. A LUT **auto-baked via PyOpenColorIO** from the show config ($OCIO)
+       or the pinned builtin ACES Studio config, cached under
+       ``luts/_auto/``. Applied via ``lut3d`` — works with EVERY ffmpeg.
+    3. The ffmpeg ``ocio`` filter with an ACES display/view transform —
        requires FFmpeg >= 8.1 built with OpenColorIO (most stock Windows
        builds are NOT; check ``ffmpeg -filters | findstr ocio``).
 
-    Returns None when neither is available (previews stay untransformed).
+    Returns None when nothing is available (previews stay untransformed).
     """
     if ocio_in:
-        lut_name = _INVALID_FILENAME_CHARS.sub("_", ocio_in) + ".cube"
-        lut_path = os.path.join(_luts_dir(), lut_name)
+        safe_name = _INVALID_FILENAME_CHARS.sub("_", ocio_in)
+
+        # 1. Manual override LUT
+        lut_path = os.path.join(_luts_dir(), safe_name + ".cube")
         if os.path.isfile(lut_path):
             return f"lut3d={_escape_ffmpeg_filter_path(lut_path)}"
 
+        # 2. Auto-baked LUT, cached per (colorspace, config) pair so a show
+        #    config change never serves stale colors
+        cfg_key = hashlib.md5((ocio_config or PINNED_OCIO_CONFIG).encode("utf-8")).hexdigest()[:8]
+        auto_path = os.path.join(_luts_dir(), "_auto", f"{safe_name}__{cfg_key}.cube")
+        if not os.path.isfile(auto_path):
+            _bake_lut_from_ocio(ocio_in, auto_path, ocio_config)
+        if os.path.isfile(auto_path):
+            return f"lut3d={_escape_ffmpeg_filter_path(auto_path)}"
+
+    # 3. OCIO-enabled ffmpeg builds only
     if ocio_config and os.path.isfile(ocio_config):
         clean_path = _escape_ffmpeg_filter_path(ocio_config)
         return (

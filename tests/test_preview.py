@@ -22,11 +22,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from ramses_ingest.preview import (
     generate_thumbnail,
     generate_proxy,
+    _bake_lut_from_ocio,
     _color_transform_filter,
     _escape_ffmpeg_filter_path,
     THUMB_WIDTH,
     PROXY_WIDTH,
 )
+
+try:
+    import PyOpenColorIO  # noqa: F401
+    HAS_PYOCIO = True
+except ImportError:
+    HAS_PYOCIO = False
 from ramses_ingest.scanner import Clip
 from ramses_ingest.prober import MediaInfo
 
@@ -208,7 +215,7 @@ class TestGenerateThumbnail(unittest.TestCase):
         with patch(
             "ramses_ingest.preview._luts_dir",
             return_value=os.path.join(self.output_dir, "no_luts"),
-        ):
+        ), patch("ramses_ingest.preview._bake_lut_from_ocio", return_value=False):
             result = generate_thumbnail(clip, output, ocio_config=ocio_path, ocio_in="ACEScg")
 
         self.assertTrue(result)
@@ -489,7 +496,7 @@ class TestGenerateProxy(unittest.TestCase):
         with patch(
             "ramses_ingest.preview._luts_dir",
             return_value=os.path.join(self.output_dir, "no_luts"),
-        ):
+        ), patch("ramses_ingest.preview._bake_lut_from_ocio", return_value=False):
             result = generate_proxy(clip, output, ocio_config=ocio_path, ocio_in="Linear")
 
         self.assertTrue(result)
@@ -604,6 +611,13 @@ class TestColorTransformFilter(unittest.TestCase):
         )
         self._luts_patch.start()
         self.addCleanup(self._luts_patch.stop)
+        # Auto-baking is exercised by dedicated tests; disabled by default so
+        # the priority tests stay deterministic without PyOpenColorIO.
+        self._bake_patch = patch(
+            "ramses_ingest.preview._bake_lut_from_ocio", return_value=False
+        )
+        self.mock_bake = self._bake_patch.start()
+        self.addCleanup(self._bake_patch.stop)
 
     def _make_lut(self, name):
         path = os.path.join(self.luts, name)
@@ -637,8 +651,32 @@ class TestColorTransformFilter(unittest.TestCase):
         self.assertNotIn("out_label", flt)
 
     def test_no_lut_no_config_returns_none(self):
+        """Nothing available (manual LUT absent, bake failed, no config)."""
         self.assertIsNone(_color_transform_filter(None, "ARRI LogC4"))
         self.assertIsNone(_color_transform_filter("/nonexistent.ocio", "sRGB"))
+
+    def test_auto_baked_lut_used_and_cached(self):
+        """A baked LUT lands in luts/_auto and is reused without re-baking."""
+        def fake_bake(ocio_in, out_path, ocio_config=None):
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "w") as f:
+                f.write("LUT_3D_SIZE 2\n")
+            return True
+
+        self.mock_bake.side_effect = fake_bake
+        flt = _color_transform_filter(None, "ARRI LogC4")
+        self.assertTrue(flt.startswith("lut3d="))
+        self.assertIn("_auto", flt)
+
+        flt2 = _color_transform_filter(None, "ARRI LogC4")
+        self.assertEqual(flt, flt2)
+        self.assertEqual(self.mock_bake.call_count, 1)  # cache hit, no re-bake
+
+    def test_manual_lut_preferred_over_auto_bake(self):
+        self._make_lut("ARRI LogC4.cube")
+        flt = _color_transform_filter(None, "ARRI LogC4")
+        self.assertNotIn("_auto", flt)
+        self.mock_bake.assert_not_called()
 
     def test_colorspace_name_sanitized_for_lut_lookup(self):
         """Slashes/colons in colorspace names map to underscores."""
@@ -664,6 +702,44 @@ class TestColorTransformFilter(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         vf = cmd[cmd.index("-vf") + 1]
         self.assertIn("lut3d=", vf)
+
+
+@unittest.skipUnless(HAS_PYOCIO, "PyOpenColorIO not installed")
+class TestRealOcioBake(unittest.TestCase):
+    """Real bakes against the pinned builtin ACES Studio config — proves the
+    whole no-vendoring premise (config compiled into the wheel)."""
+
+    def setUp(self):
+        import shutil
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+
+    def _bake(self, colorspace):
+        out = os.path.join(self.tmp, "out.cube")
+        ok = _bake_lut_from_ocio(colorspace, out)
+        return ok, out
+
+    def test_bakes_logc4_display_lut(self):
+        ok, out = self._bake("ARRI LogC4")
+        self.assertTrue(ok)
+        with open(out, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("LUT_3D_SIZE", content)
+
+    def test_legacy_dropdown_names_resolve_via_alias_map(self):
+        for name in ("sRGB", "LogC", "S-Log3", "Rec.709", "Gamma 2.4"):
+            ok, _ = self._bake(name)
+            self.assertTrue(ok, f"{name!r} must bake via the alias map")
+
+    def test_scene_linear_input_bakes(self):
+        """ACEScg is scene-linear — bakes with the documented [0,1] domain
+        limitation (highlights above 1.0 clip in previews)."""
+        ok, _ = self._bake("ACEScg")
+        self.assertTrue(ok)
+
+    def test_unknown_colorspace_returns_false(self):
+        ok, _ = self._bake("Totally Made Up Space")
+        self.assertFalse(ok)
 
 
 if __name__ == "__main__":
