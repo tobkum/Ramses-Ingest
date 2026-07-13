@@ -27,6 +27,7 @@ from ramses_ingest.scanner import Clip
 from ramses_ingest.prober import probe_file, MediaInfo
 from ramses_ingest.matcher import MatchResult
 from ramses_ingest.publisher import IngestPlan, IngestResult
+from ramses_ingest.preview import generate_thumbnail
 from ramses_ingest.reporting import generate_html_report, generate_json_audit_trail
 from ramses_ingest.path_utils import normalize_path
 
@@ -170,6 +171,7 @@ def _synthesize_result(version_dir: str, fallback_project_id: str) -> Optional[I
     plan.ingest_source = str(meta.get("source", ""))
     plan.ingest_operator = str(meta.get("operator", ""))
     plan.ingest_verification = str(meta.get("verification", ""))
+    plan.ingest_colorspace = str(meta.get("colorspace", ""))
 
     checksums = {
         n: str(entry.get("md5"))
@@ -241,6 +243,55 @@ def collect_ingested_versions(
     return results
 
 
+def _ensure_version_thumbnails(
+    results: list[IngestResult],
+    tmp_dir: str,
+    ocio_config: Optional[str] = None,
+    ocio_in_default: str = "sRGB",
+    log: Callable[[str], None] = lambda m: None,
+) -> None:
+    """Gives every report row a thumbnail of ITS OWN frames.
+
+    The permanent `_preview` thumbnail belongs to the shot's latest hero
+    version — resource versions (whose ingest-time thumbnails are transient
+    by design) and superseded hero versions would silently inherit it,
+    showing the wrong image in the report. Those rows get a transient
+    thumbnail rendered from their own first frames instead (embedded as
+    base64 during report generation; *tmp_dir* is deleted afterwards).
+    """
+    latest_hero: dict[tuple, int] = {}
+    for r in results:
+        p = r.plan
+        if not p.resource:
+            key = (p.shot_id, p.step_id)
+            latest_hero[key] = max(latest_hero.get(key, 0), p.version)
+
+    for r in results:
+        p = r.plan
+        is_latest_hero = (
+            not p.resource
+            and latest_hero.get((p.shot_id, p.step_id)) == p.version
+        )
+        if is_latest_hero and r.preview_path:
+            continue  # the permanent thumbnail IS this version's image
+
+        out = os.path.join(
+            tmp_dir,
+            f"{p.shot_id}_{p.step_id}_{p.resource or 'HERO'}_{p.version:03d}.jpg",
+        )
+        try:
+            ocio_in = getattr(p, "ingest_colorspace", "") or ocio_in_default
+            if generate_thumbnail(
+                p.match.clip, out, ocio_config=ocio_config, ocio_in=ocio_in
+            ) and os.path.isfile(out):
+                r.preview_path = out
+            else:
+                r.preview_path = ""
+        except Exception as exc:
+            log(f"  Thumbnail failed for {p.shot_id} v{p.version:03d}: {exc}")
+            r.preview_path = ""
+
+
 _REPORT_NAME_RE = re.compile(r"^Project_Ingest_Report_.+_(\d{8}-\d{6})\.html$")
 
 
@@ -277,6 +328,8 @@ def generate_project_report(
     operator: str = "Unknown",
     progress_callback: Callable[[str], None] | None = None,
     since: Optional[float] = None,
+    ocio_config: Optional[str] = None,
+    ocio_in_default: str = "sRGB",
 ) -> tuple[Optional[str], Optional[str]]:
     """Renders the whole-project HTML report and its JSON manifest.
 
@@ -284,6 +337,9 @@ def generate_project_report(
         since: When given, only versions ingested after this timestamp are
             included ("delta report" for later deliveries — the client gets
             just the newly ingested files). The full report is the default.
+        ocio_config: OCIO config used when rendering transient thumbnails
+            for versions without a matching permanent one (resources,
+            superseded hero versions).
 
     Returns:
         (html_path, json_path) — either may be None on failure/empty result.
@@ -313,16 +369,29 @@ def generate_project_report(
     html_path = os.path.join(output_dir, f"Project_Ingest_Report_{tag}_{ts}.html")
     json_path = os.path.join(output_dir, f"Project_Ingest_Manifest_{tag}_{ts}.json")
 
-    ok = generate_html_report(
-        results,
-        html_path,
-        studio_name=studio_name,
-        studio_logo_path=studio_logo,
-        operator=operator,
-        verification=verification,
-        title=title,
-        id_label="Report ID",
-    )
+    # Transient per-version thumbnails (deleted after base64 embedding)
+    import shutil
+    import tempfile
+    thumb_tmp = tempfile.mkdtemp(prefix="ramses_report_thumbs_")
+    try:
+        _log("Rendering per-version thumbnails...")
+        _ensure_version_thumbnails(
+            results, thumb_tmp,
+            ocio_config=ocio_config, ocio_in_default=ocio_in_default, log=_log,
+        )
+        ok = generate_html_report(
+            results,
+            html_path,
+            studio_name=studio_name,
+            studio_logo_path=studio_logo,
+            operator=operator,
+            verification=verification,
+            title=title,
+            id_label="Report ID",
+        )
+    finally:
+        shutil.rmtree(thumb_tmp, ignore_errors=True)
+
     # Client-facing manifest: no internal filesystem paths
     json_ok = generate_json_audit_trail(
         results, json_path, project_id=tag, operator=operator, include_paths=False

@@ -414,6 +414,8 @@ class IngestEngine:
             operator=self._operator_name,
             progress_callback=progress_callback,
             since=since,
+            ocio_config=self.ocio_config,
+            ocio_in_default=self.ocio_in,
         )
         if html_path:
             self.last_report_path = html_path

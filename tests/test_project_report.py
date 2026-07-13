@@ -14,12 +14,20 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from ramses_ingest.project_report import (
+    _ensure_version_thumbnails,
     _parse_step_folder,
     _parse_version_folder,
     collect_ingested_versions,
     generate_project_report,
 )
 from ramses_ingest.prober import MediaInfo
+
+
+def _fake_thumbnail(clip, output_path, frame_index=None, ocio_config=None, ocio_in="sRGB"):
+    """Stand-in for the ffmpeg-based generator: writes a stub JPG."""
+    with open(output_path, "wb") as f:
+        f.write(b"jpg")
+    return True
 
 
 def _write_version(step_dir: str, version_name: str, frames: list[int],
@@ -85,6 +93,12 @@ class TestCollect(unittest.TestCase):
         )
         self._probe_patch.start()
         self.addCleanup(self._probe_patch.stop)
+        self._thumb_patch = patch(
+            "ramses_ingest.project_report.generate_thumbnail",
+            side_effect=_fake_thumbnail,
+        )
+        self._thumb_patch.start()
+        self.addCleanup(self._thumb_patch.stop)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -195,6 +209,12 @@ class TestGenerate(unittest.TestCase):
         )
         self._probe_patch.start()
         self.addCleanup(self._probe_patch.stop)
+        self._thumb_patch = patch(
+            "ramses_ingest.project_report.generate_thumbnail",
+            side_effect=_fake_thumbnail,
+        )
+        self._thumb_patch.start()
+        self.addCleanup(self._thumb_patch.stop)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -321,6 +341,12 @@ class TestMultiSessionAndDelta(unittest.TestCase):
         )
         self._probe_patch.start()
         self.addCleanup(self._probe_patch.stop)
+        self._thumb_patch = patch(
+            "ramses_ingest.project_report.generate_thumbnail",
+            side_effect=_fake_thumbnail,
+        )
+        self._thumb_patch.start()
+        self.addCleanup(self._thumb_patch.stop)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -386,6 +412,80 @@ class TestMultiSessionAndDelta(unittest.TestCase):
         latest = find_last_report_time(out)
         expected = time.mktime(time.strptime("20260713-120000", "%Y%m%d-%H%M%S"))
         self.assertEqual(latest, expected)
+
+
+class TestVersionThumbnails(unittest.TestCase):
+    """Every report row must show ITS OWN frames — resource versions and
+    superseded hero versions must not inherit the shot's permanent (latest
+    hero) thumbnail."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        from ramses.constants import FolderNames
+        self.step_dir = os.path.join(
+            self.tmp, FolderNames.shots, "TEST_S_0163", "TEST_S_0163_PLATE"
+        )
+        os.makedirs(self.step_dir, exist_ok=True)
+
+        # Permanent hero thumbnail as written by Ingest
+        prev_dir = os.path.join(self.step_dir, "_preview")
+        os.makedirs(prev_dir, exist_ok=True)
+        self.permanent_thumb = os.path.join(prev_dir, "TEST_S_0163_PLATE.jpg")
+        with open(self.permanent_thumb, "wb") as f:
+            f.write(b"hero")
+
+        _write_version(self.step_dir, "001_WIP", [1001, 1002], shot="0163")
+        _write_version(self.step_dir, "002_OK", [1001, 1002], shot="0163")
+        _write_version(self.step_dir, "LICHTERKETTE_001_OK", [10140], shot="0163")
+
+        self._probe_patch = patch(
+            "ramses_ingest.project_report.probe_file", return_value=MediaInfo()
+        )
+        self._probe_patch.start()
+        self.addCleanup(self._probe_patch.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _collect_with_thumbs(self, thumb_side_effect=_fake_thumbnail):
+        results = collect_ingested_versions(self.tmp)
+        thumb_tmp = os.path.join(self.tmp, "_thumbs")
+        os.makedirs(thumb_tmp, exist_ok=True)
+        with patch(
+            "ramses_ingest.project_report.generate_thumbnail",
+            side_effect=thumb_side_effect,
+        ) as mock_gen:
+            _ensure_version_thumbnails(results, thumb_tmp)
+        return results, mock_gen
+
+    def test_each_version_gets_its_own_thumbnail(self):
+        results, _ = self._collect_with_thumbs()
+        by_key = {
+            (r.plan.resource, r.plan.version): r.preview_path for r in results
+        }
+        # Latest hero (v002) keeps the permanent thumbnail
+        self.assertEqual(by_key[("", 2)], self.permanent_thumb)
+        # Superseded hero (v001) and the resource get their OWN images
+        self.assertNotEqual(by_key[("", 1)], self.permanent_thumb)
+        self.assertNotEqual(by_key[("LICHTERKETTE", 1)], self.permanent_thumb)
+        self.assertNotEqual(by_key[("", 1)], by_key[("LICHTERKETTE", 1)])
+        self.assertTrue(os.path.isfile(by_key[("LICHTERKETTE", 1)]))
+
+    def test_latest_hero_does_not_trigger_generation(self):
+        _, mock_gen = self._collect_with_thumbs()
+        generated_for = [c.args[1] for c in mock_gen.call_args_list]
+        self.assertEqual(len(generated_for), 2)  # v001 + resource, not v002
+
+    def test_generation_failure_leaves_row_without_thumbnail(self):
+        results, _ = self._collect_with_thumbs(
+            thumb_side_effect=lambda *a, **k: False
+        )
+        by_key = {
+            (r.plan.resource, r.plan.version): r.preview_path for r in results
+        }
+        self.assertEqual(by_key[("", 2)], self.permanent_thumb)  # untouched
+        self.assertEqual(by_key[("", 1)], "")
+        self.assertEqual(by_key[("LICHTERKETTE", 1)], "")
 
 
 class TestSidecarProvenance(unittest.TestCase):
