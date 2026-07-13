@@ -422,14 +422,15 @@ class ProjectReportWorker(QThread):
     progress = Signal(str)
     finished_report = Signal(str)  # HTML path, or "" when nothing was found
 
-    def __init__(self, engine: IngestEngine, parent=None) -> None:
+    def __init__(self, engine: IngestEngine, since: float | None = None, parent=None) -> None:
         super().__init__(parent)
         self._engine = engine
+        self._since = since
 
     def run(self) -> None:
         try:
             path = self._engine.generate_project_report(
-                progress_callback=self.progress.emit
+                progress_callback=self.progress.emit, since=self._since
             )
             self.finished_report.emit(path or "")
         except Exception as exc:
@@ -2640,13 +2641,41 @@ class IngestWindow(QMainWindow):
             webbrowser.open(f"file:///{os.path.abspath(self._engine.last_report_path)}")
 
     def _on_project_report(self, _=None) -> None:
-        """Build the whole-project ingest report in the background."""
+        """Build the whole-project ingest report in the background.
+
+        When a previous project report exists, offers a delta report covering
+        only footage ingested since then — for later deliveries the client
+        gets just the new files instead of the full report again.
+        """
         if self._report_worker and self._report_worker.isRunning():
             return
+
+        since = None
+        last_ts = self._engine.last_project_report_time()
+        if last_ts:
+            import time as _time
+            last_str = _time.strftime("%Y-%m-%d %H:%M", _time.localtime(last_ts))
+            box = QMessageBox(self)
+            box.setWindowTitle("Project Report")
+            box.setText(
+                f"A project report was last generated on {last_str}.\n\n"
+                "Full report of everything ingested, or only footage\n"
+                "ingested since then (for a new delivery)?"
+            )
+            btn_full = box.addButton("Full Report", QMessageBox.ButtonRole.AcceptRole)
+            btn_new = box.addButton(f"New since {last_str}", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            clicked = box.clickedButton()
+            if clicked is btn_new:
+                since = last_ts
+            elif clicked is not btn_full:
+                return  # cancelled
+
         self._btn_project_report.setEnabled(False)
         self._btn_project_report.setText("Building...")
         self._log("Building project ingest report...")
-        self._report_worker = ProjectReportWorker(self._engine, self)
+        self._report_worker = ProjectReportWorker(self._engine, since=since, parent=self)
         self._report_worker.progress.connect(self._log)
         self._report_worker.finished_report.connect(self._on_project_report_done)
         self._report_worker.start()
@@ -2663,7 +2692,8 @@ class IngestWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Project Report",
-                "No ingested versions were found in this project.",
+                "No ingested versions were found in this project\n"
+                "(or nothing new since the last report).",
             )
 
     def keyPressEvent(self, event) -> None:

@@ -151,7 +151,8 @@ def _synthesize_result(version_dir: str, fallback_project_id: str) -> Optional[I
 
     # Extra context for the report row / JSON (dynamic attrs, template uses getattr)
     date_val = meta.get("date")
-    if isinstance(date_val, (int, float)) and date_val > 0:
+    plan.ingest_date_ts = float(date_val) if isinstance(date_val, (int, float)) else 0.0
+    if plan.ingest_date_ts > 0:
         plan.ingested_on = time.strftime("%Y-%m-%d %H:%M", time.localtime(date_val))
     plan.ingest_source = str(meta.get("source", ""))
     plan.ingest_operator = str(meta.get("operator", ""))
@@ -227,6 +228,33 @@ def collect_ingested_versions(
     return results
 
 
+_REPORT_NAME_RE = re.compile(r"^Project_Ingest_Report_.+_(\d{8}-\d{6})\.html$")
+
+
+def find_last_report_time(output_dir: str) -> Optional[float]:
+    """Timestamp of the most recent project report in *output_dir*, or None.
+
+    Parsed from the report filenames, so 'new since the last report' works
+    across machines and sessions without any extra state file.
+    """
+    latest = None
+    try:
+        names = os.listdir(output_dir)
+    except OSError:
+        return None
+    for name in names:
+        m = _REPORT_NAME_RE.match(name)
+        if not m:
+            continue
+        try:
+            ts = time.mktime(time.strptime(m.group(1), "%Y%m%d-%H%M%S"))
+        except ValueError:
+            continue
+        if latest is None or ts > latest:
+            latest = ts
+    return latest
+
+
 def generate_project_report(
     project_path: str,
     output_dir: str,
@@ -235,15 +263,29 @@ def generate_project_report(
     studio_logo: str = "",
     operator: str = "Unknown",
     progress_callback: Callable[[str], None] | None = None,
+    since: Optional[float] = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """Renders the whole-project HTML report and its JSON manifest.
 
+    Args:
+        since: When given, only versions ingested after this timestamp are
+            included ("delta report" for later deliveries — the client gets
+            just the newly ingested files). The full report is the default.
+
     Returns:
-        (html_path, json_path) — either may be None on failure/empty project.
+        (html_path, json_path) — either may be None on failure/empty result.
     """
     _log = progress_callback or (lambda m: None)
     _log("Scanning published versions...")
     results = collect_ingested_versions(project_path, progress_callback, fallback_project_id=project_id)
+
+    title = "Project Ingest Report"
+    if since is not None:
+        since_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(since))
+        results = [r for r in results if getattr(r.plan, "ingest_date_ts", 0.0) > since]
+        title = f"Ingest Report — new since {since_str}"
+        _log(f"Filtering to versions ingested after {since_str}...")
+
     if not results:
         _log("No ingested versions found.")
         return None, None
@@ -265,8 +307,11 @@ def generate_project_report(
         studio_logo_path=studio_logo,
         operator=operator,
         verification=verification,
-        title="Project Ingest Report",
+        title=title,
         id_label="Report ID",
     )
-    json_ok = generate_json_audit_trail(results, json_path, project_id=tag, operator=operator)
+    # Client-facing manifest: no internal filesystem paths
+    json_ok = generate_json_audit_trail(
+        results, json_path, project_id=tag, operator=operator, include_paths=False
+    )
     return (html_path if ok else None), (json_path if json_ok else None)

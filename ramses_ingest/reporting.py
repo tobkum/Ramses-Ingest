@@ -81,11 +81,15 @@ def _get_base64_image(path: str, max_width: int | None = None) -> str:
         return ""
 
 
-def generate_json_audit_trail(results: list[IngestResult], output_path: str, project_id: str = "PROJ", operator: str = "Unknown") -> bool:
+def generate_json_audit_trail(results: list[IngestResult], output_path: str, project_id: str = "PROJ", operator: str = "Unknown", include_paths: bool = True) -> bool:
     """Generate machine-readable JSON audit trail for database integration.
 
     Exports comprehensive ingest metadata including checksums, colorspace info,
     frame continuity, and error details for VFX pipeline tracking systems.
+
+    Args:
+        include_paths: Set False for client-facing manifests — internal
+            filesystem paths are omitted entirely.
     """
     import json
     import time
@@ -114,6 +118,8 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
         clip_data = {
             "shot_id": res.plan.shot_id,
             "sequence_id": res.plan.sequence_id or None,
+            "source_media": res.plan.match.clip.base_name if res.plan.match and res.plan.match.clip else None,
+            "ingested_on": getattr(res.plan, "ingested_on", None),
             "version": res.plan.version,
             "step": res.plan.step_id,
             "status": "success" if res.success else "failed",
@@ -143,11 +149,12 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
                 "md5_checksum": res.checksum or None,
                 "bytes_verified": res.bytes_copied,
             },
-            "paths": {
+        }
+        if include_paths:
+            clip_data["paths"] = {
                 "published": res.published_path or None,
                 "preview": res.preview_path or None,
-            },
-        }
+            }
         audit_data["clips"].append(clip_data)
 
     try:
@@ -771,6 +778,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     }
 
     /* Responsive */
+    /* The wide table scrolls inside its own container on narrow screens —
+       the page body must never scroll horizontally. */
+    .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .table-scroll table { min-width: 960px; }
+
     @media (max-width: 1200px) {
         body { padding: 12px; }
         .report { padding: 24px; }
@@ -779,6 +791,15 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         table { font-size: 12px; }
         td { padding: 12px 10px; }
         .thumb { width: 120px; height: 67px; }
+    }
+
+    @media (max-width: 800px) {
+        .report { padding: 14px; }
+        header { flex-direction: column; align-items: flex-start; gap: 10px; }
+        .health-dashboard { flex-direction: column; }
+        .thumb { width: 96px; height: 54px; }
+        .table-toolbar { flex-wrap: wrap; }
+        .table-toolbar input[type="search"] { min-width: 160px; }
     }
     """
 
@@ -1210,6 +1231,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         f'            <button class="filter-btn" onclick="setFilter(this, \'warn\')">Warnings <span class="filter-count">({status_counts["warn"]})</span></button>',
         f'            <button class="filter-btn" onclick="setFilter(this, \'fail\')">Failed <span class="filter-count">({status_counts["fail"]})</span></button>',
         '        </div>',
+        '        <div class="table-scroll">',
         "        <table>",
         "            <thead>",
         "                <tr>",
@@ -1236,6 +1258,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "                </tr>",
         "            </tfoot>",
         "        </table>",
+        "        </div>",
         '        <div class="footer">',
         f"            With &epsilon;&gt; from {studio_name}",
         "        </div>",

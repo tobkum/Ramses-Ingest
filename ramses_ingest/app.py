@@ -384,10 +384,21 @@ class IngestEngine:
         except OSError:
             pass  # a failed ledger write must never fail the ingest
 
-    def generate_project_report(self, progress_callback: Callable[[str], None] | None = None) -> Optional[str]:
+    def last_project_report_time(self) -> Optional[float]:
+        """Timestamp of the most recent project report, or None."""
+        if not self.project_path:
+            return None
+        from ramses_ingest.project_report import find_last_report_time
+        return find_last_report_time(os.path.join(self.project_path, "_ingest_reports"))
+
+    def generate_project_report(self, progress_callback: Callable[[str], None] | None = None, since: Optional[float] = None) -> Optional[str]:
         """Builds the whole-project ingest report from the pipeline's on-disk
         state (every published version with an Ingest sidecar), regardless of
         how many sessions the ingests were spread across.
+
+        Args:
+            since: Only include versions ingested after this timestamp
+                (delta report for later deliveries).
 
         Returns the HTML report path, or None if nothing was found.
         """
@@ -402,6 +413,7 @@ class IngestEngine:
             studio_logo=self.studio_logo,
             operator=self._operator_name,
             progress_callback=progress_callback,
+            since=since,
         )
         if html_path:
             self.last_report_path = html_path

@@ -20,7 +20,9 @@ Technical ingest tool for [Ramses](https://ramses.rxlab.guide/) production manag
     - **Standardized Hierarchy**: Files are organized into the `_published/vNNN` structure with standard naming: `{PROJ}_S_{SHOT}_{STEP}.{frame}.{ext}`. Version numbering also counts version folders created by other tools (e.g. Ramses-Fusion publishes), preventing number collisions.
 6.  **Previews**: Multi-threaded generation of JPG thumbnails and MP4 proxies with OpenColorIO (OCIO) support.
 7.  **Reporting**: Self-contained HTML manifest with per-clip failure reasons and warnings, a search box with Passed/Warnings/Failed filters, embedded thumbnails, dark/light theme, and a verification badge stating whether checksums are sampled (Fast) or bit-perfect (Full). A machine-readable JSON audit trail is also available.
-    - **Project Report**: one client-ready report of *all* footage currently ingested in the project, no matter how many sessions the ingests were spread across. Built from the on-disk state (every published version with an Ingest sidecar), so reverted or re-ingested versions never leave stale rows — plus a machine-readable JSON manifest alongside. Each version shows its own ingest date, live frame-gap check, and checksums.
+    - **Project Report**: one client-ready report of *all* footage currently ingested in the project, no matter how many sessions the ingests were spread across. Built from the on-disk state (every published version with an Ingest sidecar), so reverted or re-ingested versions never leave stale rows — plus a machine-readable JSON manifest alongside. Each version shows its own ingest date, live frame-gap check, and checksums. Image sequences are one row each (with frame count and continuity check), never one line per frame.
+    - **Delta reports for rolling deliveries**: when a project report already exists, the button offers "new since \<last report\>" — the client gets a report covering only the newly ingested footage. The cutoff is derived from the previous report's filename, so it works across machines with no extra state.
+    - **Client-safe by design**: neither the HTML nor the JSON manifest contains internal filesystem paths; the layout is responsive (the table scrolls in place on smaller screens instead of breaking the page).
     - **Ingest ledger**: every session appends one line per clip (incl. failures) to `<project>/_deliveries/ingest_history.log` — the same shared folder Ramses-Out uses for delivery tracking.
 
 ## Technical Details
@@ -63,7 +65,7 @@ python -m ramses_ingest
 3.  **Audit**: Review technical mismatches (FPS/Res) and missing frames.
 4.  **Execute**: Run ingest to move files and register with Ramses. Plan-editing UI is locked while files transfer.
 5.  **Review**: Use **View Report** for the HTML manifest, or **Open Destination** to jump straight to the ingested files (the common parent folder when several shots were ingested).
-6.  **Project Report**: At any time (e.g. before a client update), click **Project Report** for a single report covering everything ingested into the project so far — across all sessions and operators.
+6.  **Project Report**: At any time (e.g. before a client update), click **Project Report** for a single report covering everything ingested into the project so far — across all sessions and operators. For follow-up deliveries, pick **"New since \<last report\>"** in the same dialog to report only the newly ingested footage.
 
 ---
 

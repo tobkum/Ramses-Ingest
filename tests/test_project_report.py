@@ -25,7 +25,7 @@ from ramses_ingest.prober import MediaInfo
 def _write_version(step_dir: str, version_name: str, frames: list[int],
                    shot="SH010", step="PLATE", proj="TEST",
                    complete=True, sidecar=True, extra_meta=None,
-                   lost_files=0) -> str:
+                   lost_files=0, date=None) -> str:
     """Creates a published version folder with frames + Ingest sidecar."""
     vdir = os.path.join(step_dir, "_published", version_name)
     os.makedirs(vdir, exist_ok=True)
@@ -39,7 +39,7 @@ def _write_version(step_dir: str, version_name: str, frames: list[int],
             if version_name.split("_")[0].isdigit() else 1,
             "comment": "Ingested via Ramses-Ingest",
             "state": "wip",
-            "date": int(time.time()),
+            "date": int(date if date is not None else time.time()),
             "md5": "d41d8cd98f00b204e9800998ecf8427e",
         }
         if extra_meta:
@@ -201,6 +201,129 @@ class TestGenerate(unittest.TestCase):
             self.assertIsNone(json_path)
         finally:
             shutil.rmtree(empty, ignore_errors=True)
+
+    def test_html_contains_no_internal_paths(self):
+        """Client-facing: no filesystem paths may leak into the HTML."""
+        out = os.path.join(self.tmp, "_ingest_reports")
+        html_path, json_path = generate_project_report(
+            self.tmp, out, project_id="TEST", operator="tobi"
+        )
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        needle = os.path.normpath(self.tmp)
+        self.assertNotIn(needle, html)
+        self.assertNotIn(needle.replace("\\", "/"), html)
+        self.assertNotIn("_published", html)
+
+    def test_json_manifest_is_client_safe(self):
+        """The project manifest omits internal paths but names the client's media."""
+        out = os.path.join(self.tmp, "_ingest_reports")
+        _html, json_path = generate_project_report(
+            self.tmp, out, project_id="TEST", operator="tobi"
+        )
+        with open(json_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        for clip in manifest["clips"]:
+            self.assertNotIn("paths", clip)
+            self.assertIn("source_media", clip)
+            self.assertIn("ingested_on", clip)
+
+
+class TestMultiSessionAndDelta(unittest.TestCase):
+    """Reports across several ingest sessions: ordering, completeness, deltas."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        from ramses.constants import FolderNames
+        self.shots = os.path.join(self.tmp, FolderNames.shots)
+
+        # Simulated sessions: SH020 was ingested FIRST (session 1),
+        # SH010 v1 in session 2, SH010 v2 (redelivery) in session 3.
+        day = 86400
+        self.t_session1 = time.time() - 3 * day
+        self.t_session2 = time.time() - 2 * day
+        self.t_session3 = time.time() - 1 * day
+
+        s20 = os.path.join(self.shots, "TEST_S_SH020", "TEST_S_SH020_PLATE")
+        os.makedirs(s20, exist_ok=True)
+        _write_version(s20, "001_OK", list(range(2001, 2101)), shot="SH020",
+                       date=self.t_session1)  # 100-frame sequence
+
+        s10 = os.path.join(self.shots, "TEST_S_SH010", "TEST_S_SH010_PLATE")
+        os.makedirs(s10, exist_ok=True)
+        _write_version(s10, "001_WIP", [1001, 1002], date=self.t_session2)
+        _write_version(s10, "002_OK", [1001, 1002], date=self.t_session3)
+
+        self._probe_patch = patch(
+            "ramses_ingest.project_report.probe_file", return_value=MediaInfo()
+        )
+        self._probe_patch.start()
+        self.addCleanup(self._probe_patch.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_one_row_per_version_even_for_sequences(self):
+        """A 100-frame EXR sequence is ONE row (with its frame count), not 100."""
+        out = os.path.join(self.tmp, "_ingest_reports")
+        html_path, _ = generate_project_report(self.tmp, out, project_id="TEST")
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        self.assertEqual(html.count('class="clip-row"'), 3)  # 3 versions total
+        self.assertIn("<b>100</b>", html)  # SH020's frame count
+
+    def test_rows_ordered_by_shot_then_version_regardless_of_session_order(self):
+        """SH020 was ingested first, but the report orders by shot; versions
+        of the same shot ascend."""
+        out = os.path.join(self.tmp, "_ingest_reports")
+        html_path, _ = generate_project_report(self.tmp, out, project_id="TEST")
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        i_sh010 = html.index("SH010")
+        i_sh020 = html.index("SH020")
+        self.assertLess(i_sh010, i_sh020)
+        # v001 row precedes v002 row
+        self.assertLess(html.index("v001"), html.index("v002"))
+
+    def test_delta_report_contains_only_new_versions(self):
+        """'New since' covers exactly the versions ingested after the cutoff."""
+        out = os.path.join(self.tmp, "_ingest_reports")
+        cutoff = self.t_session2 + 3600  # after session 2, before session 3
+        html_path, json_path = generate_project_report(
+            self.tmp, out, project_id="TEST", since=cutoff
+        )
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        self.assertEqual(html.count('class="clip-row"'), 1)
+        self.assertIn("SH010", html)
+        self.assertNotIn("SH020", html)
+        self.assertIn("new since", html)
+
+        with open(json_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        self.assertEqual(manifest["summary"]["total_clips"], 1)
+        self.assertEqual(manifest["clips"][0]["version"], 2)
+
+    def test_delta_with_nothing_new_returns_none(self):
+        out = os.path.join(self.tmp, "_ingest_reports")
+        html_path, json_path = generate_project_report(
+            self.tmp, out, project_id="TEST", since=time.time()
+        )
+        self.assertIsNone(html_path)
+        self.assertIsNone(json_path)
+
+    def test_find_last_report_time(self):
+        from ramses_ingest.project_report import find_last_report_time
+        out = os.path.join(self.tmp, "_ingest_reports")
+        self.assertIsNone(find_last_report_time(out))  # not created yet
+        os.makedirs(out, exist_ok=True)
+        self.assertIsNone(find_last_report_time(out))  # empty
+        for stamp in ("20260710-090000", "20260713-120000", "20260711-100000"):
+            with open(os.path.join(out, f"Project_Ingest_Report_TEST_{stamp}.html"), "w") as f:
+                f.write("x")
+        latest = find_last_report_time(out)
+        expected = time.mktime(time.strptime("20260713-120000", "%Y%m%d-%H%M%S"))
+        self.assertEqual(latest, expected)
 
 
 class TestSidecarProvenance(unittest.TestCase):
