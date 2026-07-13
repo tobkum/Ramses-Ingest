@@ -642,6 +642,11 @@ class IngestWindow(QMainWindow):
         self._step_combo = QComboBox()
         self._step_combo.setMinimumWidth(100)
         self._step_combo.addItem("PLATE")
+        self._step_combo.setToolTip(
+            "Pipeline step the footage is ingested into.\n"
+            "Steps come from the Ramses project (Shot Production type) —\n"
+            "create them in the Ramses Client; Ingest never creates steps."
+        )
         self._step_combo.currentTextChanged.connect(self._on_step_changed)
         header_lay.addWidget(self._step_combo)
 
@@ -739,11 +744,13 @@ class IngestWindow(QMainWindow):
 
         self._chk_sequences = QCheckBox("Sequences")
         self._chk_sequences.setChecked(True)
+        self._chk_sequences.setToolTip("Show image sequences (EXR, DPX, ...)")
         self._chk_sequences.stateChanged.connect(self._on_type_filter_changed)
         left_lay.addWidget(self._chk_sequences)
 
         self._chk_movies = QCheckBox("Movies")
         self._chk_movies.setChecked(True)
+        self._chk_movies.setToolTip("Show movie files (MOV, MP4, MXF, ...)")
         self._chk_movies.stateChanged.connect(self._on_type_filter_changed)
         left_lay.addWidget(self._chk_movies)
 
@@ -891,6 +898,10 @@ class IngestWindow(QMainWindow):
         action_bar_lay.addWidget(self._btn_open_dest)
 
         self._btn_view_report = QPushButton("View Report")
+        self._btn_view_report.setToolTip(
+            "Open the HTML ingest manifest: per-clip results, warnings,\n"
+            "thumbnails and checksum verification details"
+        )
         self._btn_view_report.clicked.connect(self._on_view_report)
         self._btn_view_report.setVisible(False)
         self._btn_view_report.setStyleSheet("""
@@ -1383,6 +1394,10 @@ class IngestWindow(QMainWindow):
 
         rule_btns = QHBoxLayout()
         btn_architect = QPushButton("Architect...")
+        btn_architect.setToolTip(
+            "Visual rule builder: pick the shot/sequence parts of a sample\n"
+            "filename and generate a matching rule automatically"
+        )
 
         def _launch_and_refresh():
             self._on_launch_smart_pattern()
@@ -1393,10 +1408,15 @@ class IngestWindow(QMainWindow):
         rule_btns.addWidget(btn_architect)
 
         btn_edl = QPushButton("Load EDL...")
+        btn_edl.setToolTip(
+            "Map clip names to shot IDs from a CMX 3600 EDL and validate\n"
+            "frame ranges against its comments"
+        )
         btn_edl.clicked.connect(self._on_load_edl)
         rule_btns.addWidget(btn_edl)
 
         btn_edit = QPushButton("Edit Rules...")
+        btn_edit.setToolTip("Edit the naming rules (regex) by hand")
         btn_edit.clicked.connect(self._on_edit_rules)
         rule_btns.addWidget(btn_edit)
 

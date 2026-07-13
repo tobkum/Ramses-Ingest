@@ -33,6 +33,10 @@ Technical ingest tool for [Ramses](https://ramses.rxlab.guide/) production manag
 - Python 3.10+
 - **FFmpeg/ffprobe** (Must be in system `PATH`)
 - **Ramses Client** (Running with active Daemon)
+- **A Shot Production step in the project** (e.g. `PLATE`) — the Step dropdown
+  lists the project's existing steps; Ingest never creates steps. Without one,
+  files are still organized on disk but no database status can be written.
+  See [WORKFLOW.md](WORKFLOW.md) for the new-project checklist.
 
 ## Installation
 
