@@ -203,5 +203,57 @@ class TestIngestEngine(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+
+class TestStepSelection(unittest.TestCase):
+    """Case-insensitive step preselection (a project's 'Plate' step must
+    satisfy the 'PLATE' default)."""
+
+    def test_pick_default_step_case_insensitive(self):
+        from ramses_ingest.app import pick_default_step
+        self.assertEqual(pick_default_step(["Comp", "Plate"]), "Plate")
+        self.assertEqual(pick_default_step(["Comp", "PLATE"]), "PLATE")
+        self.assertEqual(pick_default_step(["Comp", "plate"]), "plate")
+
+    def test_pick_default_step_falls_back_to_first(self):
+        from ramses_ingest.app import pick_default_step
+        self.assertEqual(pick_default_step(["Comp", "MaMo"]), "Comp")
+        self.assertEqual(pick_default_step([]), "")
+
+    def test_pick_default_step_custom_preferred(self):
+        from ramses_ingest.app import pick_default_step
+        self.assertEqual(
+            pick_default_step(["Comp", "Footage"], preferred="footage"), "Footage"
+        )
+
+    def _connect_with_steps(self, engine, step_names):
+        """Runs the same normalization connect() applies after fetching steps."""
+        engine._steps = list(step_names)
+        engine._normalize_step_selection()
+
+    def test_default_step_id_normalizes_to_project_case(self):
+        """Engine default 'PLATE' realigns to the project's actual 'Plate'."""
+        engine = IngestEngine()
+        self._connect_with_steps(engine, ["Comp", "Plate"])
+        self.assertEqual(engine.step_id, "Plate")
+
+    def test_valid_previous_choice_is_kept(self):
+        engine = IngestEngine()
+        engine.step_id = "Comp"
+        self._connect_with_steps(engine, ["Comp", "Plate"])
+        self.assertEqual(engine.step_id, "Comp")
+
+    def test_stale_choice_falls_back_to_plate(self):
+        engine = IngestEngine()
+        engine.step_id = "OLDSTEP"
+        self._connect_with_steps(engine, ["Comp", "PLATE"])
+        self.assertEqual(engine.step_id, "PLATE")
+
+    def test_no_steps_falls_back_to_plate_placeholder(self):
+        engine = IngestEngine()
+        self._connect_with_steps(engine, [])
+        self.assertEqual(engine.steps, ["PLATE"])
+        self.assertEqual(engine.step_id, "PLATE")
+
+
 if __name__ == "__main__":
     unittest.main()

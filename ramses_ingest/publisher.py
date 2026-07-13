@@ -664,7 +664,7 @@ def update_ramses_status(
         if not target_shot: return False
         from ramses.ram_step import StepType
         steps = steps_cache if steps_cache is not None else project.steps(StepType.SHOT_PRODUCTION)
-        target_step = next((s for s in steps if s.shortName() == plan.step_id), None)
+        target_step = next((s for s in steps if str(s.shortName()).upper() == plan.step_id.upper()), None)
         if not target_step: return False
         status = target_shot.currentStatus(target_step)
         if status:

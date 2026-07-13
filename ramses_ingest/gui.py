@@ -2384,11 +2384,9 @@ class IngestWindow(QMainWindow):
             for s in self._engine.steps:
                 self._step_combo.addItem(s)
 
-            # Select "PLATE" if it exists, otherwise select the current engine step
-            if "PLATE" in self._engine.steps:
-                self._step_combo.setCurrentText("PLATE")
-            else:
-                self._step_combo.setCurrentText(self._engine.step_id)
+            # engine.connect() already normalized step_id case-insensitively
+            # (prefers the plate step, keeps a still-valid previous choice)
+            self._step_combo.setCurrentText(self._engine.step_id)
 
             # CRITICAL: Re-sync engine state with whatever was actually selected
             self._engine.step_id = self._step_combo.currentText()

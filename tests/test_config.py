@@ -16,11 +16,22 @@ from ramses_ingest.matcher import NamingRule
 
 
 class TestLoadRules(unittest.TestCase):
+    # Assertions about rule CONTENT must pin DEFAULT_RULES_PATH: a bare
+    # load_rules() prefers the machine's user config (%APPDATA%), whose
+    # rules legitimately change per project.
+
     def test_load_default_rules(self):
-        rules, studio, logo = load_rules()
+        rules, studio, logo = load_rules(DEFAULT_RULES_PATH)
         self.assertIsInstance(rules, list)
         self.assertGreaterEqual(len(rules), 2)
         self.assertIsInstance(rules[0], NamingRule)
+        self.assertIsInstance(studio, str)
+
+    def test_load_user_config_or_defaults(self):
+        """A bare load_rules() must return a usable rule list either way."""
+        rules, studio, logo = load_rules()
+        self.assertIsInstance(rules, list)
+        self.assertGreaterEqual(len(rules), 1)
         self.assertIsInstance(studio, str)
 
     def test_load_from_explicit_path(self):
@@ -33,12 +44,12 @@ class TestLoadRules(unittest.TestCase):
         self.assertEqual(studio, "Ramses Studio")
 
     def test_rule_fields_populated(self):
-        rules, studio, logo = load_rules()
+        rules, studio, logo = load_rules(DEFAULT_RULES_PATH)
         first = rules[0]
         self.assertTrue(len(first.pattern) > 0)
 
     def test_parent_dir_rule(self):
-        rules, studio, logo = load_rules()
+        rules, studio, logo = load_rules(DEFAULT_RULES_PATH)
         dir_rule = [r for r in rules if r.use_parent_dir_as_sequence]
         self.assertEqual(len(dir_rule), 1)
 

@@ -62,6 +62,16 @@ def _generate_one_thumbnail(job_data):
         return (None, False)
 
 
+def pick_default_step(steps: list[str], preferred: str = "PLATE") -> str:
+    """The step short name to preselect: *preferred* if present
+    (case-insensitive, so a project's "Plate" step matches), else the first
+    step, else an empty string."""
+    for s in steps:
+        if s.upper() == preferred.upper():
+            return s
+    return steps[0] if steps else ""
+
+
 class IngestEngine:
     """Orchestrates the full ingest pipeline."""
 
@@ -75,6 +85,19 @@ class IngestEngine:
         self.last_report_path = None
         self.ocio_config = os.getenv("OCIO"); self.ocio_in = "sRGB"
         self._steps: list[str] = []
+
+    def _normalize_step_selection(self) -> None:
+        """Re-aligns step_id with the project's actual step short names.
+
+        Case-insensitive: the "PLATE" default must match a step named
+        "Plate". A still-valid previous choice is kept (in its project
+        spelling); a stale one falls back to the plate step or first step.
+        """
+        if self._steps:
+            by_upper = {s.upper(): s for s in self._steps}
+            self._step_id = by_upper.get(self._step_id.upper()) or pick_default_step(self._steps)
+        else:
+            self._steps = ["PLATE"]
 
     # -- Properties ----------------------------------------------------------
 
@@ -145,9 +168,7 @@ class IngestEngine:
                 from ramses import StepType
                 for step in project.steps(StepType.SHOT_PRODUCTION): self._steps.append(step.shortName())
             except Exception: pass
-            if self._steps:
-                if self._step_id == "PLATE" and "PLATE" not in self._steps: self._step_id = self._steps[0]
-            else: self._steps = ["PLATE"]
+            self._normalize_step_selection()
 
             self._connected = True; return True
         except Exception:
