@@ -132,12 +132,14 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
             "technical": {
                 "resolution": {"width": mi.width, "height": mi.height} if mi.width else None,
                 "framerate": mi.fps if mi.fps else None,
+                "framerate_manual": True if getattr(res.plan, "fps_is_manual", False) else None,
                 "pixel_aspect_ratio": mi.pixel_aspect_ratio if mi.pixel_aspect_ratio != 1.0 else None,
                 "codec": mi.codec or None,
                 "pixel_format": mi.pix_fmt or None,
                 "duration_seconds": mi.duration_seconds if mi.duration_seconds else None,
             },
             "colorspace": {
+                "assigned": res.plan.colorspace_override or None,
                 "primaries": mi.color_primaries or None,
                 "transfer": mi.color_transfer or None,
                 "space": mi.color_space or None,
@@ -697,6 +699,21 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         border-color: #30363d;
     }
 
+    /* Values set by the operator instead of read from file metadata */
+    .manual-flag {
+        display: inline-block;
+        font-size: 9px;
+        font-weight: 800;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 8px;
+        padding: 0px 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        vertical-align: middle;
+        cursor: help;
+    }
+
     /* Footer */
     .footer {
         margin-top: 60px;
@@ -933,6 +950,13 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         fps_val = mi.fps if mi.fps else 0
         fps_dev = (not res.plan.resource and common_fps and abs(fps_val - common_fps) > 0.001)
         fps_display = f'<span class="deviation">{fps_val:.3f}</span>' if fps_dev else f"{fps_val:.3f}"
+        # Operator-set framerate (sequences carry none): visible to the client
+        # so wrong assumptions can be flagged
+        if getattr(res.plan, "fps_is_manual", False):
+            fps_display += (
+                ' <span class="manual-flag" title="Framerate set manually by the '
+                'operator at ingest — not read from file metadata">manual</span>'
+            )
         
         codec_val = _esc(mi.codec.upper()) if mi.codec else "—"
         codec_dev = (not res.plan.resource and mi.codec and mi.codec.lower() != common_codec and common_codec)
@@ -989,6 +1013,17 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         # Add colorspace warning indicator if present
         if cs_issue:
             color_str += f' <span style="color:#f39c12; font-weight:bold;" title="{cs_issue_msg}">⚠</span>'
+
+        # Colorspace assigned by the operator (e.g. ARRI LogC4 for EXR plates
+        # that carry no VUI metadata) — shown first, file metadata after
+        cs_assigned = getattr(res.plan, "colorspace_override", "") or ""
+        if cs_assigned:
+            color_str = (
+                f'<b>{_esc(cs_assigned)}</b> '
+                '<span class="manual-flag" title="Colorspace assigned manually by '
+                'the operator at ingest — not read from file metadata">manual</span>'
+                f'<br>{color_str}'
+            )
         
         # Format missing frames for display
         if res.missing_frames:

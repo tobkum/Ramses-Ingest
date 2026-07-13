@@ -141,6 +141,35 @@ class TestCollect(unittest.TestCase):
         self.assertEqual(results[0].plan.resource, "BG")
         self.assertEqual(results[0].plan.version, 1)
 
+    def test_operator_overrides_survive_into_report_data(self):
+        """FPS/colorspace set manually at ingest exist only in the sidecar —
+        a re-probe of an EXR sequence would say fps 0 and no colorspace."""
+        _write_version(
+            self.step_dir, "001_WIP", [1001, 1002],
+            extra_meta={
+                "fps": 25.0,
+                "fpsManual": True,
+                "colorspace": "ARRI LogC4",
+                "colorspaceManual": True,
+            },
+        )
+        results = collect_ingested_versions(self.tmp)
+        plan = results[0].plan
+        self.assertEqual(plan.media_info.fps, 25.0)  # probe said 0
+        self.assertTrue(plan.fps_is_manual)
+        self.assertEqual(plan.colorspace_override, "ARRI LogC4")
+
+    def test_autodetected_values_are_not_marked_manual(self):
+        _write_version(
+            self.step_dir, "001_WIP", [1001],
+            extra_meta={"fps": 23.976, "colorspace": "bt709"},  # no manual flags
+        )
+        results = collect_ingested_versions(self.tmp)
+        plan = results[0].plan
+        self.assertEqual(plan.media_info.fps, 23.976)
+        self.assertFalse(getattr(plan, "fps_is_manual", False))
+        self.assertEqual(plan.colorspace_override, "")
+
     def test_checksum_taken_from_sidecar(self):
         _write_version(self.step_dir, "001_WIP", [1001, 1002])
         results = collect_ingested_versions(self.tmp)
@@ -227,6 +256,39 @@ class TestGenerate(unittest.TestCase):
             self.assertNotIn("paths", clip)
             self.assertIn("source_media", clip)
             self.assertIn("ingested_on", clip)
+
+    def test_manual_overrides_visible_in_html_and_json(self):
+        """The client must see operator-set fps/colorspace, marked as manual."""
+        from ramses.constants import FolderNames
+        step_dir = os.path.join(
+            self.tmp, FolderNames.shots, "TEST_S_SH099", "TEST_S_SH099_PLATE"
+        )
+        os.makedirs(step_dir, exist_ok=True)
+        _write_version(
+            step_dir, "001_WIP", [1001, 1002], shot="SH099",
+            extra_meta={
+                "fps": 25.0,
+                "fpsManual": True,
+                "colorspace": "ARRI LogC4",
+                "colorspaceManual": True,
+            },
+        )
+        out = os.path.join(self.tmp, "_ingest_reports")
+        html_path, json_path = generate_project_report(
+            self.tmp, out, project_id="TEST", operator="tobi"
+        )
+        with open(html_path, encoding="utf-8") as f:
+            html = f.read()
+        self.assertIn("25.000", html)
+        self.assertIn("ARRI LogC4", html)
+        self.assertIn('class="manual-flag"', html)
+
+        with open(json_path, encoding="utf-8") as f:
+            manifest = json.load(f)
+        clip = next(c for c in manifest["clips"] if c["shot_id"] == "SH099")
+        self.assertEqual(clip["technical"]["framerate"], 25.0)
+        self.assertTrue(clip["technical"]["framerate_manual"])
+        self.assertEqual(clip["colorspace"]["assigned"], "ARRI LogC4")
 
 
 class TestMultiSessionAndDelta(unittest.TestCase):
@@ -342,6 +404,10 @@ class TestSidecarProvenance(unittest.TestCase):
                 source_media="DNX_0195_10162503_v00",
                 operator="tobi",
                 verification="full",
+                fps=25.0,
+                fps_manual=True,
+                colorspace="ARRI LogC4",
+                colorspace_manual=True,
             )
             with open(os.path.join(tmp, "_ramses_data.json"), encoding="utf-8") as f:
                 data = json.load(f)
@@ -351,6 +417,10 @@ class TestSidecarProvenance(unittest.TestCase):
             self.assertEqual(entry["operator"], "tobi")
             self.assertEqual(entry["verification"], "full")
             self.assertEqual(entry["md5"], "abc")
+            self.assertEqual(entry["fps"], 25.0)
+            self.assertTrue(entry["fpsManual"])
+            self.assertEqual(entry["colorspace"], "ARRI LogC4")
+            self.assertTrue(entry["colorspaceManual"])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

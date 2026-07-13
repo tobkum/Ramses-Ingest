@@ -2245,6 +2245,8 @@ class IngestWindow(QMainWindow):
                 if not hasattr(plan, "_probed_fps"):
                     plan._probed_fps = plan.media_info.fps
                 plan.media_info.fps = fps
+                # Reports mark operator-set values so the client can flag them
+                plan.fps_is_manual = True
 
         self._log(f"FPS override: {fps:g} fps applied to {len(selected_rows)} clip(s).")
         # Re-validate + repopulate (mismatch highlighting, summary, dots)
@@ -2266,6 +2268,8 @@ class IngestWindow(QMainWindow):
                 if hasattr(plan, "_probed_fps") and plan.media_info:
                     plan.media_info.fps = plan._probed_fps
                     del plan._probed_fps
+                if hasattr(plan, "fps_is_manual"):
+                    del plan.fps_is_manual
 
                 # Restore shot/seq/resource from original pattern match
                 if plan.match and plan.match.matched:

@@ -124,6 +124,13 @@ def _synthesize_result(version_dir: str, fallback_project_id: str) -> Optional[I
         logger.debug("Probe failed for %s: %s", first_file, exc)
         media_info = MediaInfo()
 
+    # Effective technical values recorded at ingest time win over a re-probe:
+    # sequences carry no framerate, and operator overrides (fps, colorspace)
+    # exist only in the sidecar.
+    sidecar_fps = meta.get("fps")
+    if isinstance(sidecar_fps, (int, float)) and sidecar_fps > 0:
+        media_info.fps = float(sidecar_fps)
+
     clip = Clip(
         base_name=str(meta.get("sourceMedia") or step_dir_name),
         extension=extension,
@@ -142,6 +149,12 @@ def _synthesize_result(version_dir: str, fallback_project_id: str) -> Optional[I
         state=state or "WIP",
         version=version,
     )
+    # Operator-set values are marked "manual" in the report, so the client
+    # can flag wrong assumptions
+    if meta.get("fpsManual"):
+        plan.fps_is_manual = True
+    if meta.get("colorspaceManual") and meta.get("colorspace"):
+        plan.colorspace_override = str(meta["colorspace"])
     if lost:
         plan.warnings.append(
             f"{len(lost)} file(s) recorded at ingest are missing on disk"

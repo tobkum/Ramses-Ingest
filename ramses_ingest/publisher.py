@@ -424,7 +424,7 @@ def resolve_paths_from_daemon(plans: list[IngestPlan], shot_objects: dict[str, o
             logger.debug("Daemon path resolution skipped for %s (falling back to filesystem): %s", plan.shot_id, _e)
 
 
-def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None, state: str = "wip", source: str = "", source_media: str = "", operator: str = "", verification: str = "") -> None:
+def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None, state: str = "wip", source: str = "", source_media: str = "", operator: str = "", verification: str = "", fps: float = 0.0, fps_manual: bool = False, colorspace: str = "", colorspace_manual: bool = False) -> None:
     """Write metadata and completion marker atomically.
 
     Uses two layers of locking:
@@ -455,6 +455,12 @@ def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecod
             if source_media: entry["sourceMedia"] = source_media
             if operator: entry["operator"] = operator
             if verification: entry["verification"] = verification
+            # Effective technical values at ingest time — sequences carry no
+            # framerate, so the report must not rely on a later re-probe.
+            if fps: entry["fps"] = fps
+            if fps_manual: entry["fpsManual"] = True
+            if colorspace: entry["colorspace"] = colorspace
+            if colorspace_manual: entry["colorspaceManual"] = True
             if checksums and fname in checksums: entry["md5"] = checksums[fname]
             data[fname] = entry
 
@@ -500,7 +506,7 @@ def execute_plan(
             result.frames_copied = fc if fc > 0 else count
         result.checksums, result.bytes_copied, result.published_path = sums, bts, plan.target_publish_dir
         if first in sums: result.checksum = sums[first]
-        if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums, state=plan.state, source=normalize_path(str(plan.match.clip.directory)), source_media=plan.match.clip.base_name, operator=operator, verification=("fast" if fast_verify else "full"))
+        if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums, state=plan.state, source=normalize_path(str(plan.match.clip.directory)), source_media=plan.match.clip.base_name, operator=operator, verification=("fast" if fast_verify else "full"), fps=plan.media_info.fps or 0.0, fps_manual=bool(getattr(plan, "fps_is_manual", False)), colorspace=(plan.colorspace_override or plan.media_info.color_space or ""), colorspace_manual=bool(plan.colorspace_override))
     except Exception as exc:
         error_msg = str(exc)
         if not dry_run and os.path.exists(plan.target_publish_dir):
