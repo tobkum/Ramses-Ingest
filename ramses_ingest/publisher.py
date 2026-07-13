@@ -586,7 +586,30 @@ def register_ramses_objects(plan: IngestPlan, log: Callable[[str], None], sequen
             if sequence_cache is not None:
                 with _RAMSES_CACHE_LOCK: sequence_cache[seq_up] = seq_obj.uuid()
         else:
-            if any(seq_obj.data().get(k) != v for k, v in seq_data.items()): seq_obj.setData(seq_data)
+            # NEVER rewrite an existing sequence's technical standard from a
+            # later clip: with mixed-resolution shots, last-writer-wins would
+            # flip the sequence override to whichever clip ingested last, and
+            # Fusion sets up every comp from the sequence values. The first
+            # ingested clip defines the standard; deviating clips get a
+            # warning so the operator (and the client report) can see it.
+            # setData REPLACES the whole record, so heal from existing data
+            # and only fill fields that are missing.
+            current = dict(seq_obj.data() or {})
+            structural = {"folderPath": seq_data["folderPath"], "project": project_uuid, "name": plan.sequence_id}
+            healed = False
+            for k, v in structural.items():
+                if not current.get(k):
+                    current[k] = v; healed = True
+            if healed: seq_obj.setData(current)
+
+            try:
+                seq_w, seq_h, seq_fps = int(seq_obj.width()), int(seq_obj.height()), float(seq_obj.framerate())
+            except Exception:
+                seq_w = seq_h = 0; seq_fps = 0.0
+            if info.width and seq_w and (info.width, info.height) != (seq_w, seq_h):
+                plan.warnings.append(f"Resolution {info.width}x{info.height} differs from sequence '{plan.sequence_id}' standard {seq_w}x{seq_h}")
+            if info.fps and seq_fps and abs(info.fps - seq_fps) > 0.001:
+                plan.warnings.append(f"Framerate {info.fps:g} differs from sequence '{plan.sequence_id}' standard {seq_fps:g}")
 
     if plan.shot_id:
         shot_up = plan.shot_id.upper()

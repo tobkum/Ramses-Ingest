@@ -699,5 +699,92 @@ class TestPublisherConcurrency(unittest.TestCase):
             "fast_verify must hash exactly first, middle, and last source frames")
 
 
+class TestSequenceStandardGuard(unittest.TestCase):
+    """An existing sequence's technical standard must never be rewritten by a
+    later clip — mixed-resolution shots would flip it to the last-ingested
+    clip, breaking Fusion scene setup for every other shot in the sequence."""
+
+    def _run_register(self, existing_seq_data: dict, clip_info: MediaInfo) -> tuple:
+        """Runs register_ramses_objects against a mocked existing sequence.
+        Returns (plan, existing sequence mock)."""
+        from unittest.mock import MagicMock
+        from ramses_ingest.publisher import register_ramses_objects
+
+        seq = MagicMock()
+        seq.shortName.return_value = "SEQ01"
+        seq.data.return_value = dict(existing_seq_data)
+        seq.width.return_value = existing_seq_data.get("width", 0)
+        seq.height.return_value = existing_seq_data.get("height", 0)
+        seq.framerate.return_value = existing_seq_data.get("framerate", 0.0)
+
+        project = MagicMock()
+        project.uuid.return_value = "proj-uuid"
+        project.folderPath.return_value = "/proj"
+        project.sequences.return_value = [seq]
+
+        ram = MagicMock()
+        ram.online.return_value = True
+        ram.project.return_value = project
+
+        clip = Clip(base_name="c", extension="exr", directory=Path("/tmp"))
+        plan = IngestPlan(
+            match=MatchResult(clip=clip, matched=True, shot_id="SH010", sequence_id="SEQ01"),
+            media_info=clip_info,
+            sequence_id="SEQ01",
+            shot_id="",  # sequence part only
+            project_id="TEST",
+        )
+        with patch("ramses.Ramses") as mock_ramses:
+            mock_ramses.instance.return_value = ram
+            register_ramses_objects(plan, log=lambda m: None)
+        return plan, seq
+
+    def test_existing_standard_is_never_rewritten(self):
+        existing = {
+            "shortName": "SEQ01", "name": "SEQ01", "folderPath": "/proj/05-SHOTS/SEQ01",
+            "project": "proj-uuid", "overrideResolution": True,
+            "width": 3424, "height": 2202, "overrideFramerate": True, "framerate": 25.0,
+        }
+        plan, seq = self._run_register(existing, MediaInfo(width=4608, height=3164, fps=25.0))
+        seq.setData.assert_not_called()
+
+    def test_deviating_clip_gets_resolution_warning(self):
+        existing = {
+            "shortName": "SEQ01", "name": "SEQ01", "folderPath": "/proj/05-SHOTS/SEQ01",
+            "project": "proj-uuid", "overrideResolution": True,
+            "width": 3424, "height": 2202, "overrideFramerate": True, "framerate": 25.0,
+        }
+        plan, _ = self._run_register(existing, MediaInfo(width=4608, height=3164, fps=24.0))
+        self.assertTrue(any("Resolution 4608x3164" in w and "3424x2202" in w for w in plan.warnings))
+        self.assertTrue(any("Framerate 24" in w for w in plan.warnings))
+
+    def test_matching_clip_gets_no_warning(self):
+        existing = {
+            "shortName": "SEQ01", "name": "SEQ01", "folderPath": "/proj/05-SHOTS/SEQ01",
+            "project": "proj-uuid", "overrideResolution": True,
+            "width": 3424, "height": 2202, "overrideFramerate": True, "framerate": 25.0,
+        }
+        plan, seq = self._run_register(existing, MediaInfo(width=3424, height=2202, fps=25.0))
+        self.assertEqual(plan.warnings, [])
+        seq.setData.assert_not_called()
+
+    def test_missing_structural_fields_are_healed_without_touching_standard(self):
+        existing = {
+            "shortName": "SEQ01",  # name/folderPath/project missing
+            "overrideResolution": True, "width": 3424, "height": 2202,
+            "overrideFramerate": True, "framerate": 25.0,
+        }
+        plan, seq = self._run_register(existing, MediaInfo(width=3424, height=2202, fps=25.0))
+        seq.setData.assert_called_once()
+        written = seq.setData.call_args[0][0]
+        # Gaps filled…
+        self.assertTrue(written["folderPath"])
+        self.assertEqual(written["project"], "proj-uuid")
+        # …and the technical standard untouched
+        self.assertEqual(written["width"], 3424)
+        self.assertEqual(written["height"], 2202)
+        self.assertEqual(written["framerate"], 25.0)
+
+
 if __name__ == "__main__":
     unittest.main()
