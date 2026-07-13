@@ -80,6 +80,54 @@ OCIO_VIEW = "ACES 1.0 - SDR Video"
 # under our feet when OCIO updates its bundled configs.
 PINNED_OCIO_CONFIG = "ocio://studio-config-v2.1.0_aces-v1.3_ocio-v2.3"
 
+# Colorspaces offered in the Options dropdown and the per-clip override.
+# Every entry either matches a colorspace in the pinned ACES Studio config
+# by name, or resolves through _LEGACY_COLORSPACE_ALIASES below — enforced
+# by a test that bakes each one. Exceptions needing a manual LUT are listed
+# in MANUAL_LUT_ONLY_COLORSPACES.
+STANDARD_COLORSPACES = [
+    # Generic / delivery
+    "sRGB",
+    "Linear",
+    "Rec.709",
+    "Rec.2020",
+    "Gamma 2.2",
+    "Gamma 2.4",
+    # ACES
+    "ACEScg",
+    "ACES2065-1",
+    "ACES - ACEScct",
+    "ACES - ACEScc",
+    # ARRI
+    "ARRI LogC4",
+    "ARRI LogC3 (EI800)",
+    "LogC",
+    # Sony
+    "S-Log3 S-Gamut3.Cine",
+    "S-Log3 S-Gamut3",
+    "S-Log3 Venice S-Gamut3.Cine",
+    "S-Log3 Venice S-Gamut3",
+    "S-Log3",
+    # Panasonic
+    "V-Log V-Gamut",
+    "V-Log",
+    # Canon
+    "CanonLog2 CinemaGamut D55",
+    "CanonLog3 CinemaGamut D55",
+    # RED
+    "Log3G10 REDWideGamutRGB",
+    # Blackmagic
+    "BMDFilm WideGamut Gen5",
+    "DaVinci Intermediate WideGamut",
+    # Film scans — no ACES-config equivalent, requires a manual LUT
+    "Cineon",
+]
+
+# Entries with no transform in the ACES configs: selectable (recorded in the
+# sidecar/report), but previews stay untransformed unless a manual .cube
+# exists in the luts folder.
+MANUAL_LUT_ONLY_COLORSPACES = {"Cineon"}
+
 # Our historical dropdown names -> ACES 1.3 Studio config colorspace names.
 # ("Cineon" has no equivalent in the ACES configs — needs a manual LUT.)
 _LEGACY_COLORSPACE_ALIASES = {

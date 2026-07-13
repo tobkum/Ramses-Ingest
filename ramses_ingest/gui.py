@@ -373,28 +373,12 @@ logger = logging.getLogger("ramses_ingest")
 # ---------------------------------------------------------------------------
 
 
-# Production colorspaces offered in the OCIO dropdown and the per-clip
-# override. The chosen value is passed verbatim as the ffmpeg `ocio` filter's
-# in_label, so every entry must be resolvable by the loaded OCIO config
-# (recent ACES configs alias all of these). The override dialog is editable,
-# so names from custom configs can be typed as well.
-STANDARD_COLORSPACES = [
-    "sRGB",
-    "Linear",
-    "Rec.709",
-    "Rec.2020",
-    "ACEScg",
-    "ACES - ACEScct",
-    "ACES - ACEScc",
-    "ARRI LogC4",
-    "ARRI LogC3 (EI800)",
-    "LogC",
-    "S-Log3",
-    "V-Log",
-    "Cineon",
-    "Gamma 2.2",
-    "Gamma 2.4",
-]
+# Colorspaces offered in the OCIO dropdown and the per-clip override — the
+# single source of truth lives next to the color logic in preview.py, where a
+# test enforces that every entry actually bakes against the pinned ACES
+# config. The override dialog is editable, so names from custom configs can
+# be typed as well.
+from ramses_ingest.preview import STANDARD_COLORSPACES
 
 
 class ScanWorker(QThread):

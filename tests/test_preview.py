@@ -731,6 +731,33 @@ class TestRealOcioBake(unittest.TestCase):
             ok, _ = self._bake(name)
             self.assertTrue(ok, f"{name!r} must bake via the alias map")
 
+    def test_every_dropdown_entry_bakes(self):
+        """Completeness guarantee: every colorspace offered in the UI must
+        bake against the pinned builtin config — except the documented
+        manual-LUT-only entries. Adding a dropdown entry without a working
+        transform fails here."""
+        from ramses_ingest.preview import (
+            MANUAL_LUT_ONLY_COLORSPACES,
+            STANDARD_COLORSPACES,
+        )
+        failures = []
+        for name in STANDARD_COLORSPACES:
+            if name in MANUAL_LUT_ONLY_COLORSPACES:
+                continue
+            out = os.path.join(self.tmp, "entry.cube")
+            if not _bake_lut_from_ocio(name, out):
+                failures.append(name)
+        self.assertEqual(failures, [], f"Dropdown entries that do not bake: {failures}")
+
+    def test_manual_only_entries_are_documented_not_bakeable(self):
+        from ramses_ingest.preview import MANUAL_LUT_ONLY_COLORSPACES
+        for name in MANUAL_LUT_ONLY_COLORSPACES:
+            out = os.path.join(self.tmp, "manual.cube")
+            self.assertFalse(
+                _bake_lut_from_ocio(name, out),
+                f"{name!r} bakes now — remove it from MANUAL_LUT_ONLY_COLORSPACES",
+            )
+
     def test_scene_linear_input_bakes(self):
         """ACEScg is scene-linear — bakes with the documented [0,1] domain
         limitation (highlights above 1.0 clip in previews)."""
