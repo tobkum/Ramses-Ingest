@@ -17,11 +17,20 @@ from ramses_ingest.scanner import Clip
 
 class TestIngestEngine(unittest.TestCase):
     def setUp(self):
+        import shutil
+        import tempfile
+        # Isolated project root: engine.execute() writes real artifacts
+        # (_ingest_reports, _deliveries/ingest_history.log) under it. A
+        # literal "/tmp/test_project" resolved to <drive>:\tmp\test_project
+        # on Windows and leaked those folders onto the developer's disk.
+        self.project_dir = tempfile.mkdtemp(prefix="ramses_test_project_")
+        self.addCleanup(shutil.rmtree, self.project_dir, True)
+
         self.engine = IngestEngine()
         # Mock connection as True with required project properties
         self.engine._connected = True
         self.engine._project_id = "TEST"
-        self.engine._project_path = "/tmp/test_project"
+        self.engine._project_path = self.project_dir
         self.engine._project_fps = 24.0
         self.engine._project_width = 1920
         self.engine._project_height = 1080
@@ -32,8 +41,8 @@ class TestIngestEngine(unittest.TestCase):
     @patch("ramses_ingest.app.generate_html_report")
     def test_execute_two_phase_flow(self, mock_report, mock_exec, mock_reg, mock_disk):
         # Setup plans with all required fields for execution
-        clip = Clip("shot", "mov", Path("/tmp"))
-        clip.first_file = "/tmp/shot.mov"  # Ensure path is not empty for size calculation
+        clip = Clip("shot", "mov", Path(self.project_dir))
+        clip.first_file = os.path.join(self.project_dir, "shot.mov")  # non-empty path for size calculation
         match = MatchResult(clip, matched=True, shot_id="SHOT", sequence_id="SEQ")
         plan = IngestPlan(
             match=match,
@@ -42,7 +51,7 @@ class TestIngestEngine(unittest.TestCase):
             shot_id="SHOT",
             project_id="TEST",
             resource="", # HERO HIERARCHY FIX: Registration only happens if resource is empty
-            target_publish_dir="/tmp/test_project/shots/SHOT/PLATE/_published/001_WIP"
+            target_publish_dir=os.path.join(self.project_dir, "shots/SHOT/PLATE/_published/001_WIP"),
         )
 
         mock_disk.return_value = (True, "")
@@ -65,7 +74,8 @@ class TestIngestEngine(unittest.TestCase):
         # Verify Report (Phase 4) happened
         mock_report.assert_called_once()
 
-    def _make_plan(self, shot="SHOT", seq="SEQ", tmp="/tmp", media_info=None, resource=""):
+    def _make_plan(self, shot="SHOT", seq="SEQ", tmp=None, media_info=None, resource=""):
+        tmp = tmp or self.project_dir
         clip = Clip("shot", "mov", Path(tmp))
         clip.first_file = os.path.join(tmp, "shot.mov")
         match = MatchResult(clip, matched=True, shot_id=shot, sequence_id=seq)
@@ -76,7 +86,7 @@ class TestIngestEngine(unittest.TestCase):
             shot_id=shot,
             project_id="TEST",
             resource=resource,
-            target_publish_dir=f"/tmp/test_project/shots/{shot}/PLATE/_published/001_WIP",
+            target_publish_dir=os.path.join(self.project_dir, f"shots/{shot}/PLATE/_published/001_WIP"),
         )
 
     @patch("ramses_ingest.app.check_disk_space")
@@ -129,7 +139,7 @@ class TestIngestEngine(unittest.TestCase):
         """Multiple successful clips for the same shot/sequence register once."""
         hero = self._make_plan()
         aux = self._make_plan(resource="BG")
-        aux.target_publish_dir = "/tmp/test_project/shots/SHOT/PLATE/_published/BG_001_WIP"
+        aux.target_publish_dir = os.path.join(self.project_dir, "shots/SHOT/PLATE/_published/BG_001_WIP")
         mock_disk.return_value = (True, "")
         mock_report.return_value = True
         mock_exec.side_effect = lambda p, **kw: MagicMock(
