@@ -424,7 +424,7 @@ def resolve_paths_from_daemon(plans: list[IngestPlan], shot_objects: dict[str, o
             logger.debug("Daemon path resolution skipped for %s (falling back to filesystem): %s", plan.shot_id, _e)
 
 
-def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None, state: str = "wip") -> None:
+def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecode: str = "", checksums: dict[str, str] | None = None, state: str = "wip", source: str = "", source_media: str = "", operator: str = "", verification: str = "") -> None:
     """Write metadata and completion marker atomically.
 
     Uses two layers of locking:
@@ -449,6 +449,12 @@ def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecod
         for fname in filenames:
             entry = {"version": version, "comment": comment, "state": state.lower(), "date": timestamp}
             if timecode: entry["timecode"] = timecode
+            # Ingest provenance: lets the project report reconstruct the full
+            # delivery picture from disk alone (no session records needed).
+            if source: entry["source"] = source
+            if source_media: entry["sourceMedia"] = source_media
+            if operator: entry["operator"] = operator
+            if verification: entry["verification"] = verification
             if checksums and fname in checksums: entry["md5"] = checksums[fname]
             data[fname] = entry
 
@@ -469,7 +475,7 @@ def execute_plan(
     progress_callback: Callable[[str], None] | None = None, ocio_config: str | None = None,
     ocio_in: str = "sRGB", ocio_out: str = "sRGB", skip_ramses_registration: bool = False,
     dry_run: bool = False, fast_verify: bool = True, copy_max_workers: int | None = None,
-    stop_event: "threading.Event | None" = None,
+    stop_event: "threading.Event | None" = None, operator: str = "",
 ) -> IngestResult:
     _log = lambda m: progress_callback(m) if progress_callback else None
     result = IngestResult(plan=plan, missing_frames=plan.match.clip.missing_frames)
@@ -494,7 +500,7 @@ def execute_plan(
             result.frames_copied = fc if fc > 0 else count
         result.checksums, result.bytes_copied, result.published_path = sums, bts, plan.target_publish_dir
         if first in sums: result.checksum = sums[first]
-        if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums, state=plan.state)
+        if not dry_run: _write_ramses_metadata(plan.target_publish_dir, plan.version, comment="Ingested via Ramses-Ingest", timecode=plan.media_info.start_timecode, checksums=sums, state=plan.state, source=normalize_path(str(plan.match.clip.directory)), source_media=plan.match.clip.base_name, operator=operator, verification=("fast" if fast_verify else "full"))
     except Exception as exc:
         error_msg = str(exc)
         if not dry_run and os.path.exists(plan.target_publish_dir):

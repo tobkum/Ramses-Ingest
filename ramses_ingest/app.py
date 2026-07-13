@@ -275,7 +275,7 @@ class IngestEngine:
             max_w = _optimal_io_workers()
             copy_w_per_plan = max(1, 32 // min(len(executable), max_w))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_w) as executor:
-                fut_to_p = {executor.submit(execute_plan, p, generate_thumbnail=generate_thumbnails, generate_proxy=generate_proxies, ocio_config=self.ocio_config, ocio_in=p.colorspace_override or self.ocio_in, skip_ramses_registration=True, dry_run=dry_run, fast_verify=fast_verify, copy_max_workers=copy_w_per_plan, stop_event=stop_event): p for p in executable}
+                fut_to_p = {executor.submit(execute_plan, p, generate_thumbnail=generate_thumbnails, generate_proxy=generate_proxies, ocio_config=self.ocio_config, ocio_in=p.colorspace_override or self.ocio_in, skip_ramses_registration=True, dry_run=dry_run, fast_verify=fast_verify, copy_max_workers=copy_w_per_plan, stop_event=stop_event, operator=self._operator_name): p for p in executable}
                 for i, f in enumerate(concurrent.futures.as_completed(fut_to_p), 1):
                     if cancel_check and cancel_check():
                         _log("Ingest cancelled — stopping after current items.")
@@ -347,7 +347,65 @@ class IngestEngine:
             j_path = os.path.join(report_dir, f"Ingest_Audit_{self.project_id}_{ts}.json")
             generate_json_audit_trail(results, j_path, project_id=self.project_id, operator=self._operator_name)
 
+        if not dry_run:
+            self._append_history_log(results, verification)
+
         flush_cache(); return results
+
+    def _append_history_log(self, results: list[IngestResult], verification: str) -> None:
+        """Appends one line per clip to the shared project ingest ledger.
+
+        The log records what *happened* — attempts, including failures — while
+        the project report reflects what *is* on disk. Lives next to
+        Ramses-Out's upload_history.log so all in/out traffic is in one place.
+        """
+        if not self.project_path:
+            return
+        try:
+            log_dir = os.path.join(self.project_path, "_deliveries")
+            os.makedirs(log_dir, exist_ok=True)
+            stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            lines = []
+            for r in results:
+                p = r.plan
+                if not p:
+                    continue
+                status = "OK" if r.success else f"FAIL: {r.error or 'unknown'}"
+                src = normalize_path(str(p.match.clip.directory)) if p.match and p.match.clip else ""
+                res_tag = f" [{p.resource}]" if p.resource else ""
+                lines.append(
+                    f"{stamp} | {self._operator_name} | ingest | "
+                    f"{p.shot_id} {p.step_id} v{p.version:03d}{res_tag} | "
+                    f"{r.frames_copied} frames | {verification} | {status} | from {src}\n"
+                )
+            if lines:
+                with open(os.path.join(log_dir, "ingest_history.log"), "a", encoding="utf-8") as f:
+                    f.writelines(lines)
+        except OSError:
+            pass  # a failed ledger write must never fail the ingest
+
+    def generate_project_report(self, progress_callback: Callable[[str], None] | None = None) -> Optional[str]:
+        """Builds the whole-project ingest report from the pipeline's on-disk
+        state (every published version with an Ingest sidecar), regardless of
+        how many sessions the ingests were spread across.
+
+        Returns the HTML report path, or None if nothing was found.
+        """
+        if not self.project_path:
+            return None
+        from ramses_ingest.project_report import generate_project_report
+        html_path, _json_path = generate_project_report(
+            self.project_path,
+            os.path.join(self.project_path, "_ingest_reports"),
+            project_id=self.project_id,
+            studio_name=self.studio_name,
+            studio_logo=self.studio_logo,
+            operator=self._operator_name,
+            progress_callback=progress_callback,
+        )
+        if html_path:
+            self.last_report_path = html_path
+        return html_path
 
 
 def main():

@@ -159,7 +159,7 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
         return False
 
 
-def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", studio_logo_path: str = "", operator: str = "Unknown", verification: str = "") -> bool:
+def generate_html_report(results: list[IngestResult], output_path: str, studio_name: str = "Ramses Studio", studio_logo_path: str = "", operator: str = "Unknown", verification: str = "", title: str = "Ingest Manifest", id_label: str = "Batch ID") -> bool:
     """Generate a clean, professional HTML manifest with exact analytics and technical flagging.
 
     Args:
@@ -167,6 +167,14 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             "full" (bit-perfect), "dry-run" (no files copied), or "" (unknown,
             badge omitted). Shown in the meta grid so the report is honest
             about its audit strength.
+        title: Document heading — the project-wide report reuses this template
+            with a different title.
+        id_label: Label of the generation stamp in the header ("Batch ID" for
+            sessions, "Report ID" for the project-wide rollup).
+
+    Rows may carry an optional ``plan.ingested_on`` attribute (date string);
+    when present it is rendered under the shot cell — used by the project
+    report, where each version has its own ingest date.
     """
     
     css = """
@@ -980,6 +988,13 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
 
         source_name = f"{res.plan.match.clip.base_name}.{res.plan.match.clip.extension}"
 
+        # Per-version ingest date (project report only; sessions share one stamp)
+        ingested_on = getattr(res.plan, "ingested_on", "")
+        ingested_html = (
+            f'<div class="xray-source">Ingested: {_esc(ingested_on)}</div>'
+            if ingested_on else ""
+        )
+
         # Per-clip issue lines: the failure reason (previously only visible in
         # the JSON audit) and any non-blocking warnings from the engine.
         issue_lines = []
@@ -1012,6 +1027,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
                     <div class="xray-target">{_esc(res.plan.shot_id)}{resource_tag}</div>
                     <div class="xray-source" style="margin-top:2px;">{_esc(res.plan.sequence_id or "")}</div>
                     <div class="xray-source"><span class="xray-arrow">←</span> {_esc(source_name)}</div>
+                    {ingested_html}
                     {issues_html}
                 </div>
             </td>
@@ -1122,7 +1138,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '<html data-theme="dark">',
         "<head>",
         '    <meta charset="utf-8">',
-        f"    <title>Ingest Manifest - {project}</title>",
+        f"    <title>{_esc(title)} - {project}</title>",
         f"    <style>{css}</style>",
         "    <script>",
         "        function toggleTheme() {",
@@ -1161,13 +1177,13 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '            <div>',
         f'                {logo_html}',
         f'                <div class="studio-header">{studio_name}</div>',
-        "                <h1>Ingest Manifest</h1>",
+        f"                <h1>{_esc(title)}</h1>",
         '            </div>',
         '            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 10px;">',
         '                <button class="theme-toggle" onclick="toggleTheme()">',
         '                    <span id="theme-label">LIGHT MODE</span>',
         '                </button>',
-        f'                <div style="font-size: 13px; color: var(--text-muted); text-align: right; font-weight: 600;">Batch ID: {batch_id}<br>{timestamp}</div>',
+        f'                <div style="font-size: 13px; color: var(--text-muted); text-align: right; font-weight: 600;">{_esc(id_label)}: {batch_id}<br>{timestamp}</div>',
         '            </div>',
         '        </header>',
         '        <div class="health-dashboard">',

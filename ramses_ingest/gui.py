@@ -413,6 +413,30 @@ class ConnectionWorker(QThread):
             self.finished.emit(False)
 
 
+class ProjectReportWorker(QThread):
+    """Builds the whole-project ingest report in a background thread.
+
+    Walks every published version on disk and probes first frames, so it
+    must not run on the UI thread."""
+
+    progress = Signal(str)
+    finished_report = Signal(str)  # HTML path, or "" when nothing was found
+
+    def __init__(self, engine: IngestEngine, parent=None) -> None:
+        super().__init__(parent)
+        self._engine = engine
+
+    def run(self) -> None:
+        try:
+            path = self._engine.generate_project_report(
+                progress_callback=self.progress.emit
+            )
+            self.finished_report.emit(path or "")
+        except Exception as exc:
+            self.progress.emit(f"Project report failed: {exc}")
+            self.finished_report.emit("")
+
+
 class IngestWorker(QThread):
     """Executes ingest plans in a background thread."""
 
@@ -507,6 +531,7 @@ class IngestWindow(QMainWindow):
         self._scan_worker: ScanWorker | None = None
         self._ingest_worker: IngestWorker | None = None
         self._connection_worker: ConnectionWorker | None = None
+        self._report_worker: ProjectReportWorker | None = None
         self._current_filter_status = "all"  # For filter sidebar
         self._selected_plan: IngestPlan | None = None  # For detail panel
         self._last_dest_dirs: list[str] = []  # Publish dirs of the last ingest
@@ -576,6 +601,9 @@ class IngestWindow(QMainWindow):
         self._btn_clear.setEnabled(enabled)
         self._btn_options.setEnabled(enabled)
         self._chk_dry_run.setEnabled(enabled)
+        # The project report walks the same _published folders the transfer
+        # writes into — don't build one while an ingest is running.
+        self._btn_project_report.setEnabled(enabled and self._engine.connected)
         for btn in (
             self._filter_all,
             self._filter_ready,
@@ -887,6 +915,16 @@ class IngestWindow(QMainWindow):
         action_bar_lay.addWidget(self._summary_label)
 
         action_bar_lay.addStretch()
+
+        self._btn_project_report = QPushButton("Project Report")
+        self._btn_project_report.setToolTip(
+            "Build one client-ready report of ALL footage currently ingested\n"
+            "in this project — across every ingest session. Reflects the\n"
+            "current on-disk state (reverted versions don't appear)."
+        )
+        self._btn_project_report.setEnabled(False)
+        self._btn_project_report.clicked.connect(self._on_project_report)
+        action_bar_lay.addWidget(self._btn_project_report)
 
         self._btn_open_dest = QPushButton("Open Destination")
         self._btn_open_dest.setToolTip(
@@ -2392,6 +2430,9 @@ class IngestWindow(QMainWindow):
             self._engine.step_id = self._step_combo.currentText()
             self._step_combo.blockSignals(False)
 
+            # Project report needs a connected project to walk
+            self._btn_project_report.setEnabled(True)
+
             # If we were already working, refresh paths now that we're connected
             if self._plans:
                 self._resolve_all_paths()
@@ -2403,6 +2444,7 @@ class IngestWindow(QMainWindow):
             self._status_label.setStyleSheet("")  # Clear any inline styles
             self._project_label_display.setText("— (Connection Required)")
             self._btn_ingest.setToolTip("Ramses connection required to ingest.")
+            self._btn_project_report.setEnabled(False)
 
             self._btn_reconnect.setVisible(True)
             self._btn_refresh.setVisible(
@@ -2596,6 +2638,33 @@ class IngestWindow(QMainWindow):
             import webbrowser
 
             webbrowser.open(f"file:///{os.path.abspath(self._engine.last_report_path)}")
+
+    def _on_project_report(self, _=None) -> None:
+        """Build the whole-project ingest report in the background."""
+        if self._report_worker and self._report_worker.isRunning():
+            return
+        self._btn_project_report.setEnabled(False)
+        self._btn_project_report.setText("Building...")
+        self._log("Building project ingest report...")
+        self._report_worker = ProjectReportWorker(self._engine, self)
+        self._report_worker.progress.connect(self._log)
+        self._report_worker.finished_report.connect(self._on_project_report_done)
+        self._report_worker.start()
+
+    def _on_project_report_done(self, path: str) -> None:
+        self._btn_project_report.setText("Project Report")
+        self._btn_project_report.setEnabled(self._engine.connected)
+        if path and os.path.exists(path):
+            self._log(f"Project report: {path}")
+            import webbrowser
+
+            webbrowser.open(f"file:///{os.path.abspath(path)}")
+        else:
+            QMessageBox.information(
+                self,
+                "Project Report",
+                "No ingested versions were found in this project.",
+            )
 
     def keyPressEvent(self, event) -> None:
         """Handle Delete key for batch removal."""
