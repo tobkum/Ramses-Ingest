@@ -314,7 +314,25 @@ class TestExecutePlan(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertEqual(result.frames_copied, frame_count)
         # +1 for metadata json, +1 for .ramses_complete marker
-        self.assertEqual(len(os.listdir(pub_dir)), frame_count + 2) 
+        self.assertEqual(len(os.listdir(pub_dir)), frame_count + 2)
+
+    def test_execute_plan_never_registers_by_default(self):
+        """DB registration must be opt-in: a default execute_plan call ran
+        register_ramses_objects, which — with a live Ramses client open —
+        created real sequences/shots in the ACTIVE project (this happened
+        with SH010/SEQ010 during a production ingest session)."""
+        clip = _make_clip("plate", self.src_dir, frame_count=1)
+        match = MatchResult(clip=clip, sequence_id="SEQ010", shot_id="SH010", matched=True)
+        plan = IngestPlan(
+            match=match, media_info=MediaInfo(),
+            sequence_id="SEQ010", shot_id="SH010",
+            project_id="PROJ", step_id="PLATE",
+            target_publish_dir=os.path.join(self.dst_dir, "published", "v001"),
+        )
+        with patch("ramses_ingest.publisher.register_ramses_objects") as mock_reg:
+            result = execute_plan(plan, generate_thumbnail=False, generate_proxy=False)
+        self.assertTrue(result.success)
+        mock_reg.assert_not_called()
 
     def test_execute_fails_without_publish_dir(self):
         clip = Clip(base_name="x", extension="exr", directory=Path(self.src_dir),

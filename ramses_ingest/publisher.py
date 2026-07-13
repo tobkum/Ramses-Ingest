@@ -479,10 +479,17 @@ def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecod
 def execute_plan(
     plan: IngestPlan, generate_thumbnail: bool = True, generate_proxy: bool = False,
     progress_callback: Callable[[str], None] | None = None, ocio_config: str | None = None,
-    ocio_in: str = "sRGB", ocio_out: str = "sRGB", skip_ramses_registration: bool = False,
+    ocio_in: str = "sRGB", ocio_out: str = "sRGB", skip_ramses_registration: bool = True,
     dry_run: bool = False, fast_verify: bool = True, copy_max_workers: int | None = None,
     stop_event: "threading.Event | None" = None, operator: str = "",
 ) -> IngestResult:
+    """Transfers one plan's files (and optionally previews/DB registration).
+
+    ``skip_ramses_registration`` defaults to True: the IngestEngine performs
+    DB registration itself in a separate phase after all transfers. Passing
+    False makes this single call also register sequences/shots in the LIVE
+    Ramses project — only do that deliberately (never from tests).
+    """
     _log = lambda m: progress_callback(m) if progress_callback else None
     result = IngestResult(plan=plan, missing_frames=plan.match.clip.missing_frames)
     if not plan.can_execute:
