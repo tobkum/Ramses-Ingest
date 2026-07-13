@@ -37,6 +37,11 @@ from ramses.constants import ItemType
 
 logger = logging.getLogger(__name__)
 
+# The build-time "no shot identity" error. Manual overrides (Shot ID, EDL
+# mapping) clear exactly this error — other errors (collisions, duplicates)
+# are recomputed during path resolution and must not be cleared blindly.
+MATCH_ERROR = "Could not match clip to a shot identity."
+
 
 def check_disk_space(dest_path: str, required_bytes: int) -> tuple[bool, str]:
     """Verify if the destination volume has enough free space."""
@@ -180,7 +185,7 @@ def build_plans(
             step_id=match.step_id or step_id, resource=match.resource, version=match.version or 1,
         )
         if not match.matched:
-            plan.error = "Could not match clip to a shot identity."; plans.append(plan); continue
+            plan.error = MATCH_ERROR; plans.append(plan); continue
 
         plan.is_new_sequence = match.sequence_id.upper() not in seen_seqs
         plan.is_new_shot = match.shot_id.upper() not in seen_shots

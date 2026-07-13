@@ -2087,11 +2087,14 @@ class IngestWindow(QMainWindow):
                 plan = self._get_plan_from_row(row)
                 if plan:
                     plan.shot_id = shot_id
+                    self._apply_manual_identity(plan)
                     item = self._table.item(row, 3)  # Shot column (was 2)
                     if item:
                         item.setText(shot_id)
 
-            self._update_summary()
+            # Newly matched plans have no target paths yet — re-resolve
+            # (recomputes collisions/duplicates and repopulates the table)
+            self._on_resolve_timeout()
 
     def _on_context_filename_as_shot(self) -> None:
         """Set each selected clip's filename stem as its shot ID"""
@@ -2104,11 +2107,28 @@ class IngestWindow(QMainWindow):
             if plan:
                 shot_id = plan.match.clip.base_name
                 plan.shot_id = shot_id
+                self._apply_manual_identity(plan)
                 item = self._table.item(row, 3)  # Shot column
                 if item:
                     item.setText(shot_id)
 
-        self._update_summary()
+        self._on_resolve_timeout()
+
+    @staticmethod
+    def _apply_manual_identity(plan) -> None:
+        """A manually assigned shot ID IS a match.
+
+        Without this, overriding an unmatched clip (e.g. a range folder like
+        DNX_0480-0485_Lichterkette) was cosmetic: can_execute requires
+        match.matched and a clear error, so the clip stayed red forever.
+        Only the build-time identity error is cleared — collision/duplicate
+        errors are recomputed by the following path resolution.
+        """
+        from ramses_ingest.publisher import MATCH_ERROR
+        plan.match.shot_id = plan.shot_id
+        plan.match.matched = True
+        if plan.error == MATCH_ERROR:
+            plan.error = ""
 
     def _on_context_override_seq(self) -> None:
         """Override sequence ID for selected clips"""

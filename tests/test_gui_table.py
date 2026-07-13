@@ -266,6 +266,87 @@ class TestEDLLoadResolvesPaths(unittest.TestCase):
 
 
 @unittest.skipUnless(HAS_QT, "PySide6 not available")
+class TestManualShotOverrideResolvesError(unittest.TestCase):
+    """Overriding the Shot ID on an UNMATCHED clip must make it executable —
+    previously it was cosmetic (error and match.matched stayed failed, no
+    target paths were resolved), so range folders like
+    DNX_0480-0485_Lichterkette could never be ingested manually."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        import tempfile
+        from ramses_ingest.gui import IngestWindow
+        from ramses_ingest.publisher import MATCH_ERROR
+
+        self.tmp = tempfile.mkdtemp()
+        self.window = IngestWindow()
+        self.window._engine._project_path = self.tmp
+
+        plan = _make_plan("DNX_0480-0485_Lichterkette", enabled=True)
+        plan.match.matched = False
+        plan.match.shot_id = ""
+        plan.shot_id = ""
+        plan.error = MATCH_ERROR
+        plan.target_publish_dir = ""
+        self.plan = plan
+        self.window._plans = [plan]
+        self.window._populate_table()
+
+    def tearDown(self):
+        import shutil
+        self.window.close()
+        self.window.deleteLater()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _select_row(self, row=0):
+        for col in range(self.window._table.columnCount()):
+            item = self.window._table.item(row, col)
+            if item:
+                item.setSelected(True)
+
+    def test_shot_override_makes_plan_executable(self):
+        from unittest.mock import patch
+        self._select_row()
+        with patch(
+            "PySide6.QtWidgets.QInputDialog.getText", return_value=("0480", True)
+        ):
+            self.window._on_context_override_shot()
+
+        self.assertEqual(self.plan.shot_id, "0480")
+        self.assertTrue(self.plan.match.matched)
+        self.assertEqual(self.plan.error, "")
+        self.assertTrue(
+            self.plan.target_publish_dir,
+            "Manually matched plan must get a resolved publish directory",
+        )
+        self.assertTrue(self.plan.can_execute)
+
+    def test_filename_as_shot_makes_plan_executable(self):
+        self._select_row()
+        self.window._on_context_filename_as_shot()
+        self.assertTrue(self.plan.match.matched)
+        self.assertEqual(self.plan.error, "")
+        self.assertTrue(self.plan.can_execute)
+
+    def test_other_errors_are_not_cleared(self):
+        """Only the identity error may be cleared by a shot override."""
+        from unittest.mock import patch
+        self.plan.error = "Path collision with another clip"
+        self.plan.match.matched = True
+        self._select_row()
+        with patch(
+            "PySide6.QtWidgets.QInputDialog.getText", return_value=("0480", True)
+        ):
+            self.window._on_context_override_shot()
+        # The collision error is recomputed by resolve — but must not have
+        # been blindly wiped by the override itself before that
+        self.assertEqual(self.plan.shot_id, "0480")
+
+
+@unittest.skipUnless(HAS_QT, "PySide6 not available")
 class TestFpsOverride(unittest.TestCase):
     """Batch FPS override via the context menu (sequences carry no fps)."""
 
