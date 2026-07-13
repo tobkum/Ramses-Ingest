@@ -62,7 +62,7 @@ python -m ramses_ingest
 ### Typical Workflow
 1.  **Scan**: Drag and drop delivery folders.
 2.  **Match**: Configure naming rules to extract Shot IDs. The table is fully sortable — checkboxes and status dots stay with their rows.
-3.  **Audit**: Review technical mismatches (FPS/Res) and missing frames.
+3.  **Audit**: Review technical mismatches (FPS/Res) and missing frames. Right-click selected clips to batch-override Shot/Sequence/Resource, **Colorspace** (curated list incl. ARRI LogC3/LogC4, or type any name from your OCIO config) and **FPS** — image sequences carry no embedded framerate, so the FPS override is the source of truth for validation and the shot duration written to Ramses.
 4.  **Execute**: Run ingest to move files and register with Ramses. Plan-editing UI is locked while files transfer.
 5.  **Review**: Use **View Report** for the HTML manifest, or **Open Destination** to jump straight to the ingested files (the common parent folder when several shots were ingested).
 6.  **Project Report**: At any time (e.g. before a client update), click **Project Report** for a single report covering everything ingested into the project so far — across all sessions and operators. For follow-up deliveries, pick **"New since \<last report\>"** in the same dialog to report only the newly ingested footage.

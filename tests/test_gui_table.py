@@ -265,5 +265,77 @@ class TestEDLLoadResolvesPaths(unittest.TestCase):
         self.assertTrue(self.plan.can_execute)
 
 
+@unittest.skipUnless(HAS_QT, "PySide6 not available")
+class TestFpsOverride(unittest.TestCase):
+    """Batch FPS override via the context menu (sequences carry no fps)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def setUp(self):
+        from ramses_ingest.gui import IngestWindow
+        self.window = IngestWindow()
+        self.plans = [_make_plan("SH010"), _make_plan("SH020"), _make_plan("SH030")]
+        for p in self.plans:
+            p.media_info.fps = 0.0  # like a probed EXR sequence
+        self.window._plans = self.plans
+        self.window._populate_table()
+
+    def tearDown(self):
+        self.window.close()
+        self.window.deleteLater()
+
+    def _select_rows(self, *rows):
+        self.window._table.clearSelection()
+        for row in rows:
+            for col in range(self.window._table.columnCount()):
+                item = self.window._table.item(row, col)
+                if item:
+                    item.setSelected(True)
+
+    def test_batch_override_applies_to_all_selected(self):
+        from unittest.mock import patch
+        self._select_rows(0, 1, 2)
+        with patch(
+            "PySide6.QtWidgets.QInputDialog.getDouble", return_value=(25.0, True)
+        ):
+            self.window._on_context_override_fps()
+        self.assertEqual([p.media_info.fps for p in self.plans], [25.0, 25.0, 25.0])
+
+    def test_cancel_changes_nothing(self):
+        from unittest.mock import patch
+        self._select_rows(0)
+        with patch(
+            "PySide6.QtWidgets.QInputDialog.getDouble", return_value=(25.0, False)
+        ):
+            self.window._on_context_override_fps()
+        self.assertEqual(self.plans[0].media_info.fps, 0.0)
+
+    def test_clear_overrides_restores_probed_fps(self):
+        from unittest.mock import patch
+        self.plans[0].media_info.fps = 23.976  # a probed movie fps
+        self._select_rows(0)
+        with patch(
+            "PySide6.QtWidgets.QInputDialog.getDouble", return_value=(25.0, True)
+        ):
+            self.window._on_context_override_fps()
+        self.assertEqual(self.plans[0].media_info.fps, 25.0)
+
+        self._select_rows(0)
+        self.window._on_context_clear_overrides()
+        self.assertEqual(self.plans[0].media_info.fps, 23.976)
+
+
+class TestColorspaceList(unittest.TestCase):
+    """ARRI LogC4 footage must be selectable (single shared list)."""
+
+    def test_arri_logc4_available(self):
+        from ramses_ingest.gui import STANDARD_COLORSPACES
+        self.assertIn("ARRI LogC4", STANDARD_COLORSPACES)
+        self.assertIn("ARRI LogC3 (EI800)", STANDARD_COLORSPACES)
+        self.assertIn("LogC", STANDARD_COLORSPACES)  # legacy entry kept
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -373,6 +373,30 @@ logger = logging.getLogger("ramses_ingest")
 # ---------------------------------------------------------------------------
 
 
+# Production colorspaces offered in the OCIO dropdown and the per-clip
+# override. The chosen value is passed verbatim as the ffmpeg `ocio` filter's
+# in_label, so every entry must be resolvable by the loaded OCIO config
+# (recent ACES configs alias all of these). The override dialog is editable,
+# so names from custom configs can be typed as well.
+STANDARD_COLORSPACES = [
+    "sRGB",
+    "Linear",
+    "Rec.709",
+    "Rec.2020",
+    "ACEScg",
+    "ACES - ACEScct",
+    "ACES - ACEScc",
+    "ARRI LogC4",
+    "ARRI LogC3 (EI800)",
+    "LogC",
+    "S-Log3",
+    "V-Log",
+    "Cineon",
+    "Gamma 2.2",
+    "Gamma 2.4",
+]
+
+
 class ScanWorker(QThread):
     """Scans delivery paths in a background thread."""
 
@@ -1054,22 +1078,8 @@ class IngestWindow(QMainWindow):
             combo: The QComboBox to populate
             detected_colorspace: Optional colorspace detected from file metadata
         """
-        # Standard production colorspaces (expanded from original 6)
-        standard_colorspaces = [
-            "sRGB",
-            "Linear",
-            "Rec.709",
-            "Rec.2020",
-            "ACEScg",
-            "ACES - ACEScct",
-            "ACES - ACEScc",
-            "LogC",
-            "S-Log3",
-            "V-Log",
-            "Cineon",
-            "Gamma 2.2",
-            "Gamma 2.4",
-        ]
+        # Single source of truth shared with the per-clip override dialog
+        standard_colorspaces = STANDARD_COLORSPACES
 
         # Build final list
         items = []
@@ -2156,22 +2166,8 @@ class IngestWindow(QMainWindow):
         if not selected_rows:
             return
 
-        # Build colorspace list (same as dropdown)
-        colorspace_list = [
-            "sRGB",
-            "Linear",
-            "Rec.709",
-            "Rec.2020",
-            "ACEScg",
-            "ACES - ACEScct",
-            "ACES - ACEScc",
-            "LogC",
-            "S-Log3",
-            "V-Log",
-            "Cineon",
-            "Gamma 2.2",
-            "Gamma 2.4",
-        ]
+        # Same list as the Options dropdown (single source of truth)
+        colorspace_list = list(STANDARD_COLORSPACES)
 
         # Get current colorspace from first selected clip (if any)
         first_plan = self._get_plan_from_row(selected_rows[0])
@@ -2183,14 +2179,16 @@ class IngestWindow(QMainWindow):
                 or "sRGB"
             )
 
-        # Show combo box dialog (non-editable - must match OCIO config)
+        # Editable: OCIO configs differ, so any colorspace name from the
+        # studio's config may be typed — the curated list is a starting point.
         colorspace, ok = QInputDialog.getItem(
             self,
             "Override Colorspace",
-            f"Select colorspace for {len(selected_rows)} clip(s):",
+            f"Select colorspace for {len(selected_rows)} clip(s)\n"
+            "(must exist in the loaded OCIO config):",
             colorspace_list,
             colorspace_list.index(current_cs) if current_cs in colorspace_list else 0,
-            editable=False,  # Non-editable - colorspace must exist in OCIO config
+            editable=True,
         )
 
         if ok and colorspace:
@@ -2206,6 +2204,52 @@ class IngestWindow(QMainWindow):
 
             self._update_summary()
 
+    def _on_context_override_fps(self) -> None:
+        """Batch-override the framerate for the selected clips.
+
+        Image sequences carry no embedded framerate, so the probed fps is 0
+        and the shot duration written to Ramses would fall back to a default.
+        The override becomes the source of truth for validation, DB duration
+        (frames / fps) and the report.
+        """
+        from PySide6.QtWidgets import QInputDialog
+
+        selected_rows = list(set(item.row() for item in self._table.selectedItems()))
+        if not selected_rows:
+            return
+
+        # Sensible starting value: first clip's fps, else the project standard
+        first_plan = self._get_plan_from_row(selected_rows[0])
+        current = 0.0
+        if first_plan and first_plan.media_info:
+            current = first_plan.media_info.fps or 0.0
+        if not current:
+            current = self._engine._project_fps or 25.0
+
+        fps, ok = QInputDialog.getDouble(
+            self,
+            "Override FPS",
+            f"Framerate for {len(selected_rows)} clip(s):",
+            value=current,
+            minValue=1.0,
+            maxValue=240.0,
+            decimals=3,
+        )
+        if not ok or fps <= 0:
+            return
+
+        for row in selected_rows:
+            plan = self._get_plan_from_row(row)
+            if plan and plan.media_info:
+                # Stash the probed value once so Clear Overrides can restore it
+                if not hasattr(plan, "_probed_fps"):
+                    plan._probed_fps = plan.media_info.fps
+                plan.media_info.fps = fps
+
+        self._log(f"FPS override: {fps:g} fps applied to {len(selected_rows)} clip(s).")
+        # Re-validate + repopulate (mismatch highlighting, summary, dots)
+        self._on_resolve_timeout()
+
     def _on_context_clear_overrides(self) -> None:
         """Clear all overrides for selected clips (reset to auto-detected values)"""
         selected_rows = list(set(item.row() for item in self._table.selectedItems()))
@@ -2217,6 +2261,11 @@ class IngestWindow(QMainWindow):
             if plan:
                 # Clear colorspace override
                 plan.colorspace_override = ""
+
+                # Restore the probed framerate if an FPS override was applied
+                if hasattr(plan, "_probed_fps") and plan.media_info:
+                    plan.media_info.fps = plan._probed_fps
+                    del plan._probed_fps
 
                 # Restore shot/seq/resource from original pattern match
                 if plan.match and plan.match.matched:
@@ -2749,6 +2798,10 @@ class IngestWindow(QMainWindow):
         act_override_cs = QAction("Override Colorspace...", self)
         act_override_cs.triggered.connect(self._on_context_override_colorspace)
         menu.addAction(act_override_cs)
+
+        act_override_fps = QAction("Override FPS...", self)
+        act_override_fps.triggered.connect(self._on_context_override_fps)
+        menu.addAction(act_override_fps)
 
         menu.addSeparator()
 
