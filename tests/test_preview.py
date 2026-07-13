@@ -22,6 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from ramses_ingest.preview import (
     generate_thumbnail,
     generate_proxy,
+    _color_transform_filter,
     _escape_ffmpeg_filter_path,
     THUMB_WIDTH,
     PROXY_WIDTH,
@@ -194,17 +195,21 @@ class TestGenerateThumbnail(unittest.TestCase):
         self.assertEqual(cmd[-1], output)  # Output path
 
     @patch("subprocess.run")
-    @patch("os.path.isfile")
-    def test_thumbnail_with_ocio(self, mock_isfile, mock_run):
-        """OCIO config should be included in filter chain."""
-        # Mock both subprocess and file existence check for OCIO config
+    def test_thumbnail_with_ocio(self, mock_run):
+        """OCIO config should be included in filter chain (no LUT present)."""
         mock_run.return_value = MagicMock(returncode=0)
-        mock_isfile.return_value = True  # Pretend OCIO config exists
         clip = self._make_sequence_clip()
         output = os.path.join(self.output_dir, "thumb.jpg")
-        ocio_path = "C:\\OCIO\\config.ocio"
+        # Real config file; empty LUT folder so the ocio branch is exercised
+        ocio_path = os.path.join(self.output_dir, "config.ocio")
+        with open(ocio_path, "w") as f:
+            f.write("ocio_profile_version: 2\n")
 
-        result = generate_thumbnail(clip, output, ocio_config=ocio_path, ocio_in="ACEScg")
+        with patch(
+            "ramses_ingest.preview._luts_dir",
+            return_value=os.path.join(self.output_dir, "no_luts"),
+        ):
+            result = generate_thumbnail(clip, output, ocio_config=ocio_path, ocio_in="ACEScg")
 
         self.assertTrue(result)
         cmd = mock_run.call_args[0][0]
@@ -212,10 +217,10 @@ class TestGenerateThumbnail(unittest.TestCase):
         vf_value = cmd[vf_index + 1]
 
         self.assertIn("ocio=", vf_value)
-        self.assertIn("ACEScg", vf_value)
+        self.assertIn("input=ACEScg", vf_value)
         self.assertIn("sRGB", vf_value)
-        # Path should be escaped
-        self.assertIn("C:/OCIO/config.ocio", vf_value)
+        # Path should be escaped/normalized
+        self.assertIn("config.ocio", vf_value)
 
     @patch("subprocess.run")
     def test_thumbnail_scale_filter(self, mock_run):
@@ -472,24 +477,28 @@ class TestGenerateProxy(unittest.TestCase):
         self.assertIn(f"scale={PROXY_WIDTH}:-2", vf_value)
 
     @patch("subprocess.run")
-    @patch("os.path.isfile")
-    def test_proxy_with_ocio(self, mock_isfile, mock_run):
-        """Proxy with OCIO should include filter."""
+    def test_proxy_with_ocio(self, mock_run):
+        """Proxy with OCIO should include filter (no LUT present)."""
         mock_run.return_value = MagicMock(returncode=0)
-        mock_isfile.return_value = True  # Pretend OCIO config and movie file exist
         clip = self._make_movie_clip()
         output = os.path.join(self.output_dir, "proxy.mp4")
-        ocio_path = "D:\\OCIO\\config.ocio"
+        ocio_path = os.path.join(self.output_dir, "config.ocio")
+        with open(ocio_path, "w") as f:
+            f.write("ocio_profile_version: 2\n")
 
-        result = generate_proxy(clip, output, ocio_config=ocio_path, ocio_in="Linear")
+        with patch(
+            "ramses_ingest.preview._luts_dir",
+            return_value=os.path.join(self.output_dir, "no_luts"),
+        ):
+            result = generate_proxy(clip, output, ocio_config=ocio_path, ocio_in="Linear")
 
         self.assertTrue(result)
         cmd = mock_run.call_args[0][0]
         vf_index = cmd.index("-vf")
         vf_value = cmd[vf_index + 1]
         self.assertIn("ocio=", vf_value)
-        self.assertIn("Linear", vf_value)
-        self.assertIn("D:/OCIO/config.ocio", vf_value)
+        self.assertIn("input=Linear", vf_value)
+        self.assertIn("config.ocio", vf_value)
 
     @patch("subprocess.run")
     def test_proxy_timeout_600_seconds(self, mock_run):
@@ -578,6 +587,83 @@ class TestGenerateProxy(unittest.TestCase):
             generate_proxy(clip, nested_output)
 
         self.assertTrue(os.path.isdir(os.path.dirname(nested_output)))
+
+
+class TestColorTransformFilter(unittest.TestCase):
+    """Preview color conversion: LUT first (works on every ffmpeg build),
+    ffmpeg `ocio` filter second (needs FFmpeg >= 8.1 built with OCIO)."""
+
+    def setUp(self):
+        import shutil
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.luts = os.path.join(self.tmp, "luts")
+        os.makedirs(self.luts, exist_ok=True)
+        self._luts_patch = patch(
+            "ramses_ingest.preview._luts_dir", return_value=self.luts
+        )
+        self._luts_patch.start()
+        self.addCleanup(self._luts_patch.stop)
+
+    def _make_lut(self, name):
+        path = os.path.join(self.luts, name)
+        with open(path, "w") as f:
+            f.write("LUT_3D_SIZE 2\n")
+        return path
+
+    def _make_config(self):
+        path = os.path.join(self.tmp, "config.ocio")
+        with open(path, "w") as f:
+            f.write("ocio_profile_version: 2\n")
+        return path
+
+    def test_lut_wins_even_when_ocio_config_present(self):
+        self._make_lut("ARRI LogC4.cube")
+        cfg = self._make_config()
+        flt = _color_transform_filter(cfg, "ARRI LogC4")
+        self.assertTrue(flt.startswith("lut3d="))
+        self.assertIn("ARRI LogC4.cube", flt)
+
+    def test_ocio_filter_uses_correct_option_names(self):
+        """The filter options are input/display/view — in_label/out_label
+        do not exist and made the filter fail on OCIO-enabled builds too."""
+        cfg = self._make_config()
+        flt = _color_transform_filter(cfg, "ARRI LogC4")
+        self.assertIn("ocio=config=", flt)
+        self.assertIn(":input=ARRI LogC4", flt)
+        self.assertIn(":display=sRGB - Display", flt)
+        self.assertIn(":view=ACES 1.0 - SDR Video", flt)
+        self.assertNotIn("in_label", flt)
+        self.assertNotIn("out_label", flt)
+
+    def test_no_lut_no_config_returns_none(self):
+        self.assertIsNone(_color_transform_filter(None, "ARRI LogC4"))
+        self.assertIsNone(_color_transform_filter("/nonexistent.ocio", "sRGB"))
+
+    def test_colorspace_name_sanitized_for_lut_lookup(self):
+        """Slashes/colons in colorspace names map to underscores."""
+        self._make_lut("Input _ ARRI _ LogC4.cube")
+        flt = _color_transform_filter(None, "Input / ARRI / LogC4")
+        self.assertTrue(flt and flt.startswith("lut3d="))
+
+    def test_thumbnail_command_includes_lut(self):
+        """End to end: the LUT lands in the ffmpeg -vf chain."""
+        self._make_lut("ARRI LogC4.cube")
+        src = os.path.join(self.tmp, "plate.0001.exr")
+        with open(src, "wb") as f:
+            f.write(b"x")
+        clip = Clip(
+            base_name="plate", extension="exr", directory=Path(self.tmp),
+            is_sequence=True, frames=[1], first_file=src,
+        )
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            generate_thumbnail(
+                clip, os.path.join(self.tmp, "out.jpg"), ocio_in="ARRI LogC4"
+            )
+        cmd = mock_run.call_args[0][0]
+        vf = cmd[cmd.index("-vf") + 1]
+        self.assertIn("lut3d=", vf)
 
 
 if __name__ == "__main__":

@@ -65,6 +65,55 @@ def _escape_ffmpeg_filter_label(label: str) -> str:
     """
     return label.replace("\\", "\\\\").replace(":", "\\:").replace(";", "\\;")
 
+# OCIO display/view used by the ffmpeg `ocio` filter (FFmpeg >= 8.1 built
+# with OpenColorIO). These are the ACES *Studio* config names — the CG config
+# carries no camera colorspaces at all.
+OCIO_DISPLAY = "sRGB - Display"
+OCIO_VIEW = "ACES 1.0 - SDR Video"
+
+# Windows-invalid filename characters, replaced when mapping a colorspace
+# name to a LUT filename ("ARRI LogC4" -> "ARRI LogC4.cube").
+_INVALID_FILENAME_CHARS = re.compile(r'[<>:"/\\|?*]')
+
+
+def _luts_dir() -> str:
+    """User LUT folder: %APPDATA%/ramses_ingest/luts (next to rules.yaml)."""
+    from ramses_ingest.config import USER_RULES_PATH
+    return os.path.join(os.path.dirname(USER_RULES_PATH), "luts")
+
+
+def _color_transform_filter(ocio_config: str | None, ocio_in: str) -> str | None:
+    """The ffmpeg filter converting *ocio_in* footage to sRGB for previews.
+
+    Priority:
+    1. A ``.cube`` LUT named after the source colorspace in the user LUT
+       folder, applied via ``lut3d`` — works with EVERY ffmpeg build.
+       E.g. drop ARRI's official ``LogC4-to-Gamma24_Rec709`` cube in as
+       ``luts/ARRI LogC4.cube``.
+    2. The ffmpeg ``ocio`` filter with an ACES display/view transform —
+       requires FFmpeg >= 8.1 built with OpenColorIO (most stock Windows
+       builds are NOT; check ``ffmpeg -filters | findstr ocio``).
+
+    Returns None when neither is available (previews stay untransformed).
+    """
+    if ocio_in:
+        lut_name = _INVALID_FILENAME_CHARS.sub("_", ocio_in) + ".cube"
+        lut_path = os.path.join(_luts_dir(), lut_name)
+        if os.path.isfile(lut_path):
+            return f"lut3d={_escape_ffmpeg_filter_path(lut_path)}"
+
+    if ocio_config and os.path.isfile(ocio_config):
+        clean_path = _escape_ffmpeg_filter_path(ocio_config)
+        return (
+            f"ocio=config={clean_path}"
+            f":input={_escape_ffmpeg_filter_label(ocio_in)}"
+            f":display={_escape_ffmpeg_filter_label(OCIO_DISPLAY)}"
+            f":view={_escape_ffmpeg_filter_label(OCIO_VIEW)}"
+        )
+
+    return None
+
+
 # Thumbnail settings
 THUMB_WIDTH = 960
 THUMB_QUALITY = 2  # ffmpeg -q:v (2 = high quality JPEG)
@@ -121,9 +170,9 @@ def generate_proxy(
         os.makedirs(out_dir, exist_ok=True)
 
     vf_chain = [f"scale={PROXY_WIDTH}:-2"]
-    if ocio_config and os.path.isfile(ocio_config):
-        clean_path = _escape_ffmpeg_filter_path(ocio_config)
-        vf_chain.append(f"ocio=config={clean_path}:in_label={_escape_ffmpeg_filter_label(ocio_in)}:out_label=sRGB")
+    color_filter = _color_transform_filter(ocio_config, ocio_in)
+    if color_filter:
+        vf_chain.append(color_filter)
 
     vf_str = ",".join(vf_chain)
 
@@ -194,9 +243,9 @@ def _thumbnail_from_sequence(
     )
 
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]
-    if ocio_config and os.path.isfile(ocio_config):
-        clean_path = _escape_ffmpeg_filter_path(ocio_config)
-        vf_chain.append(f"ocio=config={clean_path}:in_label={_escape_ffmpeg_filter_label(ocio_in)}:out_label=sRGB")
+    color_filter = _color_transform_filter(ocio_config, ocio_in)
+    if color_filter:
+        vf_chain.append(color_filter)
     vf_str = ",".join(vf_chain)
 
     cmd = [
@@ -253,9 +302,9 @@ def _thumbnail_from_movie(
         seek_seconds = str(frame_index)
 
     vf_chain = [f"scale={THUMB_WIDTH}:-1"]
-    if ocio_config and os.path.isfile(ocio_config):
-        clean_path = _escape_ffmpeg_filter_path(ocio_config)
-        vf_chain.append(f"ocio=config={clean_path}:in_label={_escape_ffmpeg_filter_label(ocio_in)}:out_label=sRGB")
+    color_filter = _color_transform_filter(ocio_config, ocio_in)
+    if color_filter:
+        vf_chain.append(color_filter)
     vf_str = ",".join(vf_chain)
 
     cmd = [
