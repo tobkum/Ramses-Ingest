@@ -265,5 +265,53 @@ class TestStepSelection(unittest.TestCase):
         self.assertEqual(engine.step_id, "PLATE")
 
 
+class TestExpectedSpecs(unittest.TestCase):
+    """expected_specs() validates a plate against its sequence, not the project."""
+
+    def setUp(self):
+        self.engine = IngestEngine()
+        self.engine._connected = True
+        self.engine._project_fps = 24.0
+        self.engine._project_width = 1920
+        self.engine._project_height = 1080
+        self.engine._project_par = 1.0
+
+    def _plan(self, seq_id, width=4096, height=2160, fps=25.0, par=2.0):
+        clip = Clip("shot", "mov", Path("."))
+        match = MatchResult(clip, matched=True, shot_id="SH010", sequence_id=seq_id)
+        return IngestPlan(
+            match=match,
+            media_info=MediaInfo(width=width, height=height, fps=fps, pixel_aspect_ratio=par),
+            sequence_id=seq_id,
+            shot_id="SH010",
+            project_id="TEST",
+        )
+
+    def test_no_sequence_uses_project(self):
+        fps, w, h, par, label = self.engine.expected_specs(self._plan(""))
+        self.assertEqual((fps, w, h, par), (24.0, 1920, 1080, 1.0))
+        self.assertEqual(label, "Project")
+
+    def test_existing_sequence_uses_its_standard(self):
+        # An existing sequence with its own 4K/25fps override.
+        self.engine._sequence_settings["SEQ_4K"] = (25.0, 4096, 2160, 2.0)
+        fps, w, h, par, label = self.engine.expected_specs(self._plan("SEQ_4K"))
+        self.assertEqual((fps, w, h, par), (25.0, 4096, 2160, 2.0))
+        self.assertIn("SEQ_4K", label)
+
+    def test_existing_sequence_lookup_is_case_insensitive(self):
+        self.engine._sequence_settings["SEQ_4K"] = (25.0, 4096, 2160, 2.0)
+        _, w, h, _, _ = self.engine.expected_specs(self._plan("seq_4k"))
+        self.assertEqual((w, h), (4096, 2160))
+
+    def test_new_sequence_echoes_plate_so_no_mismatch(self):
+        # A brand-new sequence ID (unknown short name) is created from the plate,
+        # so the plate is its own standard and must never flag a mismatch.
+        plan = self._plan("SEQ_NEW", width=4096, height=2160, fps=25.0, par=2.0)
+        fps, w, h, par, label = self.engine.expected_specs(plan)
+        self.assertEqual((fps, w, h, par), (25.0, 4096, 2160, 2.0))
+        self.assertIn("new", label.lower())
+
+
 if __name__ == "__main__":
     unittest.main()

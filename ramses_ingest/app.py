@@ -178,6 +178,35 @@ class IngestEngine:
         if not self._connected or self._project_fps is None:
             raise RuntimeError("Not connected to Ramses or project settings not loaded.")
 
+    def expected_specs(self, plan) -> tuple[float | None, int | None, int | None, float, str]:
+        """The (fps, width, height, par, label) a plan is validated against.
+
+        A plate is judged against its *sequence* standard, not the project's.
+        This mirrors the publisher: a clip assigned to a sequence (by pattern
+        match or manual override) inherits that sequence's technical spec.
+
+          - Existing sequence: its resolved settings (its own override, or the
+            project fallback the SDK already applies via RamSequence.width()).
+          - New sequence (short name not in the project yet): the sequence will
+            be *created from this plate*, so the plate defines the standard and
+            can never mismatch. We echo the plate's own values back.
+          - No sequence: fall back to the project standard.
+
+        ``label`` names the reference ("Project" or "Sequence <ID>") for the
+        mismatch messages shown to the operator.
+        """
+        seq_id = (getattr(plan, "sequence_id", "") or "").strip()
+        if seq_id:
+            settings = self._sequence_settings.get(seq_id.upper())
+            if settings is not None:
+                fps, width, height, par = settings
+                return fps, width, height, par, f"Sequence {seq_id}"
+            # New sequence: derived from this plate, so it is its own standard.
+            info = getattr(plan, "media_info", None)
+            if info is not None:
+                return info.fps, info.width, info.height, info.pixel_aspect_ratio, f"Sequence {seq_id} (new)"
+        return self._project_fps, self._project_width, self._project_height, self._project_par, "Project"
+
     # -- Pipeline stages -----------------------------------------------------
 
     def load_delivery(self, paths: str | Path | list[str | Path], rules: list[NamingRule] | None = None, progress_callback: Callable[[str], None] | None = None) -> list[IngestPlan]:

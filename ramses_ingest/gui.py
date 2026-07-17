@@ -1252,14 +1252,16 @@ class IngestWindow(QMainWindow):
 
         details.append(f"<b>Frames:</b> {fc}")
 
+        exp_fps, exp_w, exp_h, exp_par, exp_label = self._engine.expected_specs(plan)
+
         if plan.media_info.width and plan.media_info.height:
             res_val = f"{plan.media_info.width}x{plan.media_info.height}"
 
-            if (self._engine._project_width or 0) > 0 and (
-                plan.media_info.width != self._engine._project_width
-                or plan.media_info.height != self._engine._project_height
+            if (exp_w or 0) > 0 and (
+                plan.media_info.width != exp_w
+                or plan.media_info.height != exp_h
             ):
-                res_val = f"<b style='color:#f44747'>{res_val} (Project: {self._engine._project_width}x{self._engine._project_height})</b>"
+                res_val = f"<b style='color:#f44747'>{res_val} ({exp_label}: {exp_w}x{exp_h})</b>"
 
             details.append(f"<b>Resolution:</b> {res_val}")
 
@@ -1267,16 +1269,16 @@ class IngestWindow(QMainWindow):
             fps_val = f"{plan.media_info.fps:.3f}"
 
             if (
-                (self._engine._project_fps or 0.0) > 0
-                and abs(plan.media_info.fps - (self._engine._project_fps or 0.0)) > 0.001
+                (exp_fps or 0.0) > 0
+                and abs(plan.media_info.fps - (exp_fps or 0.0)) > 0.001
             ):
-                fps_val = f"<b style='color:#f44747'>{fps_val} (Project: {self._engine._project_fps or 0.0:.3f})</b>"
+                fps_val = f"<b style='color:#f44747'>{fps_val} ({exp_label}: {exp_fps or 0.0:.3f})</b>"
 
             details.append(f"<b>FPS:</b> {fps_val}")
 
         par_val = f"{plan.media_info.pixel_aspect_ratio:.3f}"
-        if abs(plan.media_info.pixel_aspect_ratio - (self._engine._project_par or 1.0)) > 0.001:
-            par_val = f"<b style='color:#f44747'>{par_val} (Project: {self._engine._project_par or 1.0:.3f})</b>"
+        if abs(plan.media_info.pixel_aspect_ratio - (exp_par or 1.0)) > 0.001:
+            par_val = f"<b style='color:#f44747'>{par_val} ({exp_label}: {exp_par or 1.0:.3f})</b>"
         details.append(f"<b>Pixel Aspect:</b> {par_val}")
 
         if plan.media_info.codec:
@@ -1839,14 +1841,16 @@ class IngestWindow(QMainWindow):
                 frames_item.setBackground(QColor(0, 0, 0, 0))
                 frames_item.setToolTip("")
 
+            exp_fps, exp_w, exp_h, exp_par, exp_label = self._engine.expected_specs(plan)
+
             # --- Column 7: Resolution ---
             res_text = "—"
             is_res_mismatch = False
             if plan.media_info.width and plan.media_info.height:
                 res_text = f"{plan.media_info.width}x{plan.media_info.height}"
-                if (self._engine._project_width or 0) > 0 and (
-                    plan.media_info.width != self._engine._project_width
-                    or plan.media_info.height != self._engine._project_height
+                if (exp_w or 0) > 0 and (
+                    plan.media_info.width != exp_w
+                    or plan.media_info.height != exp_h
                 ):
                     is_res_mismatch = True
 
@@ -1862,7 +1866,7 @@ class IngestWindow(QMainWindow):
             if is_res_mismatch:
                 res_item.setBackground(QColor(120, 100, 0, 100))
                 res_item.setToolTip(
-                    f"Mismatch: Project is {self._engine._project_width}x{self._engine._project_height}"
+                    f"Mismatch: {exp_label} is {exp_w}x{exp_h}"
                 )
             else:
                 res_item.setBackground(QColor(0, 0, 0, 0))
@@ -1871,8 +1875,8 @@ class IngestWindow(QMainWindow):
             # --- Column 8: FPS ---
             fps_text = f"{plan.media_info.fps:.3f}" if plan.media_info.fps > 0 else "—"
             is_fps_mismatch = False
-            if (self._engine._project_fps or 0.0) > 0 and plan.media_info.fps > 0:
-                if abs(plan.media_info.fps - (self._engine._project_fps or 0.0)) > 0.001:
+            if (exp_fps or 0.0) > 0 and plan.media_info.fps > 0:
+                if abs(plan.media_info.fps - (exp_fps or 0.0)) > 0.001:
                     is_fps_mismatch = True
 
             fps_item = self._table.item(idx, 8)
@@ -1887,7 +1891,7 @@ class IngestWindow(QMainWindow):
             if is_fps_mismatch:
                 fps_item.setBackground(QColor(120, 100, 0, 100))
                 fps_item.setToolTip(
-                    f"Mismatch: Project is {self._engine._project_fps or 0.0:.3f}"
+                    f"Mismatch: {exp_label} is {exp_fps or 0.0:.3f}"
                 )
             else:
                 fps_item.setBackground(QColor(0, 0, 0, 0))
@@ -1897,7 +1901,7 @@ class IngestWindow(QMainWindow):
             par_val = plan.media_info.pixel_aspect_ratio if plan.media_info else 1.0
             par_text = f"{par_val:.2f}"
             is_par_mismatch = False
-            if abs(par_val - (self._engine._project_par or 1.0)) > 0.001:
+            if abs(par_val - (exp_par or 1.0)) > 0.001:
                 is_par_mismatch = True
 
             par_item = self._table.item(idx, 9)
@@ -1912,7 +1916,7 @@ class IngestWindow(QMainWindow):
             if is_par_mismatch:
                 par_item.setBackground(QColor(120, 100, 0, 100))
                 par_item.setToolTip(
-                    f"Mismatch: Project is {self._engine._project_par or 1.0:.2f}"
+                    f"Mismatch: {exp_label} is {exp_par or 1.0:.2f}"
                 )
             else:
                 par_item.setBackground(QColor(0, 0, 0, 0))
@@ -2034,15 +2038,17 @@ class IngestWindow(QMainWindow):
             )
 
         if not plan.resource:
-            if (self._engine._project_width or 0) > 0 and plan.media_info.width > 0:
+            exp_fps, exp_w, exp_h, _exp_par, _exp_label = self._engine.expected_specs(plan)
+
+            if (exp_w or 0) > 0 and plan.media_info.width > 0:
                 if (
-                    plan.media_info.width != self._engine._project_width
-                    or plan.media_info.height != self._engine._project_height
+                    plan.media_info.width != exp_w
+                    or plan.media_info.height != exp_h
                 ):
                     warning_msgs.append("Technical mismatch (Resolution)")
 
-            if (self._engine._project_fps or 0.0) > 0 and plan.media_info.fps > 0:
-                if abs(plan.media_info.fps - (self._engine._project_fps or 0.0)) > 0.001:
+            if (exp_fps or 0.0) > 0 and plan.media_info.fps > 0:
+                if abs(plan.media_info.fps - (exp_fps or 0.0)) > 0.001:
                     warning_msgs.append("Technical mismatch (FPS)")
 
         if warning_msgs:
@@ -2122,22 +2128,39 @@ class IngestWindow(QMainWindow):
         if not selected_rows:
             return
 
-        seq_id, ok = QInputDialog.getText(
+        # Existing project sequences are offered in the dropdown so the operator
+        # can reuse one (inheriting its resolution); the field stays editable so
+        # a brand-new sequence ID can be typed (it is created from the plate).
+        existing = sorted(self._engine._existing_sequences, key=str.upper)
+        current = ""
+        first_plan = self._get_plan_from_row(selected_rows[0])
+        if first_plan:
+            current = first_plan.sequence_id or ""
+        items = list(existing)
+        if current and current not in items:
+            items.insert(0, current)
+
+        seq_id, ok = QInputDialog.getItem(
             self,
             "Override Sequence ID",
-            f"Enter sequence ID for {len(selected_rows)} clip(s):",
+            f"Sequence for {len(selected_rows)} clip(s)\n"
+            "(pick an existing one or type a new ID):",
+            items,
+            items.index(current) if current in items else 0,
+            editable=True,
         )
 
         if ok:
+            seq_id = seq_id.strip()
             for row in selected_rows:
                 plan = self._get_plan_from_row(row)
                 if plan:
                     plan.sequence_id = seq_id
-                    item = self._table.item(row, 4)  # Seq column (remains 4)
-                    if item:
-                        item.setText(seq_id or "—")
 
-            self._update_summary()
+            # The sequence ID feeds both the target path and the resolution/fps
+            # standard a plate is validated against, so re-resolve and repopulate
+            # (not just _update_summary) to refresh mismatch highlighting.
+            self._on_resolve_timeout()
 
     def _on_context_override_res(self) -> None:
         """Override resource for selected clips"""
