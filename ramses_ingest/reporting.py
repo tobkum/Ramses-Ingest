@@ -852,6 +852,41 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         .table-toolbar { flex-wrap: wrap; }
         .table-toolbar input[type="search"] { min-width: 160px; }
     }
+
+    /* Lightbox — thumbnails are embedded at 960x540 but shown ~140px wide, so a
+       click reveals the full-resolution frame at no extra file-size cost. */
+    img.thumb { cursor: zoom-in; transition: transform 0.12s ease, box-shadow 0.12s ease; }
+    img.thumb:hover { transform: scale(1.04); box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
+
+    #lightbox {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 1000;
+        background: rgba(0, 0, 0, 0.88);
+        cursor: zoom-out;
+        align-items: center;
+        justify-content: center;
+        padding: 3vmin;
+    }
+    #lightbox.open { display: flex; }
+    #lightbox-img {
+        max-width: 96vw;
+        max-height: 88vh;
+        border-radius: 8px;
+        box-shadow: 0 12px 48px rgba(0, 0, 0, 0.6);
+        display: block;
+        margin: 0 auto;
+    }
+    .lightbox-cap {
+        margin-top: 12px;
+        color: #eaeaea;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        text-align: center;
+    }
+    @media print { #lightbox { display: none !important; } img.thumb { cursor: default; } }
     """
 
     # 1. Analyze Batch for Deviations and Totals
@@ -1074,7 +1109,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             missing_display = '<span style="color:#27ae60;">Complete</span>'
 
         b64_img = _get_base64_image(res.preview_path)
-        img_tag = f'<img src="{b64_img}" class="thumb">' if b64_img else '<div class="thumb"></div>'
+        thumb_cap = _esc(res.plan.shot_id + (f" [{res.plan.resource}]" if res.plan.resource else ""))
+        img_tag = (
+            f'<img src="{b64_img}" class="thumb" data-shot="{thumb_cap}" title="Click to enlarge">'
+            if b64_img else '<div class="thumb"></div>'
+        )
 
         # Resource Badge logic
         resource_tag = ""
@@ -1297,6 +1336,25 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "            btn.classList.add('active');",
         "            applyFilters();",
         "        }",
+        "        // Lightbox: click a thumbnail to view the embedded 960x540 frame.",
+        "        function openLightbox(src, caption) {",
+        "            document.getElementById('lightbox-img').src = src;",
+        "            document.getElementById('lightbox-cap').textContent = caption || '';",
+        "            document.getElementById('lightbox').classList.add('open');",
+        "        }",
+        "        function closeLightbox() {",
+        "            document.getElementById('lightbox').classList.remove('open');",
+        "            document.getElementById('lightbox-img').removeAttribute('src');",
+        "        }",
+        "        document.addEventListener('click', function(e) {",
+        "            var t = e.target;",
+        "            if (t && t.tagName === 'IMG' && t.classList.contains('thumb')) {",
+        "                openLightbox(t.src, t.getAttribute('data-shot') || '');",
+        "            }",
+        "        });",
+        "        document.addEventListener('keydown', function(e) {",
+        "            if (e.key === 'Escape') closeLightbox();",
+        "        });",
         "    </script>",
         "</head>",
         "<body>",
@@ -1367,6 +1425,12 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "        </div>",
         '        <div class="footer">',
         f"            With &epsilon;&gt; from {studio_name}",
+        "        </div>",
+        "    </div>",
+        '    <div id="lightbox" onclick="closeLightbox()">',
+        '        <div class="lightbox-inner">',
+        '            <img id="lightbox-img" alt="">',
+        '            <div id="lightbox-cap" class="lightbox-cap"></div>',
         "        </div>",
         "    </div>",
         "</body>",
