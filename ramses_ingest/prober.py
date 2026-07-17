@@ -251,6 +251,7 @@ class MediaInfo:
     fps: float = 0.0
     codec: str = ""
     pix_fmt: str = ""
+    compression: str = ""  # EXR/DPX/TIFF container compression (zip, piz, dwaa, none…)
     color_space: str = ""
     color_transfer: str = ""
     color_primaries: str = "" # Added Primaries
@@ -307,12 +308,19 @@ def _probe_image_oiio(file_path: str) -> MediaInfo:
         # Color space: OIIO stores this in the "oiio:ColorSpace" attribute
         color_space = spec.get_string_attribute("oiio:ColorSpace", "")
 
+        # Container compression (EXR: zip/piz/dwaa/…, TIFF: lzw/zip, DPX: none).
+        # DWAA/DWAB may report a level as "dwaa:45"; keep just the method name.
+        compression = spec.get_string_attribute("compression", "") or ""
+        if ":" in compression:
+            compression = compression.split(":", 1)[0]
+
         return MediaInfo(
             width=spec.width,
             height=spec.height,
-            fps=0.0,  # Single frame — FPS comes from the sequence context
+            fps=0.0,  # Single frame; FPS comes from the sequence context
             codec=fmt,
             pix_fmt=str(spec.format),
+            compression=compression,
             color_space=color_space,
             pixel_aspect_ratio=par,
         )
@@ -370,7 +378,7 @@ def _probe_video_av(file_path: str) -> MediaInfo:
 
             # Extract color science metadata from codec context if available
             ctx = stream.codec_context
-            
+
             # Safely stringify Enums or Integers if present
             def _safestr(val, attr_name=""):
                 if val is None: return ""
@@ -382,15 +390,35 @@ def _probe_video_av(file_path: str) -> MediaInfo:
                 if "." in s: return s.split(".")[-1]
                 return s
 
+            # The DECODER context reports a container's colour tags (mov 'colr'
+            # atom, common on ProRes) as "unspecified" (2) until a frame is
+            # decoded. When all three come back blank, decode one frame and read
+            # the tags off it — the frame carries the real container values.
+            cs_val = getattr(ctx, "colorspace", None)
+            trc_val = getattr(ctx, "color_trc", None)
+            prim_val = getattr(ctx, "color_primaries", None)
+
+            def _blank(v):
+                return v is None or (isinstance(v, int) and v == 2) or str(v).lower() in ("", "unspecified")
+
+            if _blank(cs_val) and _blank(trc_val) and _blank(prim_val):
+                try:
+                    frame = next(container.decode(video=0))
+                    cs_val = getattr(frame, "colorspace", cs_val)
+                    trc_val = getattr(frame, "color_trc", trc_val)
+                    prim_val = getattr(frame, "color_primaries", prim_val)
+                except Exception:
+                    pass
+
             return MediaInfo(
                 width=stream.width or 0,
                 height=stream.height or 0,
                 fps=fps,
                 codec=ctx.name or "",
                 pix_fmt=stream.pix_fmt or "",
-                color_space=_safestr(getattr(ctx, "colorspace", ""), "colorspace"),
-                color_transfer=_safestr(getattr(ctx, "color_trc", ""), "transfer"),
-                color_primaries=_safestr(getattr(ctx, "color_primaries", ""), "primaries"),
+                color_space=_safestr(cs_val, "colorspace"),
+                color_transfer=_safestr(trc_val, "transfer"),
+                color_primaries=_safestr(prim_val, "primaries"),
                 pixel_aspect_ratio=par,
                 duration_seconds=duration,
                 frame_count=nb_frames,

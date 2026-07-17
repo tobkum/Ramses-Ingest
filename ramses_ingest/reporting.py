@@ -136,6 +136,7 @@ def generate_json_audit_trail(results: list[IngestResult], output_path: str, pro
                 "pixel_aspect_ratio": mi.pixel_aspect_ratio if mi.pixel_aspect_ratio != 1.0 else None,
                 "codec": mi.codec or None,
                 "pixel_format": mi.pix_fmt or None,
+                "compression": mi.compression or None,
                 "duration_seconds": mi.duration_seconds if mi.duration_seconds else None,
             },
             "colorspace": {
@@ -1084,6 +1085,10 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         for color_val in (mi.color_primaries, mi.color_transfer, mi.color_space):
             if not color_val:
                 continue
+            # Skip placeholder tags (a ProRes may carry only the matrix, leaving
+            # primaries/transfer "unspecified") so the audit reads cleanly.
+            if color_val.upper() in ("UNSPECIFIED", "UNKNOWN", "RESERVED"):
+                continue
             if has_critical_cs_issue:
                 color_parts.append(
                     f'<span class="deviation" title="{cs_issue_msg}">{_esc(color_val)}</span>'
@@ -1134,7 +1139,12 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             meta_bits.append(f"{mi.width}x{mi.height} source")
         meta_bits.append(f"{res.frames_copied} frames")
         source_cs = (res.plan.colorspace_override or mi.color_space or "").strip()
-        transformed = bool(source_cs) and source_cs.lower() != "srgb"
+        # The preview is display-transformed only when the operator ASSIGNED a
+        # non-sRGB working space — that is what drives the thumbnail's OCIO
+        # transform. A clip's own embedded tag (e.g. Rec.709 in a ProRes) does
+        # not trigger one, so it must not claim a transform.
+        assigned_cs = (res.plan.colorspace_override or "").strip()
+        transformed = bool(assigned_cs) and assigned_cs.lower() != "srgb"
         if source_cs:
             meta_bits.append(f"{source_cs} → sRGB" if transformed else source_cs)
         thumb_note = "Preview is display-transformed to sRGB, not the raw plate." if transformed else ""
@@ -1200,6 +1210,13 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             f'<span class="code">{_esc(mi.start_timecode)}</span>'
             if mi.start_timecode else '<span style="color:var(--text-muted);">–</span>'
         )
+        # Format line: codec / pixel type / (EXR compression, when present).
+        fmt_parts = [codec_display]
+        if mi.pix_fmt:
+            fmt_parts.append(_esc(mi.pix_fmt))
+        if mi.compression:
+            fmt_parts.append(_esc(mi.compression.upper()))
+        fmt_line = " / ".join(fmt_parts)
 
         row_number += 1
         row_html = f"""
@@ -1220,7 +1237,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td><b>{res.frames_copied}</b></td>
             <td>{missing_display}</td>
             <td class="tech">
-                <span class="tech-line"><b>{res_display}</b> @ {fps_display} fps{fps_manual}{par_html}</span><br>{codec_display} / {_esc(mi.pix_fmt or "")}<br>
+                <span class="tech-line"><b>{res_display}</b> @ {fps_display} fps{fps_manual}{par_html}</span><br>{fmt_line}<br>
                 <div class="color-audit">{color_str}</div>
             </td>
             <td class="col-tc">{tc_cell}</td>

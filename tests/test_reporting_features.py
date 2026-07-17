@@ -133,5 +133,79 @@ class TestApplyStatusFields(unittest.TestCase):
         self.assertIn("[BG]", data["comment"])
 
 
+class TestReportMediaSpecs(unittest.TestCase):
+    """Technical-spec rendering: EXR compression, colour-tag cleanup, and the
+    lightbox transform hint (which must key off the operator assignment, not a
+    clip's embedded tag)."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.out = os.path.join(self.tmp, "report.html")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _result(self, ext="exr", is_sequence=True, media=None, override="", preview=False):
+        clip = Clip(base_name="sh_src", extension=ext, directory=Path(self.tmp),
+                    is_sequence=is_sequence, frames=[1001] if is_sequence else [],
+                    first_file=os.path.join(self.tmp, f"sh.{ext}"))
+        plan = IngestPlan(match=MatchResult(clip, matched=True, shot_id="SH010"),
+                          media_info=media or MediaInfo(), sequence_id="SEQ01",
+                          shot_id="SH010", project_id="T", version=1,
+                          colorspace_override=override)
+        res = IngestResult(plan=plan, success=True, frames_copied=24, checksum="abc123")
+        if preview:
+            p = os.path.join(self.tmp, "thumb.jpg")
+            with open(p, "wb") as f:
+                f.write(b"\xff\xd8\xff\xd9")  # minimal bytes; embedded verbatim
+            res.preview_path = p
+        return res
+
+    def _html(self, results):
+        self.assertTrue(generate_html_report(results, self.out))
+        with open(self.out, encoding="utf-8") as f:
+            return f.read()
+
+    def _color_audit(self, html):
+        import re
+        return re.search(r'color-audit">(.*?)</div>', html, re.S).group(1)
+
+    def test_exr_compression_shown(self):
+        mi = MediaInfo(width=4096, height=2304, fps=25.0, codec="openexr",
+                       pix_fmt="half", compression="zip")
+        html = self._html([self._result(media=mi)])
+        self.assertIn("ZIP", html)
+        self.assertIn("half", html)
+
+    def test_movie_has_no_compression_token(self):
+        mi = MediaInfo(width=1920, height=1080, fps=24.0, codec="prores",
+                       pix_fmt="yuv422p10le")  # compression="" for movies
+        html = self._html([self._result(ext="mov", is_sequence=False, media=mi)])
+        self.assertIn("PRORES", html)
+        # No stray separator implying an empty compression token
+        self.assertNotIn("yuv422p10le / ", html)
+
+    def test_unspecified_color_tags_filtered(self):
+        mi = MediaInfo(width=1920, height=1080, fps=24.0,
+                       color_primaries="UNSPECIFIED", color_transfer="UNSPECIFIED",
+                       color_space="BT709")
+        audit = self._color_audit(self._html([self._result(ext="mov", is_sequence=False, media=mi)]))
+        self.assertIn("BT709", audit)
+        self.assertNotIn("UNSPECIFIED", audit)
+
+    def test_transform_hint_requires_assignment_not_embedded_tag(self):
+        # Embedded Rec.709, NO operator assignment -> preview is not transformed.
+        mi = MediaInfo(width=1920, height=1080, fps=24.0, color_space="BT709")
+        html = self._html([self._result(ext="mov", is_sequence=False, media=mi, preview=True)])
+        self.assertIn('data-note=""', html)          # no transform note
+        self.assertNotIn("→ sRGB", html)             # no arrow
+
+    def test_transform_hint_shown_when_assigned_non_srgb(self):
+        mi = MediaInfo(width=4096, height=2304, fps=25.0)
+        html = self._html([self._result(media=mi, override="ARRI LogC4", preview=True)])
+        self.assertIn("ARRI LogC4 → sRGB", html)
+        self.assertIn("display-transformed", html)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,7 +12,52 @@ from pathlib import Path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "lib"))
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from ramses_ingest.prober import probe_file, MediaInfo
+from ramses_ingest.prober import probe_file, MediaInfo, _probe_image_oiio
+
+try:
+    import OpenImageIO as _oiio
+    _HAS_OIIO = True
+except ImportError:
+    _HAS_OIIO = False
+
+
+@unittest.skipUnless(_HAS_OIIO, "OpenImageIO not installed")
+class TestExrCompressionProbe(unittest.TestCase):
+    """The OIIO probe reads EXR container compression (zip/piz/dwaa/…)."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _write_exr(self, name, compression):
+        path = os.path.join(self.tmp, name)
+        spec = _oiio.ImageSpec(64, 36, 3, "half")
+        spec.attribute("compression", compression)
+        out = _oiio.ImageOutput.create(path)
+        out.open(path, spec)
+        out.write_image(_oiio.ImageBuf(spec).get_pixels(_oiio.FLOAT))
+        out.close()
+        return path
+
+    def test_reads_piz_compression(self):
+        mi = _probe_image_oiio(self._write_exr("piz.exr", "piz"))
+        self.assertEqual(mi.compression, "piz")
+        self.assertEqual(mi.width, 64)
+
+    def test_reads_zip_compression(self):
+        mi = _probe_image_oiio(self._write_exr("zip.exr", "zip"))
+        self.assertEqual(mi.compression, "zip")
+
+    def test_dwaa_level_suffix_stripped(self):
+        # OIIO may report DWAA as "dwaa:45"; only the method name is kept.
+        mi = _probe_image_oiio(self._write_exr("dwaa.exr", "dwaa"))
+        self.assertTrue(mi.compression.startswith("dwaa"))
+        self.assertNotIn(":", mi.compression)
+
 
 class TestProber(unittest.TestCase):
     
