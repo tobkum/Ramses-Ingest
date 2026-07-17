@@ -29,6 +29,27 @@ _PATTERN_CACHE: dict[str, re.Pattern] = {}
 logger = logging.getLogger(__name__)
 
 
+def _sanitize_id(value: str, max_len: int = 64) -> str:
+    """Coerce an environmental string into a valid Ramses identifier.
+
+    Used for IDs derived from the environment rather than an operator-authored
+    regex capture — chiefly a parent folder name used as the sequence. Every
+    run of characters outside ``[A-Za-z0-9_-]`` collapses to a single
+    underscore, so spaces and dots become ``_`` and path-traversal characters
+    (``/``, ``\\``, ``..``) can never survive. Trimmed of leading/trailing
+    separators and capped at *max_len*. Returns "" if nothing valid remains.
+
+    Examples:
+        "SEQ 010" -> "SEQ_010"
+        "seq.010" -> "seq_010"
+        "../etc"  -> "etc"
+    """
+    if not value:
+        return ""
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", value).strip("_-")
+    return cleaned[:max_len]
+
+
 def _validate_id(value: str, field_name: str, pattern: re.Pattern = _VALID_ID_PATTERN) -> str:
     """Validate and sanitize extracted IDs.
 
@@ -198,7 +219,10 @@ def _try_rule(clip: Clip, rule: NamingRule) -> MatchResult:
     seq_raw = groups.get("sequence", "")
 
     if rule.use_parent_dir_as_sequence:
-        seq_raw = clip.directory.name
+        # The parent folder name is environmental, not an operator-authored
+        # capture, so coerce it to a valid ID (e.g. "SEQ 010" -> "SEQ_010")
+        # instead of silently rejecting anything with a space or dot.
+        seq_raw = _sanitize_id(clip.directory.name)
 
     # Validate extracted IDs (security: prevent injection)
     shot_raw = _validate_id(shot_raw, "shot")

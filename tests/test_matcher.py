@@ -91,6 +91,34 @@ class TestCustomRules(unittest.TestCase):
         self.assertEqual(result.sequence_id, "RollA")
         self.assertEqual(result.shot_id, "SH010")
 
+    def test_dir_as_sequence_sanitizes_spaces_and_dots(self):
+        """A parent folder is environmental, so 'SEQ 010' / 'seq.010' coerce to
+        a valid ID instead of being silently dropped."""
+        rule = NamingRule(
+            pattern=r"(?P<shot>[A-Za-z]*\d+)",
+            use_parent_dir_as_sequence=True,
+        )
+        for folder, expected in [("SEQ 010", "SEQ_010"),
+                                 ("seq.010", "seq_010"),
+                                 ("My Shots!", "My_Shots")]:
+            clip = _make_clip("SH010_PLATE", directory=folder)
+            result = match_clip(clip, rules=[rule])
+            self.assertTrue(result.matched, folder)
+            self.assertEqual(result.sequence_id, expected, folder)
+
+    def test_dir_as_sequence_never_yields_path_traversal(self):
+        """Sanitization must strip any traversal characters from a folder name."""
+        rule = NamingRule(
+            pattern=r"(?P<shot>[A-Za-z]*\d+)",
+            use_parent_dir_as_sequence=True,
+        )
+        clip = _make_clip("SH010_PLATE", directory="../etc")
+        result = match_clip(clip, rules=[rule])
+        seq = result.sequence_id
+        self.assertNotIn("..", seq)
+        self.assertNotIn("/", seq)
+        self.assertNotIn("\\", seq)
+
 
 class TestBulkMatch(unittest.TestCase):
     def test_match_clips(self):
