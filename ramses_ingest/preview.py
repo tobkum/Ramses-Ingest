@@ -16,6 +16,8 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
+import threading
 from pathlib import Path
 
 from ramses_ingest.scanner import Clip
@@ -27,21 +29,28 @@ _SUBPROCESS_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 
 
 
 def _escape_ffmpeg_filter_path(path: str) -> str:
-    """Escape file path for use in FFmpeg filter strings.
+    """Escape a file path for use as an FFmpeg filter *option value*.
 
-    FFmpeg filter syntax requires escaping colons, but Windows drive letters
-    (C:, D:, etc.) must be preserved. This also handles UNC paths on network shares.
+    A colon inside a filter option value is parsed at two levels (the
+    filtergraph splits filters/options, then the option value is parsed), so
+    every colon — including a Windows drive letter's — must be escaped with a
+    **doubled** backslash (``C\\\\:/...``). A single backslash, or leaving the
+    drive colon bare, makes FFmpeg 8.1's parser split the drive letter off as a
+    separate option ("Undefined constant" / "No option name"). Verified
+    empirically against ffmpeg 8.1. Callers must reference the result with an
+    explicit ``file=`` key (e.g. ``lut3d=file=<escaped>``). Spaces need no
+    escaping once the colons are handled.
 
     Args:
         path: File path (Windows or Unix)
 
     Returns:
-        Properly escaped path for FFmpeg filter string
+        Escaped path for use after ``key=`` in an FFmpeg filter string
 
     Examples:
-        C:\\OCIO\\config.ocio → C:/OCIO/config.ocio
+        C:\\OCIO\\config.ocio → C\\\\:/OCIO/config.ocio
         \\\\server\\share\\config.ocio → //server/share/config.ocio
-        /mnt/ocio:v2/config.ocio → /mnt/ocio\\:v2/config.ocio
+        /mnt/ocio:v2/config.ocio → /mnt/ocio\\\\:v2/config.ocio
     """
     # Preserve UNC paths: \\server\share → //server/share
     if path.startswith("\\\\"):
@@ -50,16 +59,8 @@ def _escape_ffmpeg_filter_path(path: str) -> str:
         # Convert backslashes to forward slashes for FFmpeg
         path = path.replace("\\", "/")
 
-    # Escape colons that are NOT a Windows drive letter (C:, D:, etc.).
-    # Python's re module does not support variable-length lookbehinds, so we
-    # handle the drive-letter case explicitly instead of using a regex.
-    if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
-        # Keep the drive colon intact; escape any remaining colons in the rest.
-        clean = path[:2] + path[2:].replace(":", "\\:")
-    else:
-        clean = path.replace(":", "\\:")
-
-    return clean
+    # Doubled backslash so the colon survives both parsing levels.
+    return path.replace(":", "\\\\:")
 
 
 def _escape_ffmpeg_filter_label(label: str) -> str:
@@ -213,23 +214,62 @@ def _bake_lut_from_ocio(ocio_in: str, out_path: str, ocio_config: str | None = N
             logger.warning("LUT bake failed for %r in %s: %s", ocio_in, cfg_source, exc)
             continue
 
+        out_dir = os.path.dirname(out_path)
+        tmp_path = None
         try:
-            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-            tmp_path = out_path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
+            os.makedirs(out_dir, exist_ok=True)
+            # Unique temp name per writer: concurrent bakers must not clobber a
+            # shared ".tmp" (that raced to WinError 32 on the replace).
+            fd, tmp_path = tempfile.mkstemp(suffix=".tmp", dir=out_dir)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(data)
-            os.replace(tmp_path, out_path)
+            try:
+                os.replace(tmp_path, out_path)
+                tmp_path = None
+            except OSError:
+                # A concurrent baker of the identical LUT may already hold the
+                # destination open (Windows sharing violation). Its output is
+                # byte-identical, so an existing non-empty file is success.
+                if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 0):
+                    raise
             logger.info("Baked preview LUT for %r from %s", ocio_in, cfg_source)
             return True
         except OSError as exc:
             logger.warning("Could not write baked LUT %s: %s", out_path, exc)
             return False
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
     logger.warning(
         "Colorspace %r not found in the OCIO config(s) — previews stay "
         "untransformed. Add a manual LUT or use a config name.", ocio_in
     )
     return False
+
+
+# Per-output-path bake locks. The thumbnail phase runs 8 in-process threads,
+# and a batch usually shares one source colorspace, so all threads would race
+# to bake the identical LUT to the same path. Serialize per path (with a
+# double-check inside the lock) so exactly one thread bakes and the rest reuse.
+_bake_locks_guard = threading.Lock()
+_bake_locks: dict[str, threading.Lock] = {}
+
+
+def _ensure_baked_lut(ocio_in: str, out_path: str, ocio_config: str | None) -> bool:
+    """Bake *out_path* once, even under concurrent callers. Idempotent."""
+    if os.path.isfile(out_path):
+        return True
+    with _bake_locks_guard:
+        lock = _bake_locks.setdefault(out_path, threading.Lock())
+    with lock:
+        # Another thread may have baked it while we waited for the lock.
+        if os.path.isfile(out_path):
+            return True
+        return _bake_lut_from_ocio(ocio_in, out_path, ocio_config)
 
 
 def _color_transform_filter(ocio_config: str | None, ocio_in: str) -> str | None:
@@ -253,16 +293,16 @@ def _color_transform_filter(ocio_config: str | None, ocio_in: str) -> str | None
         # 1. Manual override LUT
         lut_path = os.path.join(_luts_dir(), safe_name + ".cube")
         if os.path.isfile(lut_path):
-            return f"lut3d={_escape_ffmpeg_filter_path(lut_path)}"
+            return f"lut3d=file={_escape_ffmpeg_filter_path(lut_path)}"
 
         # 2. Auto-baked LUT, cached per (colorspace, config) pair so a show
         #    config change never serves stale colors
         cfg_key = hashlib.md5((ocio_config or PINNED_OCIO_CONFIG).encode("utf-8")).hexdigest()[:8]
         auto_path = os.path.join(_luts_dir(), "_auto", f"{safe_name}__{cfg_key}.cube")
         if not os.path.isfile(auto_path):
-            _bake_lut_from_ocio(ocio_in, auto_path, ocio_config)
+            _ensure_baked_lut(ocio_in, auto_path, ocio_config)
         if os.path.isfile(auto_path):
-            return f"lut3d={_escape_ffmpeg_filter_path(auto_path)}"
+            return f"lut3d=file={_escape_ffmpeg_filter_path(auto_path)}"
 
     # 3. OCIO-enabled ffmpeg builds only
     if ocio_config and os.path.isfile(ocio_config):

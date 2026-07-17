@@ -23,6 +23,7 @@ from ramses_ingest.preview import (
     generate_thumbnail,
     generate_proxy,
     _bake_lut_from_ocio,
+    _ensure_baked_lut,
     _color_transform_filter,
     _escape_ffmpeg_filter_path,
     THUMB_WIDTH,
@@ -41,16 +42,20 @@ from ramses_ingest.prober import MediaInfo
 class TestEscapeFFmpegFilterPath(unittest.TestCase):
     """Test FFmpeg filter path escaping."""
 
-    def test_windows_drive_letter_preserved(self):
-        """Windows drive letters (C:, D:) should not be escaped."""
+    # FFmpeg 8.1's filtergraph parser parses an option value at two levels, so
+    # EVERY colon (drive letter included) must be escaped with a *doubled*
+    # backslash, and the value referenced via an explicit `file=` key. Leaving
+    # the drive colon bare made it split "C" off as its own option. Verified
+    # empirically against ffmpeg 8.1.
+    def test_windows_drive_letter_double_escaped(self):
+        """Windows drive colon must be escaped with a doubled backslash."""
         result = _escape_ffmpeg_filter_path("C:\\OCIO\\config.ocio")
-        self.assertEqual(result, "C:/OCIO/config.ocio")
-        # Colon after C should not be escaped
+        self.assertEqual(result, "C\\\\:/OCIO/config.ocio")
 
     def test_windows_backslashes_converted(self):
         """Backslashes should be converted to forward slashes."""
         result = _escape_ffmpeg_filter_path("C:\\Users\\VFX\\config.ocio")
-        self.assertEqual(result, "C:/Users/VFX/config.ocio")
+        self.assertEqual(result, "C\\\\:/Users/VFX/config.ocio")
 
     def test_unix_path_unchanged(self):
         """Unix paths without special chars should pass through."""
@@ -58,25 +63,29 @@ class TestEscapeFFmpegFilterPath(unittest.TestCase):
         self.assertEqual(result, "/usr/local/ocio/config.ocio")
 
     def test_unix_path_with_colon_escaped(self):
-        """Colons in Unix paths (not drive letters) should be escaped."""
+        """Colons in Unix paths should be escaped with a doubled backslash."""
         result = _escape_ffmpeg_filter_path("/mnt/ocio:v2/config.ocio")
-        self.assertEqual(result, "/mnt/ocio\\:v2/config.ocio")
+        self.assertEqual(result, "/mnt/ocio\\\\:v2/config.ocio")
 
     def test_unc_path_converted(self):
         """UNC paths (\\\\server\\share) should be converted."""
         result = _escape_ffmpeg_filter_path("\\\\server\\share\\ocio\\config.ocio")
         self.assertEqual(result, "//server/share/ocio/config.ocio")
 
-    def test_d_drive_preserved(self):
-        """D: drive should not have colon escaped."""
+    def test_d_drive_double_escaped(self):
+        """D: drive colon must also be doubled-backslash escaped."""
         result = _escape_ffmpeg_filter_path("D:\\VFX\\config.ocio")
-        self.assertEqual(result, "D:/VFX/config.ocio")
+        self.assertEqual(result, "D\\\\:/VFX/config.ocio")
 
     def test_multiple_colons_windows(self):
-        """Windows path with folder name containing colon."""
+        """Both the drive colon and a folder colon are doubled-backslash escaped."""
         result = _escape_ffmpeg_filter_path("C:\\ocio:v2\\config.ocio")
-        # C: preserved, but :v2 escaped
-        self.assertEqual(result, "C:/ocio\\:v2/config.ocio")
+        self.assertEqual(result, "C\\\\:/ocio\\\\:v2/config.ocio")
+
+    def test_space_in_path_left_intact(self):
+        """Spaces need no escaping once colons are handled (ffmpeg 8.1 file=)."""
+        result = _escape_ffmpeg_filter_path("C:\\ARRI LUTs\\ARRI LogC4.cube")
+        self.assertEqual(result, "C\\\\:/ARRI LUTs/ARRI LogC4.cube")
 
     def test_empty_path(self):
         """Empty path should return empty."""
@@ -84,9 +93,9 @@ class TestEscapeFFmpegFilterPath(unittest.TestCase):
         self.assertEqual(result, "")
 
     def test_relative_path_with_colon(self):
-        """Relative paths with colons should escape them."""
+        """Relative paths with colons should escape them (doubled backslash)."""
         result = _escape_ffmpeg_filter_path("folder:v2/config.ocio")
-        self.assertEqual(result, "folder\\:v2/config.ocio")
+        self.assertEqual(result, "folder\\\\:v2/config.ocio")
 
 
 class TestGenerateThumbnail(unittest.TestCase):
@@ -702,6 +711,60 @@ class TestColorTransformFilter(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         vf = cmd[cmd.index("-vf") + 1]
         self.assertIn("lut3d=", vf)
+
+    def test_lut_filter_uses_file_key_and_escaped_colon(self):
+        """The lut3d filter must use an explicit file= key so ffmpeg 8.1 does
+        not split the value; the (Windows) drive colon must be doubled."""
+        self._make_lut("ARRI LogC4.cube")
+        flt = _color_transform_filter(None, "ARRI LogC4")
+        self.assertTrue(flt.startswith("lut3d=file="))
+        # The LUT path in these tests is absolute; on Windows it carries a drive
+        # colon that must appear doubled-escaped, never bare.
+        path_part = flt[len("lut3d=file="):]
+        self.assertNotRegex(path_part, r"^[A-Za-z]:/")  # no bare drive colon
+        if os.name == "nt":
+            self.assertRegex(path_part, r"^[A-Za-z]\\\\:/")
+
+
+class TestEnsureBakedLutConcurrency(unittest.TestCase):
+    """The thumbnail phase bakes from 8 threads that share one colorspace;
+    _ensure_baked_lut must bake exactly once and never race on the temp file."""
+
+    def setUp(self):
+        import shutil
+        self.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.out_path = os.path.join(self.tmp, "_auto", "ARRI LogC4__abc.cube")
+
+    def test_bakes_once_under_concurrent_callers(self):
+        import threading
+        import concurrent.futures
+
+        calls = []
+        lock = threading.Lock()
+        start = threading.Event()
+
+        def slow_bake(ocio_in, out_path, ocio_config=None):
+            with lock:
+                calls.append(out_path)
+            start.wait(1.0)  # hold the lock-holder so others pile up on the lock
+            os.makedirs(os.path.dirname(out_path), exist_ok=True)
+            with open(out_path, "w") as f:
+                f.write("LUT_3D_SIZE 2\n")
+            return True
+
+        with patch("ramses_ingest.preview._bake_lut_from_ocio", side_effect=slow_bake):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+                futs = [
+                    ex.submit(_ensure_baked_lut, "ARRI LogC4", self.out_path, None)
+                    for _ in range(8)
+                ]
+                start.set()
+                results = [f.result() for f in futs]
+
+        self.assertTrue(all(results))
+        self.assertEqual(len(calls), 1, "LUT should be baked exactly once")
+        self.assertTrue(os.path.isfile(self.out_path))
 
 
 @unittest.skipUnless(HAS_PYOCIO, "PyOpenColorIO not installed")
