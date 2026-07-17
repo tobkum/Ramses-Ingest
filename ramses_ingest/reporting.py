@@ -886,6 +886,21 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         letter-spacing: 0.5px;
         text-align: center;
     }
+    .lightbox-meta {
+        margin-top: 6px;
+        color: #b8b8b8;
+        font-size: 12px;
+        letter-spacing: 0.3px;
+        text-align: center;
+    }
+    .lightbox-note {
+        margin-top: 4px;
+        color: #8a8a8a;
+        font-size: 11px;
+        font-style: italic;
+        text-align: center;
+    }
+    .lightbox-note:empty { display: none; }
     @media print { #lightbox { display: none !important; } img.thumb { cursor: default; } }
     """
 
@@ -1109,9 +1124,24 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             missing_display = '<span style="color:#27ae60;">Complete</span>'
 
         b64_img = _get_base64_image(res.preview_path)
-        thumb_cap = _esc(res.plan.shot_id + (f" [{res.plan.resource}]" if res.plan.resource else ""))
+        # Lightbox caption: shot id (bold) + a compact review line, plus an
+        # honest note that the preview is display-transformed, not the raw plate.
+        shot_label = res.plan.shot_id + (f" [{res.plan.resource}]" if res.plan.resource else "")
+        meta_bits = []
+        if res.plan.sequence_id:
+            meta_bits.append(f"SEQ {res.plan.sequence_id}")
+        if mi.width:
+            meta_bits.append(f"{mi.width}x{mi.height} source")
+        meta_bits.append(f"{res.frames_copied} frames")
+        source_cs = (res.plan.colorspace_override or mi.color_space or "").strip()
+        transformed = bool(source_cs) and source_cs.lower() != "srgb"
+        if source_cs:
+            meta_bits.append(f"{source_cs} → sRGB" if transformed else source_cs)
+        thumb_note = "Preview is display-transformed to sRGB — not the raw plate." if transformed else ""
         img_tag = (
-            f'<img src="{b64_img}" class="thumb" data-shot="{thumb_cap}" title="Click to enlarge">'
+            f'<img src="{b64_img}" class="thumb" data-shot="{_esc(shot_label)}" '
+            f'data-meta="{_esc(" · ".join(meta_bits))}" data-note="{_esc(thumb_note)}" '
+            f'title="Click to enlarge">'
             if b64_img else '<div class="thumb"></div>'
         )
 
@@ -1337,9 +1367,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "            applyFilters();",
         "        }",
         "        // Lightbox: click a thumbnail to view the embedded 960x540 frame.",
-        "        function openLightbox(src, caption) {",
-        "            document.getElementById('lightbox-img').src = src;",
-        "            document.getElementById('lightbox-cap').textContent = caption || '';",
+        "        function openLightbox(el) {",
+        "            document.getElementById('lightbox-img').src = el.src;",
+        "            document.getElementById('lightbox-cap').textContent = el.getAttribute('data-shot') || '';",
+        "            document.getElementById('lightbox-meta').textContent = el.getAttribute('data-meta') || '';",
+        "            document.getElementById('lightbox-note').textContent = el.getAttribute('data-note') || '';",
         "            document.getElementById('lightbox').classList.add('open');",
         "        }",
         "        function closeLightbox() {",
@@ -1349,7 +1381,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "        document.addEventListener('click', function(e) {",
         "            var t = e.target;",
         "            if (t && t.tagName === 'IMG' && t.classList.contains('thumb')) {",
-        "                openLightbox(t.src, t.getAttribute('data-shot') || '');",
+        "                openLightbox(t);",
         "            }",
         "        });",
         "        document.addEventListener('keydown', function(e) {",
@@ -1431,6 +1463,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '        <div class="lightbox-inner">',
         '            <img id="lightbox-img" alt="">',
         '            <div id="lightbox-cap" class="lightbox-cap"></div>',
+        '            <div id="lightbox-meta" class="lightbox-meta"></div>',
+        '            <div id="lightbox-note" class="lightbox-note"></div>',
         "        </div>",
         "    </div>",
         "</body>",
