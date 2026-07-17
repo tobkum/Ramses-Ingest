@@ -483,7 +483,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     thead th:nth-child(5) { text-align: center; } /* Verification */
     thead th:nth-child(6) { text-align: right; white-space: nowrap; } /* # Frames */
     thead th:nth-child(7) { text-align: center; } /* Frame Continuity */
-    thead th:nth-child(8) { min-width: 210px; } /* Technical Specs — room so it never wraps mid-value */
+    thead th:nth-child(8) { min-width: 210px; } /* Technical Specs: room so it never wraps mid-value */
     thead th:nth-child(9) { text-align: center; white-space: nowrap; } /* Timecode */
     thead th:nth-child(10) { font-family: 'Consolas', monospace; font-size: 11px; width: 120px; } /* MD5 (truncated) */
 
@@ -827,8 +827,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     }
 
     /* Responsive */
-    /* The wide table scrolls inside its own container on narrow screens —
-       the page body must never scroll horizontally. */
+    /* The wide table scrolls inside its own container on narrow screens, so
+       the page body never scrolls horizontally. */
     .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
     .table-scroll table { min-width: 960px; }
 
@@ -853,7 +853,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         .table-toolbar input[type="search"] { min-width: 160px; }
     }
 
-    /* Lightbox — thumbnails are embedded at 960x540 but shown ~140px wide, so a
+    /* Lightbox: thumbnails are embedded at 960x540 but shown ~140px wide, so a
        click reveals the full-resolution frame at no extra file-size cost. */
     img.thumb { cursor: zoom-in; transition: transform 0.12s ease, box-shadow 0.12s ease; }
     img.thumb:hover { transform: scale(1.04); box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
@@ -1025,7 +1025,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         
         # Deviation Detection - HERO ONLY
         # Resources (Auxiliary) skip the visual deviation highlighting
-        res_val = f"{mi.width}x{mi.height}" if mi.width else "—"
+        res_val = f"{mi.width}x{mi.height}" if mi.width else "–"
         res_dev = (not res.plan.resource and res_val != common_res and common_res)
         res_display = f'<span class="deviation" title="Deviation">{res_val}</span>' if res_dev else res_val
         
@@ -1037,11 +1037,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         # ("25.000 fps manual", not "25.000 manual fps").
         fps_manual = (
             ' <span class="manual-flag" title="Framerate set manually by the '
-            'operator at ingest — not read from file metadata">manual</span>'
+            'operator at ingest, not read from file metadata">manual</span>'
             if getattr(res.plan, "fps_is_manual", False) else ""
         )
         
-        codec_val = _esc(mi.codec.upper()) if mi.codec else "—"
+        codec_val = _esc(mi.codec.upper()) if mi.codec else "–"
         codec_dev = (not res.plan.resource and mi.codec and mi.codec.lower() != common_codec and common_codec)
         codec_display = f'<span class="deviation">{codec_val}</span>' if codec_dev else codec_val
         
@@ -1104,7 +1104,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             color_str = (
                 f'<b>{_esc(cs_assigned)}</b> '
                 '<span class="manual-flag" title="Colorspace assigned manually by '
-                'the operator at ingest — not read from file metadata">manual</span>'
+                'the operator at ingest, not read from file metadata">manual</span>'
             )
             # Only show the file's tags when it actually has some.
             if file_color:
@@ -1112,7 +1112,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         elif file_color:
             color_str = file_color
         else:
-            color_str = '<span class="color-none" title="Image sequences carry no embedded VUI color tags — this is normal for EXR/DPX">no embedded color tags</span>'
+            color_str = '<span class="color-none" title="Image sequences carry no embedded VUI color tags (normal for EXR/DPX)">no embedded color tags</span>'
         
         # Format missing frames for display
         if res.missing_frames:
@@ -1137,7 +1137,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         transformed = bool(source_cs) and source_cs.lower() != "srgb"
         if source_cs:
             meta_bits.append(f"{source_cs} → sRGB" if transformed else source_cs)
-        thumb_note = "Preview is display-transformed to sRGB — not the raw plate." if transformed else ""
+        thumb_note = "Preview is display-transformed to sRGB, not the raw plate." if transformed else ""
         img_tag = (
             f'<img src="{b64_img}" class="thumb" data-shot="{_esc(shot_label)}" '
             f'data-meta="{_esc(" · ".join(meta_bits))}" data-note="{_esc(thumb_note)}" '
@@ -1193,12 +1193,12 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         md5_full = _esc(res.checksum) if res.checksum else ""
         md5_cell = (
             f'<span class="code md5" title="{md5_full}">{md5_full[:12]}…</span>'
-            if md5_full else '<span style="color:var(--text-muted);">—</span>'
+            if md5_full else '<span style="color:var(--text-muted);">–</span>'
         )
         par_html = f" | PAR {mi.pixel_aspect_ratio:.2f}" if mi.pixel_aspect_ratio != 1.0 else ""
         tc_cell = (
             f'<span class="code">{_esc(mi.start_timecode)}</span>'
-            if mi.start_timecode else '<span style="color:var(--text-muted);">—</span>'
+            if mi.start_timecode else '<span style="color:var(--text-muted);">–</span>'
         )
 
         row_number += 1
