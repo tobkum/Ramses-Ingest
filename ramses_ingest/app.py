@@ -376,6 +376,17 @@ class IngestEngine:
             j_path = os.path.join(report_dir, f"Ingest_Audit_{self.project_id}_{ts}.json")
             generate_json_audit_trail(results, j_path, project_id=self.project_id, operator=self._operator_name)
 
+        # Resource-clip thumbnails are rendered to a temp file only so the
+        # report can embed them; the report has now consumed them, so remove
+        # them rather than leaking a JPEG into %TEMP% per resource ingest.
+        for r in results:
+            job = getattr(r, "_thumbnail_job", None)
+            if job and job.get("is_resource") and job.get("path") and os.path.isfile(job["path"]):
+                try:
+                    os.remove(job["path"])
+                except OSError:
+                    pass
+
         if not dry_run:
             self._append_history_log(results, verification)
 

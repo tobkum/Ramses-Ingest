@@ -289,6 +289,7 @@ def _probe_image_oiio(file_path: str) -> MediaInfo:
     if oiio is None:
         return MediaInfo()
 
+    inp = None
     try:
         inp = oiio.ImageInput.open(file_path)
         if not inp:
@@ -306,7 +307,7 @@ def _probe_image_oiio(file_path: str) -> MediaInfo:
         # Color space: OIIO stores this in the "oiio:ColorSpace" attribute
         color_space = spec.get_string_attribute("oiio:ColorSpace", "")
 
-        info = MediaInfo(
+        return MediaInfo(
             width=spec.width,
             height=spec.height,
             fps=0.0,  # Single frame — FPS comes from the sequence context
@@ -315,11 +316,15 @@ def _probe_image_oiio(file_path: str) -> MediaInfo:
             color_space=color_space,
             pixel_aspect_ratio=par,
         )
-        inp.close()
-        return info
     except Exception:
-        pass
-    return MediaInfo()
+        return MediaInfo()
+    finally:
+        # Always release the ImageInput handle, even on the error path.
+        if inp:
+            try:
+                inp.close()
+            except Exception:
+                pass
 
 
 def _probe_video_av(file_path: str) -> MediaInfo:

@@ -237,8 +237,12 @@ class TestWriteMetadata(unittest.TestCase):
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     def test_writes_json_with_timecode(self):
+        # The sidecar manifest is enumerated from the files actually on disk
+        # (as in real usage, where copy_frames writes them before metadata),
+        # not from the checksums dict, so the file must exist.
+        Path(os.path.join(self.tmpdir, "test_file.exr")).touch()
         _write_ramses_metadata(
-            self.tmpdir, version=1, 
+            self.tmpdir, version=1,
             comment="test", timecode="01:00:00:00",
             checksums={"test_file.exr": "fake_md5"}
         )
@@ -250,6 +254,29 @@ class TestWriteMetadata(unittest.TestCase):
         self.assertIn("test_file.exr", data)
         self.assertEqual(data["test_file.exr"]["timecode"], "01:00:00:00")
         self.assertEqual(data["test_file.exr"]["md5"], "fake_md5")
+
+    def test_manifest_is_complete_under_fast_verify(self):
+        """fast_verify only checksums a few sample frames, but the sidecar must
+        still record EVERY frame on disk — otherwise the project report's
+        'files missing on disk' integrity check goes blind (regression #1)."""
+        import json
+        for i in range(1, 11):
+            Path(os.path.join(self.tmpdir, f"seq.{i:04d}.exr")).touch()
+
+        # fast_verify would only hand us checksums for first/middle/last.
+        partial = {"seq.0001.exr": "md5a", "seq.0005.exr": "md5b", "seq.0010.exr": "md5c"}
+        _write_ramses_metadata(self.tmpdir, version=1, checksums=partial)
+
+        with open(os.path.join(self.tmpdir, "_ramses_data.json")) as f:
+            data = json.load(f)
+
+        # All 10 frames recorded, not just the 3 checksummed ones.
+        self.assertEqual(len(data), 10)
+        for i in range(1, 11):
+            self.assertIn(f"seq.{i:04d}.exr", data)
+        # md5 attached only where it was computed.
+        self.assertEqual(data["seq.0005.exr"]["md5"], "md5b")
+        self.assertNotIn("md5", data["seq.0002.exr"])
 
 
 class TestExecutePlan(unittest.TestCase):
@@ -427,6 +454,11 @@ class TestPublisherConcurrency(unittest.TestCase):
 
         folder = os.path.join(self.temp_dir, "version")
         os.makedirs(folder)
+
+        # The manifest is enumerated from files on disk, so the frames must
+        # exist (as they would after copy_frames in real usage).
+        for i in range(10):
+            Path(os.path.join(folder, f"file_{i}.exr")).touch()
 
         def write_metadata(filename, version):
             for _ in range(5):  # Multiple writes per thread

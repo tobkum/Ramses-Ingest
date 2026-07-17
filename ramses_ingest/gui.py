@@ -3160,6 +3160,16 @@ class IngestWindow(QMainWindow):
                     self._connection_worker.finished.disconnect()
                 except RuntimeError:
                     pass
+        # The project-report worker walks the whole project on disk and has no
+        # cooperative cancel; join it (with a longer grace) so it is not
+        # destroyed while still running when the window closes.
+        if self._report_worker and self._report_worker.isRunning():
+            if not self._report_worker.wait(5000):
+                try:
+                    self._report_worker.finished_report.disconnect()
+                    self._report_worker.progress.disconnect()
+                except RuntimeError:
+                    pass
         super().closeEvent(event)
 
     def _toggle_log(self) -> None:

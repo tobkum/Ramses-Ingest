@@ -73,19 +73,3 @@ def validate_path_within_root(path: str | Path, root: str | Path) -> bool:
         return True
     except (ValueError, OSError):
         return False
-
-
-def get_relative_path(path: str | Path, base: str | Path) -> str:
-    """Get relative path from base, normalized to forward slashes.
-
-    Args:
-        path: Full path
-        base: Base directory
-
-    Returns:
-        Relative path with forward slashes
-
-    Raises:
-        ValueError: If path is not relative to base
-    """
-    return normalize_path(Path(path).relative_to(base))

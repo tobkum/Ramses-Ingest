@@ -46,8 +46,19 @@ def load_rules(path: str | Path | None = None) -> tuple[list[NamingRule], str, s
 
     import yaml
 
-    with open(path, "r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as exc:
+        # A corrupt or unreadable USER config must never brick startup — the
+        # engine loads rules in its constructor. Fall back to the shipped
+        # defaults so the tool still launches with working built-in rules.
+        logger.warning("Could not parse rules file '%s': %s", path, exc)
+        if (os.path.abspath(path) != os.path.abspath(DEFAULT_RULES_PATH)
+                and os.path.isfile(DEFAULT_RULES_PATH)):
+            logger.warning("Falling back to default rules at '%s'.", DEFAULT_RULES_PATH)
+            return load_rules(DEFAULT_RULES_PATH)
+        return [], studio_name, studio_logo
 
     if not isinstance(data, dict):
         logger.warning(f"Config file '{path}' is not a valid YAML dictionary")
@@ -109,10 +120,25 @@ def save_rules(rules: list[NamingRule], path: str | Path | None = None, studio_n
             entry["use_parent_dir_as_sequence"] = True
         entries.append(entry)
 
-    os.makedirs(os.path.dirname(str(path)), exist_ok=True)
-    with open(str(path), "w", encoding="utf-8") as f:
-        yaml.dump({
-            "studio_name": studio_name,
-            "studio_logo": studio_logo,
-            "rules": entries
-        }, f, default_flow_style=False, sort_keys=False)
+    target = str(path)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    payload = yaml.dump({
+        "studio_name": studio_name,
+        "studio_logo": studio_logo,
+        "rules": entries
+    }, default_flow_style=False, sort_keys=False)
+
+    # Atomic write: a killed/interrupted write must not truncate rules.yaml
+    # into invalid YAML (which load_rules now survives, but should never see).
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(target) or ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, target)
+    except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise

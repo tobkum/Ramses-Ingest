@@ -183,10 +183,32 @@ class RulesEditorDialog(QDialog):
             self._editor.setPlainText("rules:\n  []")
 
     def _save(self) -> None:
+        text = self._editor.toPlainText()
+        # Validate before writing: saving invalid YAML here used to be the way
+        # a user could brick startup (load_rules parsed it in the engine ctor).
+        import yaml
         try:
+            yaml.safe_load(text)
+        except yaml.YAMLError as exc:
+            QMessageBox.warning(
+                self, "Invalid YAML",
+                f"The rules are not valid YAML and were not saved:\n\n{exc}",
+            )
+            return
+        try:
+            import tempfile
             os.makedirs(os.path.dirname(self._path), exist_ok=True)
-            with open(self._path, "w", encoding="utf-8") as f:
-                f.write(self._editor.toPlainText())
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self._path) or ".", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(text)
+                os.replace(tmp, self._path)
+            except Exception:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
             self.accept()
         except Exception as exc:
             QMessageBox.warning(self, "Error", f"Could not save: {exc}")

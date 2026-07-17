@@ -346,18 +346,6 @@ def _get_next_version(publish_root: str) -> int:
         return max_v + 1
 
 
-def generate_thumbnail_for_result(result: IngestResult, ocio_config: str | None = None, ocio_in: str = "sRGB") -> bool:
-    if not result.success or not result.plan.target_preview_dir: return False
-    try:
-        from ramses_ingest.preview import generate_thumbnail as gen_thumb
-        os.makedirs(result.plan.target_preview_dir, exist_ok=True)
-        thumb_path = os.path.join(result.plan.target_preview_dir, f"{result.plan.project_id}_S_{result.plan.shot_id}_{result.plan.step_id}.jpg")
-        if gen_thumb(result.plan.match.clip, thumb_path, ocio_config=ocio_config, ocio_in=ocio_in):
-            result.preview_path = thumb_path; return True
-        return False
-    except Exception: return False
-
-
 def check_for_duplicates(plans: list[IngestPlan]) -> None:
     from ramses_ingest.validator import check_for_duplicate_version
     for plan in plans:
@@ -450,7 +438,19 @@ def _write_ramses_metadata(folder: str, version: int, comment: str = "", timecod
                 logger.warning("Could not read metadata at %s (will overwrite): %s", meta_path, _e)
         
         timestamp = int(time.time())
-        filenames = list(checksums.keys()) if checksums else [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f)) and not f.startswith("._") and f not in {".DS_Store", "Thumbs.db", "_ramses_data.json", ".ramses_complete"}]
+        # Always enumerate the actual files on disk for the manifest so the
+        # sidecar is a COMPLETE record regardless of verify mode. fast_verify
+        # only checksums a few sample frames, so keying the manifest off
+        # ``checksums`` recorded 3 of N frames and silently defeated the
+        # project report's "files missing on disk" integrity check. md5 is
+        # still attached per-file below wherever it was computed.
+        _SKIP_META = {"_ramses_data.json", "Thumbs.db"}
+        filenames = [
+            f for f in os.listdir(folder)
+            if not f.startswith(".")
+            and f not in _SKIP_META
+            and os.path.isfile(os.path.join(folder, f))
+        ]
         for fname in filenames:
             entry = {"version": version, "comment": comment, "state": state.lower(), "date": timestamp}
             if timecode: entry["timecode"] = timecode
