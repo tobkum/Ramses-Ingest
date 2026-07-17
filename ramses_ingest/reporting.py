@@ -483,8 +483,9 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     thead th:nth-child(5) { text-align: center; } /* Verification */
     thead th:nth-child(6) { text-align: right; white-space: nowrap; } /* # Frames */
     thead th:nth-child(7) { text-align: center; } /* Frame Continuity */
+    thead th:nth-child(8) { min-width: 210px; } /* Technical Specs — room so it never wraps mid-value */
     thead th:nth-child(9) { text-align: center; white-space: nowrap; } /* Timecode */
-    thead th:nth-child(10) { font-family: 'Consolas', monospace; font-size: 11px; } /* MD5 */
+    thead th:nth-child(10) { font-family: 'Consolas', monospace; font-size: 11px; width: 120px; } /* MD5 (truncated) */
 
     .row-num {
         text-align: center;
@@ -531,7 +532,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     }
 
     td {
-        padding: 16px 12px;
+        padding: 13px 12px;
         border-bottom: 1px solid var(--border-light);
         font-size: 13px;
         vertical-align: middle;
@@ -714,6 +715,37 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         cursor: help;
     }
 
+    /* Technical Specs: keep the "res @ fps" figure on one line */
+    .tech-line { white-space: nowrap; }
+
+    /* Sequence tag under the Shot ID */
+    .seq-tag {
+        display: inline-block;
+        font-size: 9px;
+        font-weight: 800;
+        color: var(--text-muted);
+        border: 1px solid var(--border-light);
+        border-radius: 4px;
+        padding: 0 5px;
+        margin-right: 6px;
+        letter-spacing: 0.5px;
+        vertical-align: middle;
+    }
+
+    /* MD5 is truncated on screen; the full hash is on the title tooltip */
+    .code.md5 { cursor: help; }
+
+    /* Colorspace sub-lines: the file's own tags and the "no tags" note read
+       quieter than the prominent assigned space above them. */
+    .color-audit .color-file { color: var(--text-muted); font-weight: 500; }
+    .color-audit .color-none {
+        color: var(--text-muted);
+        font-weight: 400;
+        text-transform: none;
+        letter-spacing: 0;
+        font-style: italic;
+    }
+
     /* Footer */
     .footer {
         margin-top: 60px;
@@ -814,6 +846,8 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         .report { padding: 14px; }
         header { flex-direction: column; align-items: flex-start; gap: 10px; }
         .health-dashboard { flex-direction: column; }
+        /* Don't let the health badge become a giant full-width block on phones */
+        .health-badge { flex: 0 0 auto; padding: 14px 18px; }
         .thumb { width: 96px; height: 54px; }
         .table-toolbar { flex-wrap: wrap; }
         .table-toolbar input[type="search"] { min-width: 160px; }
@@ -828,7 +862,6 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     total_size_bytes = 0
     succeeded = 0
     failed = 0
-    step_id = "—"
     sequences_with_gaps = 0
     total_missing_frames = 0
 
@@ -842,7 +875,6 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
 
     for res in results:
         if not res or not res.plan: continue
-        step_id = res.plan.step_id
 
         # Track missing frames (critical for VFX deliveries)
         if res.missing_frames:
@@ -950,13 +982,14 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         fps_val = mi.fps if mi.fps else 0
         fps_dev = (not res.plan.resource and common_fps and abs(fps_val - common_fps) > 0.001)
         fps_display = f'<span class="deviation">{fps_val:.3f}</span>' if fps_dev else f"{fps_val:.3f}"
-        # Operator-set framerate (sequences carry none): visible to the client
-        # so wrong assumptions can be flagged
-        if getattr(res.plan, "fps_is_manual", False):
-            fps_display += (
-                ' <span class="manual-flag" title="Framerate set manually by the '
-                'operator at ingest — not read from file metadata">manual</span>'
-            )
+        # Operator-set framerate (sequences carry none): the flag is placed AFTER
+        # the "fps" unit in the cell so it never splits the number from its unit
+        # ("25.000 fps manual", not "25.000 manual fps").
+        fps_manual = (
+            ' <span class="manual-flag" title="Framerate set manually by the '
+            'operator at ingest — not read from file metadata">manual</span>'
+            if getattr(res.plan, "fps_is_manual", False) else ""
+        )
         
         codec_val = _esc(mi.codec.upper()) if mi.codec else "—"
         codec_dev = (not res.plan.resource and mi.codec and mi.codec.lower() != common_codec and common_codec)
@@ -1008,22 +1041,28 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             else:
                 tooltip = _esc(_colorspace_tooltip(color_val))
                 color_parts.append(f'<span title="{tooltip}">{_esc(color_val)}</span>')
-        color_str = " / ".join(color_parts) if color_parts else '<span title="No color metadata embedded in file">No VUI Tags</span>'
+        # The file's OWN embedded color metadata. Empty for EXR/image sequences,
+        # which legitimately carry no VUI tags — so we do NOT surface a scary
+        # "No VUI Tags" line on every plate when the operator has assigned the
+        # correct space anyway.
+        file_color = " / ".join(color_parts)
+        if cs_issue and file_color:
+            file_color += f' <span style="color:#f39c12; font-weight:bold;" title="{cs_issue_msg}">⚠</span>'
 
-        # Add colorspace warning indicator if present
-        if cs_issue:
-            color_str += f' <span style="color:#f39c12; font-weight:bold;" title="{cs_issue_msg}">⚠</span>'
-
-        # Colorspace assigned by the operator (e.g. ARRI LogC4 for EXR plates
-        # that carry no VUI metadata) — shown first, file metadata after
         cs_assigned = getattr(res.plan, "colorspace_override", "") or ""
         if cs_assigned:
             color_str = (
                 f'<b>{_esc(cs_assigned)}</b> '
                 '<span class="manual-flag" title="Colorspace assigned manually by '
                 'the operator at ingest — not read from file metadata">manual</span>'
-                f'<br>{color_str}'
             )
+            # Only show the file's tags when it actually has some.
+            if file_color:
+                color_str += f'<br><span class="color-file">{file_color}</span>'
+        elif file_color:
+            color_str = file_color
+        else:
+            color_str = '<span class="color-none" title="Image sequences carry no embedded VUI color tags — this is normal for EXR/DPX">no embedded color tags</span>'
         
         # Format missing frames for display
         if res.missing_frames:
@@ -1073,6 +1112,26 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             row_status = "ok"
         status_counts[row_status] += 1
 
+        # Sequence line under the shot ID, labelled so the bare number reads
+        # as the sequence rather than a stray value.
+        seq_html = (
+            f'<div class="xray-source" style="margin-top:2px;">'
+            f'<span class="seq-tag">SEQ</span>{_esc(res.plan.sequence_id)}</div>'
+            if res.plan.sequence_id else ""
+        )
+        # MD5 is truncated on screen (nobody eyeballs 32 hex chars); the full
+        # hash is on the tooltip.
+        md5_full = _esc(res.checksum) if res.checksum else ""
+        md5_cell = (
+            f'<span class="code md5" title="{md5_full}">{md5_full[:12]}…</span>'
+            if md5_full else '<span style="color:var(--text-muted);">—</span>'
+        )
+        par_html = f" | PAR {mi.pixel_aspect_ratio:.2f}" if mi.pixel_aspect_ratio != 1.0 else ""
+        tc_cell = (
+            f'<span class="code">{_esc(mi.start_timecode)}</span>'
+            if mi.start_timecode else '<span style="color:var(--text-muted);">—</span>'
+        )
+
         row_number += 1
         row_html = f"""
         <tr class="clip-row" data-status="{row_status}">
@@ -1081,7 +1140,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td>
                 <div class="xray-wrap">
                     <div class="xray-target">{_esc(res.plan.shot_id)}{resource_tag}</div>
-                    <div class="xray-source" style="margin-top:2px;">{_esc(res.plan.sequence_id or "")}</div>
+                    {seq_html}
                     <div class="xray-source"><span class="xray-arrow">←</span> {_esc(source_name)}</div>
                     {ingested_html}
                     {issues_html}
@@ -1092,11 +1151,11 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
             <td><b>{res.frames_copied}</b></td>
             <td>{missing_display}</td>
             <td class="tech">
-                <b>{res_display}</b> @ {fps_display} fps{f" | PAR {mi.pixel_aspect_ratio:.2f}" if mi.pixel_aspect_ratio != 1.0 else ""}<br>{codec_display} / {_esc(mi.pix_fmt or "")}<br>
+                <span class="tech-line"><b>{res_display}</b> @ {fps_display} fps{fps_manual}{par_html}</span><br>{codec_display} / {_esc(mi.pix_fmt or "")}<br>
                 <div class="color-audit">{color_str}</div>
             </td>
-            <td><span class="code">{_esc(mi.start_timecode) if mi.start_timecode else "—"}</span></td>
-            <td><span class="code" style="font-size:13px;">{_esc(res.checksum) if res.checksum else "—"}</span></td>
+            <td class="col-tc">{tc_cell}</td>
+            <td>{md5_cell}</td>
         </tr>
         """
         rows.append(row_html)
@@ -1109,6 +1168,20 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         size_display = f"{total_size_bytes / (1024**3):.2f} GB"
     else:
         size_display = f"{total_size_bytes / (1024**2):.1f} MB"
+
+    # Hide the Timecode column entirely when no clip carries one (image-sequence
+    # deliveries never do) rather than showing a whole column of dashes. The
+    # column keeps its DOM position (so nth-child styling and colspan are
+    # unaffected); it is just collapsed via CSS.
+    show_timecode = any(
+        r and r.plan and r.plan.media_info and r.plan.media_info.start_timecode
+        for r in results
+    )
+    extra_css = "" if show_timecode else " .col-tc { display: none; }"
+
+    # MD5 shown in fast mode is a sampled (first/middle/last) hash, not a
+    # full-file digest — say so in the header so it is not mistaken for one.
+    md5_header = "MD5 (sampled)" if verification == "fast" else "MD5 Checksum"
 
     # 3. Calculate Executive Health Score (Idea #1)
     critical_colorspace_issues = [idx for idx, issue in colorspace_issues.items() if issue.severity == "critical"]
@@ -1171,7 +1244,6 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
     project = _esc(str(project))
     studio_name = _esc(studio_name)
     operator = _esc(operator)
-    step_id = _esc(str(step_id))
 
     # Verification badge: be explicit about the audit strength of the shown MD5s.
     verification_labels = {
@@ -1195,7 +1267,7 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "<head>",
         '    <meta charset="utf-8">',
         f"    <title>{_esc(title)} - {project}</title>",
-        f"    <style>{css}</style>",
+        f"    <style>{css}{extra_css}</style>",
         "    <script>",
         "        function toggleTheme() {",
         "            const html = document.documentElement;",
@@ -1250,7 +1322,6 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         '            <div class="meta-grid">',
         '                <div class="meta-item"><span class="meta-label">Project</span><span class="meta-value-project">' + project + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Operator</span><span class="meta-value">' + operator + '</span></div>',
-        '                <div class="meta-item"><span class="meta-label">Step</span><span class="meta-value">' + step_id + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Total Volume</span><span class="meta-value">' + size_display + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Clips</span><span class="meta-value">' + f'{succeeded} of {len(results)} ok' + '</span></div>',
         '                <div class="meta-item"><span class="meta-label">Frames</span><span class="meta-value">' + str(total_frames) + '</span></div>',
@@ -1274,12 +1345,12 @@ def generate_html_report(results: list[IngestResult], output_path: str, studio_n
         "                    <th>Thumbnail</th>",
         "                    <th>Shot ID</th>",
         "                    <th>Version</th>",
-        "                    <th>Verification</th>",
+        "                    <th>Status</th>",
         "                    <th># Frames</th>",
         "                    <th>Frame Continuity</th>",
         "                    <th>Technical Specs</th>",
-        "                    <th>Timecode</th>",
-        "                    <th>MD5 Checksum</th>",
+        '                    <th class="col-tc">Timecode</th>',
+        f"                    <th>{md5_header}</th>",
         "                </tr>",
         "            </thead>",
         "            <tbody>",
